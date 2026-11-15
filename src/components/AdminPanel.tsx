@@ -63,8 +63,17 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
     }
   };
 
-  if (error) return <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>;
-  if (!data) return <div className="text-sm text-slate-500">Carregando...</div>;
+  if (!data)
+    return error ? (
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 space-y-2">
+        <div>{error}</div>
+        <button type="button" onClick={() => void load()} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold cursor-pointer">
+          Tentar novamente
+        </button>
+      </div>
+    ) : (
+      <div className="text-sm text-slate-500">Carregando...</div>
+    );
 
   const card = 'rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-2';
   const input = 'w-full min-h-[38px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3';

@@ -144,6 +144,18 @@ export function freightFloor(distanceKm: number) {
   return round2(Math.max(150, Math.max(1, distanceKm) * 2.2));
 }
 
+/**
+ * Lista de e-mails de administrador. Aceita vírgula, ponto e vírgula, espaço ou quebra de
+ * linha entre eles e ignora aspas coladas por engano na Vercel ("email@x.com").
+ */
+export function parseAdminEmails(raw: string | string[] | undefined): string[] {
+  const joined = Array.isArray(raw) ? raw.join(',') : raw || '';
+  return joined
+    .split(/[\s,;]+/)
+    .map((e) => e.replace(/^["'<]+|["'>]+$/g, '').trim().toLowerCase())
+    .filter((e) => e.includes('@'));
+}
+
 function text(value: unknown, max: number, fallback = ''): string {
   if (typeof value !== 'string') return fallback;
   return value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
@@ -261,8 +273,7 @@ export class FrocService {
   }
 
   isAdmin(auth: AuthUser) {
-    const list = (this.deps.adminEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean);
-    return auth.emailVerified && list.includes(auth.email.toLowerCase());
+    return auth.emailVerified && parseAdminEmails(this.deps.adminEmails).includes(auth.email.trim().toLowerCase());
   }
 
   // ---------------------------------------------------------------- usuários
@@ -322,6 +333,9 @@ export class FrocService {
       points: user.points || 0,
       passengerRating: round2(user.passengerRating ?? 5),
       pointsPerRedeem: this.cfg.pointsPerRedeem,
+      commissionPercent: this.cfg.commissionPercent,
+      driverDocsSent: Object.keys(user.driverDocs || {}),
+      truckerDocsSent: Object.keys(user.truckerDocs || {}),
     };
   }
 
@@ -455,12 +469,23 @@ export class FrocService {
     const amountCents = toCents(num(amountReais, 10, 5000, 'recarga'));
     const id = randomUUID();
     await this.store.set('topups', id, { id, uid: user.uid, amountCents, status: 'pending', createdAt: this.iso() });
-    const checkout = await payments!.createCheckout({
-      reference: id,
-      amountCents,
-      title: 'Recarga Carteira Froc X Uber',
-      payerEmail: user.email,
-    });
+    let checkout: { checkoutUrl: string; preferenceId: string };
+    try {
+      checkout = await payments!.createCheckout({
+        reference: id,
+        amountCents,
+        title: 'Recarga Carteira Froc X Uber',
+        payerEmail: user.email,
+      });
+    } catch (error) {
+      console.error('Mercado Pago recusou a criação do pagamento:', error);
+      await this.store.update('topups', id, { status: 'failed', error: String((error as Error)?.message || error).slice(0, 200) });
+      return fail(
+        502,
+        'payment_provider',
+        'O Mercado Pago não abriu o pagamento agora. Tente de novo em instantes; se continuar, o administrador deve conferir o token do Mercado Pago.',
+      );
+    }
     await this.store.update('topups', id, { preferenceId: checkout.preferenceId });
     return { topupId: id, checkoutUrl: checkout.checkoutUrl };
   }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Car, HandCoins, Truck, Users } from 'lucide-react';
-import { resetPassword, signIn, signUp } from '../lib/session.ts';
+import { resetPassword, signIn, signInWithGoogle, signUp } from '../lib/session.ts';
 
 /** Tela de entrada: entrar, criar conta ou recuperar senha. */
 export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configError }) => {
@@ -78,6 +78,36 @@ export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configEr
             <button type="submit" disabled={busy} className="w-full min-h-[48px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold disabled:opacity-60 cursor-pointer">
               {busy ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'signup' ? 'Criar minha conta' : 'Enviar link'}
             </button>
+            {mode !== 'reset' && (
+              <>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                  <span className="flex-1 h-px bg-slate-200 dark:bg-slate-800" />
+                  ou
+                  <span className="flex-1 h-px bg-slate-200 dark:bg-slate-800" />
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setMessage(null);
+                    try {
+                      await signInWithGoogle();
+                    } catch (err) {
+                      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Erro inesperado.' });
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="w-full min-h-[48px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-slate-100 disabled:opacity-60 cursor-pointer"
+                >
+                  Entrar com Google
+                </button>
+                <p className="text-[11px] text-slate-500">
+                  Já tem conta em outro app nosso? Use o mesmo e-mail e senha (ou o mesmo Google).
+                </p>
+              </>
+            )}
             <div className="flex justify-between text-xs text-emerald-700 dark:text-emerald-400">
               {mode !== 'login' ? (
                 <button type="button" onClick={() => setMode('login')} className="cursor-pointer">Já tenho conta</button>

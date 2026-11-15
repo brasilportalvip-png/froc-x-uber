@@ -385,6 +385,10 @@ function negotiationFloor(distanceKm) {
 function freightFloor(distanceKm) {
   return round2(Math.max(150, Math.max(1, distanceKm) * 2.2));
 }
+function parseAdminEmails(raw) {
+  const joined = Array.isArray(raw) ? raw.join(",") : raw || "";
+  return joined.split(/[\s,;]+/).map((e) => e.replace(/^["'<]+|["'>]+$/g, "").trim().toLowerCase()).filter((e) => e.includes("@"));
+}
 function text(value, max, fallback = "") {
   if (typeof value !== "string") return fallback;
   return value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
@@ -479,8 +483,7 @@ var FrocService = class {
     return this.now().toISOString();
   }
   isAdmin(auth) {
-    const list = (this.deps.adminEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean);
-    return auth.emailVerified && list.includes(auth.email.toLowerCase());
+    return auth.emailVerified && parseAdminEmails(this.deps.adminEmails).includes(auth.email.trim().toLowerCase());
   }
   // ---------------------------------------------------------------- usuários
   async ensureUser(auth) {
@@ -536,7 +539,10 @@ var FrocService = class {
       truckPlate: user.truckPlate,
       points: user.points || 0,
       passengerRating: round2(user.passengerRating ?? 5),
-      pointsPerRedeem: this.cfg.pointsPerRedeem
+      pointsPerRedeem: this.cfg.pointsPerRedeem,
+      commissionPercent: this.cfg.commissionPercent,
+      driverDocsSent: Object.keys(user.driverDocs || {}),
+      truckerDocsSent: Object.keys(user.truckerDocs || {})
     };
   }
   async updateProfile(auth, patch) {
@@ -652,12 +658,23 @@ var FrocService = class {
     const amountCents = toCents(num(amountReais, 10, 5e3, "recarga"));
     const id = randomUUID();
     await this.store.set("topups", id, { id, uid: user.uid, amountCents, status: "pending", createdAt: this.iso() });
-    const checkout = await payments.createCheckout({
-      reference: id,
-      amountCents,
-      title: "Recarga Carteira Froc X Uber",
-      payerEmail: user.email
-    });
+    let checkout;
+    try {
+      checkout = await payments.createCheckout({
+        reference: id,
+        amountCents,
+        title: "Recarga Carteira Froc X Uber",
+        payerEmail: user.email
+      });
+    } catch (error) {
+      console.error("Mercado Pago recusou a cria\xE7\xE3o do pagamento:", error);
+      await this.store.update("topups", id, { status: "failed", error: String(error?.message || error).slice(0, 200) });
+      return fail(
+        502,
+        "payment_provider",
+        "O Mercado Pago n\xE3o abriu o pagamento agora. Tente de novo em instantes; se continuar, o administrador deve conferir o token do Mercado Pago."
+      );
+    }
     await this.store.update("topups", id, { preferenceId: checkout.preferenceId });
     return { topupId: id, checkoutUrl: checkout.checkoutUrl };
   }
@@ -1812,18 +1829,19 @@ function createMercadoPago(options) {
       signal: AbortSignal.timeout(15e3)
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`mercadopago_${res.status}`);
+    if (!res.ok) throw new Error(`mercadopago_${res.status}: ${String(body.message || "").slice(0, 160)}`);
     return body;
   };
   return {
     configured: Boolean(token && base),
-    async createCheckout({ reference, amountCents, title, payerEmail }) {
+    // O e-mail do pagador não é preenchido: se for o mesmo da conta vendedora (ex.: o dono
+    // testando), o Mercado Pago recusa o pagamento. A pessoa informa os dados no checkout.
+    async createCheckout({ reference, amountCents, title }) {
       const pref = await call("/checkout/preferences", {
         method: "POST",
         headers: { "X-Idempotency-Key": reference },
         body: JSON.stringify({
           items: [{ id: reference, title, quantity: 1, currency_id: "BRL", unit_price: amountCents / 100 }],
-          payer: { email: payerEmail },
           external_reference: reference,
           back_urls: {
             success: `${base}/?recarga=${reference}`,
@@ -2148,7 +2166,7 @@ function getService() {
     ([fb, geo]) => new FrocService(new FirestoreStore(fb.db, COLLECTION_PREFIX), {
       geo,
       files: fb.files,
-      adminEmails: (process.env.ADMIN_EMAILS || "").split(","),
+      adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
       payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl })
     })
   );
@@ -2175,7 +2193,8 @@ function configStatus() {
   return {
     firebaseServiceAccount: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY),
     firebaseWebConfig: Boolean(readWebConfig()),
-    adminEmails: Boolean(process.env.ADMIN_EMAILS),
+    adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS).length > 0,
+    adminEmailsCount: parseAdminEmails(process.env.ADMIN_EMAILS).length,
     mercadoPago: Boolean(process.env.MERCADO_PAGO_ACCESS_TOKEN),
     mercadoPagoWebhook: Boolean(process.env.MERCADO_PAGO_WEBHOOK_SECRET),
     publicSiteUrl: publicSiteUrl() || null,

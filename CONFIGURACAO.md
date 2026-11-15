@@ -24,6 +24,9 @@ e os documentos dos motoristas ficam na pasta `froc-x-uber/` do Storage. O outro
 **Authentication → Método de login → E-mail/senha → Ativar.**
 Em **Authentication → Configurações → Domínios autorizados**, adicione `froc-x-uber.vercel.app`.
 
+Opcional, mas recomendado: **Authentication → Método de login → Google → Ativar**. Assim aparece o botão
+**Entrar com Google** (o e-mail já vem confirmado pelo Google). Esse botão só funciona com o domínio autorizado acima.
+
 ### 1.2 Configuração web (pública)
 Variável **FIREBASE_WEB_CONFIG**, numa linha só:
 ```
@@ -55,8 +58,14 @@ me mande as regras (elas não são secretas) para eu ajustar sem quebrar o outro
 
 ## 2. Administração
 Variável **ADMIN_EMAILS** = `brasilportalvip@gmail.com` (pode ter vários e-mails, separados por vírgula).
-Depois de publicar, crie sua conta no site com esse e-mail, confirme pelo link que chega por e-mail e saia e entre
-de novo. A aba **Admin** aparece.
+Pode colar com ou sem aspas, com vírgula ou ponto e vírgula entre vários e-mails.
+
+A aba **Admin** aparece quando o e-mail está nessa lista **e** está confirmado:
+- **Entrar com Google** com esse e-mail: já entra confirmado, a aba aparece na hora.
+- **E-mail e senha** (inclusive conta que já existia no outro app): em **Conta**, toque em
+  **Enviar link de confirmação**, abra o link no e-mail e volte ao site. A aba aparece sozinha em alguns segundos.
+
+Para conferir sem mostrar o e-mail: `/api/health` mostra `"adminEmailsCount": 1`.
 
 ## 3. Google Maps
 Variável **VITE_GOOGLE_MAPS_API_KEY**: a mesma chave que você usa no AI Studio. No Google Cloud, a chave
@@ -107,7 +116,7 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 - **Configurações:** comissão, preço dinâmico (H3), prazos automáticos e pontos.
 
 ## Testes
-`npm test` roda 36 testes automáticos das regras de negócio.
+`npm test` roda 39 testes automáticos das regras de negócio.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

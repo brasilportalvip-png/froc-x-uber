@@ -1,4 +1,5 @@
 import { CubageCalculator } from './CubageCalculator.tsx';
+import truckImg from '../assets/images/fleet_truck_cargo_1794683388987.jpg';
 import React, { useMemo, useState } from 'react';
 import { ArrowRight, Box, CheckCircle2, Home, PackageCheck, Plus, ShieldCheck, Star, Truck } from 'lucide-react';
 import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
@@ -164,7 +165,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
       {/* Truck Hero Showcase Banner */}
       <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 h-28 bg-slate-900">
         <img
-          src="/src/assets/images/fleet_truck_cargo_1794683388987.jpg"
+          src={truckImg}
           alt="Caminhão baú Froc em rodovia brasileira"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-75"

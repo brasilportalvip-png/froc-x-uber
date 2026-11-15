@@ -15,7 +15,7 @@ import { Uber99Panel } from './components/Uber99Panel.tsx';
 import { WalletAccountPanel } from './components/WalletAccountPanel.tsx';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
-import { api, fileToBase64, loadPublicConfig, logout, watchUser } from './lib/session.ts';
+import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
 import type { AppBootstrapState, AppModule, GeoPoint, UserProfile, UserRole } from './types/mobility.ts';
 
 export default function App() {
@@ -82,12 +82,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const failures = useRef(0);
   const loadBootstrap = useCallback(async () => {
     try {
       const data = await api<AppBootstrapState>('/api/bootstrap');
       setState(data);
       setError(null);
+      failures.current = 0;
     } catch (err) {
+      // Uma falha passageira (rede do celular, servidor acordando) não apaga a tela:
+      // os dados atuais continuam e a próxima atualização tenta de novo.
+      failures.current += 1;
       setError(err instanceof Error ? err.message : 'Erro de conexão com o servidor.');
     } finally {
       setLoading(false);
@@ -230,12 +235,10 @@ export default function App() {
   const handleWithdraw = (amount: number, pixKey: string) => run(() => post('/api/wallet/withdraw', { amount, pixKey }), 'Saque solicitado!');
   const handleUpdateProfile = (patch: Partial<UserProfile>) => run(() => api('/api/profile', { method: 'PATCH', body: patch }), 'Dados salvos.');
   const handleUploadDocument = async (kind: 'driver' | 'trucker', docType: string, file: File) => {
-    if (file.size > 3 * 1024 * 1024) {
-      showToast('O arquivo deve ter até 3 MB.');
-      throw new Error('arquivo grande');
-    }
     try {
-      await post('/api/driver/documents', { kind, docType, contentType: file.type, dataBase64: await fileToBase64(file) });
+      const upload = await prepareUpload(file);
+      await post('/api/driver/documents', { kind, docType, contentType: upload.contentType, dataBase64: upload.dataBase64 });
+      void loadBootstrap();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Falha no envio.');
       throw err;
@@ -455,13 +458,18 @@ export default function App() {
           </div>
 
           <div className="flex-1 overflow-y-auto froc-scroll p-4 space-y-4">
-            {loading ? (
+            {state && error && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+                Conexão instável: {error} Tentando de novo automaticamente.
+              </div>
+            )}
+            {loading && !state ? (
               <div className="space-y-3 py-6">
                 <div className="h-24 rounded-2xl bg-slate-200/70 dark:bg-slate-800/70 animate-pulse" />
                 <div className="h-36 rounded-2xl bg-slate-200/70 dark:bg-slate-800/70 animate-pulse" />
                 <div className="h-36 rounded-2xl bg-slate-200/70 dark:bg-slate-800/70 animate-pulse" />
               </div>
-            ) : error || !state ? (
+            ) : !state ? (
               <div className="rounded-2xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-5 text-center space-y-3">
                 <p className="text-sm font-semibold text-red-700 dark:text-red-300">
                   {error || 'Não foi possível carregar os dados.'}
