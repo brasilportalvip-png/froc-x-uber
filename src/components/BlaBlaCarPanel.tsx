@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Calendar, CheckCircle2, Music, PawPrint, Plus, ShieldCheck, Star, Users } from 'lucide-react';
 import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
 import type { CarpoolTrip, GeoPoint, UserRole } from '../types/mobility.ts';
+import { PlacePicker } from './PlacePicker.tsx';
 
 interface BlaBlaCarPanelProps {
   role: UserRole;
@@ -16,6 +17,8 @@ interface BlaBlaCarPanelProps {
   onPublishCarpool: (payload: {
     originId: string;
     destinationId: string;
+    originPoint: GeoPoint;
+    destinationPoint: GeoPoint;
     date: string;
     departureTime: string;
     pricePerSeat: number;
@@ -36,14 +39,15 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   onCarpoolAction,
   canPublish,
 }) => {
-  const intercity = useMemo(() => BRAZIL_LOCATIONS.filter((l) => l.zone === 'intercity' || l.kind === 'terminal'), []);
+  const cityOf = (id: string) => BRAZIL_LOCATIONS.find((l) => l.id === id) ?? BRAZIL_LOCATIONS[0];
   const [searchText, setSearchText] = useState('');
   const [seatsWanted, setSeatsWanted] = useState(1);
   const [showPublish, setShowPublish] = useState(role === 'driver' && canPublish);
 
   // Publish carpool form
-  const [pubOrigin, setPubOrigin] = useState(intercity[0]?.id || 'sp-tiete');
-  const [pubDest, setPubDest] = useState(intercity.find((l) => l.id === 'br-rio')?.id || intercity[1]?.id || 'br-rio');
+  // Qualquer cidade do Brasil (busca do Google). Começa com São Paulo → Rio só como exemplo.
+  const [pubOrigin, setPubOrigin] = useState<GeoPoint>(() => cityOf('sp-tiete'));
+  const [pubDest, setPubDest] = useState<GeoPoint>(() => cityOf('br-rio'));
   const [pubDate, setPubDate] = useState(() => new Date(Date.now() + 864e5).toISOString().slice(0, 10));
   const [pubTime, setPubTime] = useState('08:00');
   const [pubPrice, setPubPrice] = useState('95');
@@ -69,8 +73,10 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
     setBusyId('publish');
     try {
       await onPublishCarpool({
-        originId: pubOrigin,
-        destinationId: pubDest,
+        originId: pubOrigin.id,
+        destinationId: pubDest.id,
+        originPoint: { ...pubOrigin, zone: 'intercity' },
+        destinationPoint: { ...pubDest, zone: 'intercity' },
         date: pubDate ? pubDate.split('-').reverse().join('/') : '',
         departureTime: pubTime,
         pricePerSeat: Number(pubPrice) || 85,
@@ -111,34 +117,8 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
         >
           <h4 className="text-sm font-bold text-slate-900 dark:text-white">Publicar carona intermunicipal</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-500 mb-1">Cidade de saída</label>
-              <select
-                value={pubOrigin}
-                onChange={(e) => setPubOrigin(e.target.value)}
-                className="w-full min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 text-xs font-semibold text-slate-900 dark:text-white"
-              >
-                {intercity.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.city} · {l.state}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-500 mb-1">Cidade de destino</label>
-              <select
-                value={pubDest}
-                onChange={(e) => setPubDest(e.target.value)}
-                className="w-full min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 text-xs font-semibold text-slate-900 dark:text-white"
-              >
-                {intercity.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.city} · {l.state}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <PlacePicker label="Cidade de saída" mode="cities" value={pubOrigin} onChange={setPubOrigin} />
+            <PlacePicker label="Cidade de destino" mode="cities" value={pubDest} onChange={setPubDest} />
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

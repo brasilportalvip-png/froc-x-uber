@@ -106,6 +106,8 @@ interface UserDoc extends Doc {
   truckType: TruckType;
   truckPlate: string;
   companyName: string;
+  /** Registro na ANTT (obrigatório para frete pago). */
+  rntrc?: string;
   driverStatus: ApprovalStatus;
   truckerStatus: ApprovalStatus;
   driverDocs: Record<string, string>;
@@ -179,7 +181,10 @@ export function resolvePoint(point: unknown, fallbackId: unknown): GeoPoint {
     const p = point as Record<string, unknown>;
     const lat = Number(p.lat);
     const lng = Number(p.lng);
-    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && typeof p.name === 'string') {
+    if (Number.isFinite(lat) && Number.isFinite(lng) && typeof p.name === 'string') {
+      // O app atende todo o Brasil (inclui ilhas como Fernando de Noronha e Trindade).
+      if (lat < -34.5 || lat > 5.9 || lng < -74.5 || lng > -28.5)
+        fail(400, 'outside_brazil', 'Escolha um local dentro do Brasil.');
       return {
         id: text(p.id, 80) || `ponto-${lat.toFixed(5)}-${lng.toFixed(5)}`,
         name: text(p.name, 160),
@@ -319,6 +324,7 @@ export class FrocService {
       rejectionReason: user.rejectionReason,
       completedTrips: user.completedTrips,
       companyName: user.companyName,
+      rntrc: user.rntrc || '',
       name: user.name,
       phone: user.phone,
       city: user.city,
@@ -576,6 +582,12 @@ export class FrocService {
         truckPlate: plate,
         truckType,
         companyName: text(body.companyName, 80),
+        rntrc: (() => {
+          const digits = String(body.rntrc ?? '').replace(/\D/g, '');
+          return digits.length >= 8 && digits.length <= 12
+            ? digits
+            : fail(400, 'invalid_rntrc', 'Informe o número do RNTRC (registro na ANTT), com 8 a 12 dígitos.');
+        })(),
         truckerStatus: 'pending',
         truckerSubmittedAt: this.iso(),
       });
@@ -617,6 +629,7 @@ export class FrocService {
           plate: kind === 'driver' ? u.driverPlate : u.truckPlate,
           truckType: kind === 'trucker' ? u.truckType : undefined,
           companyName: kind === 'trucker' ? u.companyName : undefined,
+          rntrc: kind === 'trucker' ? u.rntrc : undefined,
           submittedAt: String((kind === 'driver' ? u.driverSubmittedAt : u.truckerSubmittedAt) ?? ''),
           documents: await Promise.all(Object.entries(docs).map(async ([type, path]) => ({ type, url: await signed(path) }))),
         };

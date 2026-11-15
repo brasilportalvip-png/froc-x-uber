@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { ArrowRight, Box, CheckCircle2, Home, PackageCheck, Plus, ShieldCheck, Star, Truck } from 'lucide-react';
 import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
 import type { EmptyTruckRoute, FreightRequest, GeoPoint, TruckType, UserProfile, UserRole } from '../types/mobility.ts';
+import { PlacePicker } from './PlacePicker.tsx';
 
 interface TruckFreightPanelProps {
   role: UserRole;
@@ -14,6 +15,8 @@ interface TruckFreightPanelProps {
   onPublishEmptyTruck: (payload: {
     originId: string;
     destinationId: string;
+    originPoint: GeoPoint;
+    destinationPoint: GeoPoint;
     truckType: TruckType;
     direction: 'indo_vazio' | 'voltando_vazio' | 'espaco_parcial';
     availableTons: number;
@@ -29,6 +32,8 @@ interface TruckFreightPanelProps {
     title: string;
     originId: string;
     destinationId: string;
+    originPoint: GeoPoint;
+    destinationPoint: GeoPoint;
     truckTypeNeeded: TruckType;
     estimatedWeightKg: number;
     estimatedVolumeM3?: number;
@@ -67,11 +72,12 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [searchCity, setSearchCity] = useState('');
 
-  const hubs = useMemo(() => BRAZIL_LOCATIONS, []);
+  const pointOf = (id: string) => BRAZIL_LOCATIONS.find((l) => l.id === id) ?? BRAZIL_LOCATIONS[0];
 
   // Empty truck publish state (Trucker)
-  const [etOrigin, setEtOrigin] = useState('br-curitiba');
-  const [etDest, setEtDest] = useState('sp-paulista');
+  // Qualquer cidade do Brasil (busca do Google).
+  const [etOrigin, setEtOrigin] = useState<GeoPoint>(() => pointOf('br-curitiba'));
+  const [etDest, setEtDest] = useState<GeoPoint>(() => pointOf('sp-paulista'));
   // O tipo de caminhão é o do cadastro aprovado (não muda por anúncio).
   const etType: TruckType = profile.truckType;
   const [etDir, setEtDir] = useState<'indo_vazio' | 'voltando_vazio' | 'espaco_parcial'>('voltando_vazio');
@@ -87,8 +93,9 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
     'mudanca_residencial'
   );
   const [frTitle, setFrTitle] = useState('Mudança Residencial Completa');
-  const [frOrigin, setFrOrigin] = useState('sp-pinheiros');
-  const [frDest, setFrDest] = useState('br-santos');
+  // Endereço de coleta e de entrega em qualquer lugar do Brasil.
+  const [frOrigin, setFrOrigin] = useState<GeoPoint>(() => pointOf('sp-pinheiros'));
+  const [frDest, setFrDest] = useState<GeoPoint>(() => pointOf('br-santos'));
   const [frTruck, setFrTruck] = useState<TruckType>('3/4 Baú');
   const [frWeight, setFrWeight] = useState('1500');
   const [frVolume, setFrVolume] = useState('12');
@@ -119,8 +126,10 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
     setBusyId('pub-empty');
     try {
       await onPublishEmptyTruck({
-        originId: etOrigin,
-        destinationId: etDest,
+        originId: etOrigin.id,
+        destinationId: etDest.id,
+        originPoint: { ...etOrigin, zone: 'intercity' },
+        destinationPoint: { ...etDest, zone: 'intercity' },
         truckType: etType,
         direction: etDir,
         availableTons: Number(etTons) || 12,
@@ -143,8 +152,10 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
       await onCreateFreight({
         kind: frKind,
         title: frTitle,
-        originId: frOrigin,
-        destinationId: frDest,
+        originId: frOrigin.id,
+        destinationId: frDest.id,
+        originPoint: frOrigin,
+        destinationPoint: frDest,
         truckTypeNeeded: frTruck,
         estimatedWeightKg: Number(frWeight) || 1200,
         estimatedVolumeM3: Number(frVolume) || 1,
@@ -246,34 +257,8 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 Cadastrar caminhão em deslocamento vazio
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Origem da viagem</label>
-                  <select
-                    value={etOrigin}
-                    onChange={(e) => setEtOrigin(e.target.value)}
-                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold"
-                  >
-                    {hubs.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.city}/{h.state} · {h.name.split('·')[0]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Destino da viagem</label>
-                  <select
-                    value={etDest}
-                    onChange={(e) => setEtDest(e.target.value)}
-                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold"
-                  >
-                    {hubs.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.city}/{h.state} · {h.name.split('·')[0]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <PlacePicker label="Origem da viagem" mode="cities" value={etOrigin} onChange={setEtOrigin} />
+                <PlacePicker label="Destino da viagem" mode="cities" value={etDest} onChange={setEtDest} />
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">
@@ -548,28 +533,8 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <select
-                  value={frOrigin}
-                  onChange={(e) => setFrOrigin(e.target.value)}
-                  className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold"
-                >
-                  {hubs.map((h) => (
-                    <option key={h.id} value={h.id}>
-                      Coleta: {h.name} ({h.city})
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={frDest}
-                  onChange={(e) => setFrDest(e.target.value)}
-                  className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold"
-                >
-                  {hubs.map((h) => (
-                    <option key={h.id} value={h.id}>
-                      Entrega: {h.name} ({h.city})
-                    </option>
-                  ))}
-                </select>
+                <PlacePicker label="Endereço de coleta" mode="address" value={frOrigin} onChange={setFrOrigin} />
+                <PlacePicker label="Endereço de entrega" mode="address" value={frDest} onChange={setFrDest} />
               </div>
 
               <CubageCalculator

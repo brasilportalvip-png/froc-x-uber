@@ -53,7 +53,7 @@ async function balance(user: AuthUser) {
 async function approve(user: AuthUser, kind: 'driver' | 'trucker') {
   for (const doc of kind === 'driver' ? ['cnh', 'crlv'] : ['cnh', 'crlv', 'antt'])
     await svc.uploadDocument(user, kind, doc, 'image/png', Buffer.from('foto').toString('base64'));
-  await svc.applyAsProvider(user, kind, { phone: '(11) 98888-7777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú' });
+  await svc.applyAsProvider(user, kind, { phone: '(11) 98888-7777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
   await svc.reviewApplication(admin, user.uid, kind, 'approved', '');
 }
 

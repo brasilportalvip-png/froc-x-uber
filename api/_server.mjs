@@ -408,7 +408,9 @@ function resolvePoint(point, fallbackId) {
     const p = point;
     const lat = Number(p.lat);
     const lng = Number(p.lng);
-    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && typeof p.name === "string") {
+    if (Number.isFinite(lat) && Number.isFinite(lng) && typeof p.name === "string") {
+      if (lat < -34.5 || lat > 5.9 || lng < -74.5 || lng > -28.5)
+        fail(400, "outside_brazil", "Escolha um local dentro do Brasil.");
       return {
         id: text(p.id, 80) || `ponto-${lat.toFixed(5)}-${lng.toFixed(5)}`,
         name: text(p.name, 160),
@@ -526,6 +528,7 @@ var FrocService = class {
       rejectionReason: user.rejectionReason,
       completedTrips: user.completedTrips,
       companyName: user.companyName,
+      rntrc: user.rntrc || "",
       name: user.name,
       phone: user.phone,
       city: user.city,
@@ -759,6 +762,10 @@ var FrocService = class {
         truckPlate: plate,
         truckType,
         companyName: text(body.companyName, 80),
+        rntrc: (() => {
+          const digits = String(body.rntrc ?? "").replace(/\D/g, "");
+          return digits.length >= 8 && digits.length <= 12 ? digits : fail(400, "invalid_rntrc", "Informe o n\xFAmero do RNTRC (registro na ANTT), com 8 a 12 d\xEDgitos.");
+        })(),
         truckerStatus: "pending",
         truckerSubmittedAt: this.iso()
       });
@@ -797,6 +804,7 @@ var FrocService = class {
           plate: kind === "driver" ? u.driverPlate : u.truckPlate,
           truckType: kind === "trucker" ? u.truckType : void 0,
           companyName: kind === "trucker" ? u.companyName : void 0,
+          rntrc: kind === "trucker" ? u.rntrc : void 0,
           submittedAt: String((kind === "driver" ? u.driverSubmittedAt : u.truckerSubmittedAt) ?? ""),
           documents: await Promise.all(Object.entries(docs).map(async ([type, path]) => ({ type, url: await signed(path) })))
         };
