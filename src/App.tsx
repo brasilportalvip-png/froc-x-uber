@@ -133,6 +133,26 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // Motorista/caminhoneiro online: envia a posição do celular a cada ~10 s (despacho por região H3).
+  const isOnlineProvider = Boolean(
+    state?.profile.driverOnline && (state.profile.driverStatus === 'approved' || state.profile.truckerStatus === 'approved'),
+  );
+  useEffect(() => {
+    if (!isOnlineProvider || !navigator.geolocation) return;
+    let last = 0;
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (Date.now() - last < 10_000) return;
+        last = Date.now();
+        void api('/api/driver/location', { body: { lat: pos.coords.latitude, lng: pos.coords.longitude } }).catch(() => undefined);
+      },
+      () => showToast('Ative a localização do celular para receber corridas perto de você.'),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnlineProvider]);
+
   const handleSelectModule = (mod: AppModule) => {
     setActiveModule(mod);
     if (mod === 'carpool' || mod === 'freight') {
@@ -206,6 +226,7 @@ export default function App() {
       showToast(err instanceof Error ? err.message : 'Não foi possível iniciar a recarga.');
     }
   };
+  const handleRedeem = () => run(() => post('/api/wallet/redeem'), 'Pontos trocados por R$ 5,00 de crédito!');
   const handleWithdraw = (amount: number, pixKey: string) => run(() => post('/api/wallet/withdraw', { amount, pixKey }), 'Saque solicitado!');
   const handleUpdateProfile = (patch: Partial<UserProfile>) => run(() => api('/api/profile', { method: 'PATCH', body: patch }), 'Dados salvos.');
   const handleUploadDocument = async (kind: 'driver' | 'trucker', docType: string, file: File) => {
@@ -237,6 +258,10 @@ export default function App() {
         : true;
 
   const activeRide = state?.rides.find((r) => r.mine && r.status !== 'completed' && r.status !== 'cancelled');
+  const matchedDeal = state?.indriveRequests.find((r) => r.mine === 'owner' && r.status === 'matched');
+  // Passageiro vê o carro do motorista andando (posição enviada pelo celular do motorista).
+  const liveDriverPoint =
+    (activeRide?.mine === 'owner' && activeRide.driverLocation) || matchedDeal?.driverLocation || null;
   const activeStatusLabel = activeRide
     ? activeRide.status === 'in_progress'
       ? 'Em viagem'
@@ -308,6 +333,7 @@ export default function App() {
               destination={destination}
               isDark={isDark}
               activeTripStatus={activeStatusLabel}
+              driverPoint={liveDriverPoint}
               onRouteTelemetry={(km) => setLiveDistanceKm(km)}
               onSelectLocationFromMap={(point, target) => {
                 if (target === 'origin') setOrigin(point);
@@ -322,6 +348,7 @@ export default function App() {
               destination={destination}
               isDark={isDark}
               activeTripStatus={activeStatusLabel}
+              driverPoint={liveDriverPoint}
               onSelectLocationFromMap={(point, target) => {
                 if (target === 'origin') setOrigin(point);
                 else setDestination(point);
@@ -556,6 +583,7 @@ export default function App() {
                     onUploadDocument={handleUploadDocument}
                     onApply={handleApply}
                     onLogout={handleLogout}
+                    onRedeem={handleRedeem}
                   />
                 )}
               </>

@@ -13,6 +13,8 @@ export interface AppOptions {
   verifyToken: (token: string) => Promise<AuthUser>;
   publicConfig: () => Record<string, unknown>;
   webhookSecret?: string;
+  /** Chave para o agendador externo chamar /api/cron/sweep. */
+  cronSecret?: string;
 }
 
 type AuthedRequest = Request & { auth?: AuthUser };
@@ -69,9 +71,16 @@ export function createApp(options: AppOptions) {
     try {
       req.auth = await options.verifyToken(token);
       if (!req.auth.email) return res.status(401).json({ error: 'Conta sem e-mail.', code: 'unauthenticated' });
-      return next();
     } catch {
       return res.status(401).json({ error: 'Sessão expirada. Entre novamente.', code: 'unauthenticated' });
+    }
+    try {
+      await (await service()).checkAccess(req.auth);
+      return next();
+    } catch (error) {
+      if (error instanceof AppError) return res.status(error.status).json({ error: error.message, code: error.code });
+      console.error('Falha ao conferir acesso:', error);
+      return res.status(503).json({ error: 'Serviço indisponível. Tente em instantes.' });
     }
   };
 
@@ -101,6 +110,16 @@ export function createApp(options: AppOptions) {
     }),
   );
 
+  // Agendador externo (ex.: cron do Render) para os prazos automáticos.
+  app.post(
+    '/api/cron/sweep',
+    wrap(async (req) => {
+      const key = String(req.headers['x-cron-key'] || '');
+      if (!options.cronSecret || key !== options.cronSecret) throw new AppError(401, 'unauthorized', 'Chave inválida.');
+      return (await service()).sweep(true);
+    }),
+  );
+
   // ----- com login
   const api = express.Router();
   api.use(requireAuth);
@@ -109,6 +128,10 @@ export function createApp(options: AppOptions) {
   api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req))));
   api.patch('/profile', wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
 
+  api.post('/rides/quote', wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
+  api.post('/driver/location', rateLimit(30, 60_000), wrap(async (req) => (await service()).updateLocation(a(req), req.body?.lat, req.body?.lng)));
+  api.post('/sos', rateLimit(5, 60_000), wrap(async (req) => (await service()).createSos(a(req), req.body || {})));
+  api.post('/wallet/redeem', limited, wrap(async (req) => (await service()).redeemPoints(a(req))));
   api.post('/rides', limited, wrap(async (req) => (await service()).createRide(a(req), req.body || {})));
   api.patch('/rides/:id', wrap(async (req) => ({ ride: await (await service()).rideAction(a(req), id(req), req.body || {}) })));
 
@@ -151,6 +174,11 @@ export function createApp(options: AppOptions) {
     '/admin/applications/:id',
     wrap(async (req) => (await service()).reviewApplication(a(req), id(req), req.body?.kind, req.body?.decision, req.body?.reason)),
   );
+  api.get('/admin/users', wrap(async (req) => (await service()).adminUsers(a(req), req.query.q)));
+  api.post('/admin/users/:id/block', wrap(async (req) => (await service()).setBlocked(a(req), id(req), req.body?.blocked, req.body?.reason)));
+  api.get('/admin/reports', wrap(async (req) => (await service()).adminReports(a(req), req.query.days)));
+  api.patch('/admin/settings', wrap(async (req) => (await service()).updateSettings(a(req), req.body || {})));
+  api.post('/admin/sos/:id/resolve', wrap(async (req) => (await service()).resolveSos(a(req), id(req), req.body?.note)));
   api.post('/admin/withdrawals/:id', wrap(async (req) => (await service()).resolveWithdrawal(a(req), id(req), req.body?.decision)));
 
   app.use('/api', api);

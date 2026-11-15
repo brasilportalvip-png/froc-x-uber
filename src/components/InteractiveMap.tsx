@@ -10,6 +10,8 @@ interface InteractiveMapProps {
   isDark: boolean;
   activeTripStatus?: string;
   onSelectLocationFromMap?: (point: GeoPoint, target: 'origin' | 'destination') => void;
+  /** Posição real do motorista da corrida em andamento (enviada pelo celular dele). */
+  driverPoint?: { lat: number; lng: number } | null;
 }
 
 interface SimVehicle {
@@ -29,6 +31,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   isDark,
   activeTripStatus,
   onSelectLocationFromMap,
+  driverPoint,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -66,36 +69,11 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     else setZoom(5.0);
   }, [origin.id, destination.id, activeModule]);
 
-  const vehicles = useMemo<SimVehicle[]>(() => {
-    const list: SimVehicle[] = [];
-    const urbanPoints = BRAZIL_LOCATIONS.filter((l) => l.zone === 'urban');
-    const interPoints = BRAZIL_LOCATIONS.filter((l) => l.zone === 'intercity');
-
-    urbanPoints.slice(0, 8).forEach((p, idx) => {
-      list.push({
-        id: `u-car-${idx}`,
-        kind: idx % 3 === 0 ? 'moto' : 'car',
-        lat: p.lat + (idx % 2 === 0 ? 0.012 : -0.014),
-        lng: p.lng + (idx % 2 === 0 ? -0.01 : 0.015),
-        vx: (idx % 2 === 0 ? 1 : -1) * 0.00022,
-        vy: (idx % 3 === 0 ? -1 : 1) * 0.00018,
-        label: idx % 3 === 0 ? 'Moto' : 'Froc',
-      });
-    });
-
-    interPoints.slice(0, 6).forEach((p, idx) => {
-      list.push({
-        id: `h-trk-${idx}`,
-        kind: idx % 2 === 0 ? 'truck' : 'carpool',
-        lat: p.lat + (idx % 2 === 0 ? 0.15 : -0.12),
-        lng: p.lng + (idx % 2 === 0 ? -0.18 : 0.14),
-        vx: (idx % 2 === 0 ? 1 : -1) * 0.0014,
-        vy: (idx % 3 === 0 ? 1 : -1) * 0.0011,
-        label: idx % 2 === 0 ? 'Vazio' : 'Carona',
-      });
-    });
-    return list;
-  }, []);
+  // Só o veículo real (motorista da sua corrida). Nada de carros simulados no mapa.
+  const vehicles = useMemo<SimVehicle[]>(
+    () => (driverPoint ? [{ id: 'driver', kind: 'car', lat: driverPoint.lat, lng: driverPoint.lng, vx: 0, vy: 0, label: 'Motorista' }] : []),
+    [driverPoint?.lat, driverPoint?.lng],
+  );
 
   // Animation loop
   useEffect(() => {
@@ -286,8 +264,8 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
       // Simulated Fleet Vehicles
       vehicles.forEach((v, i) => {
-        const curLat = v.lat + Math.sin(tick + i) * (v.kind === 'truck' || v.kind === 'carpool' ? 0.08 : 0.005);
-        const curLng = v.lng + Math.cos(tick * 0.9 + i) * (v.kind === 'truck' || v.kind === 'carpool' ? 0.08 : 0.005);
+        const curLat = v.lat;
+        const curLng = v.lng;
         const vp = project(curLat, curLng, width, height);
         if (vp.x < -30 || vp.x > width + 30 || vp.y < -30 || vp.y > height + 30) return;
 

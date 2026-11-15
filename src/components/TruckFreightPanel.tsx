@@ -1,3 +1,4 @@
+import { CubageCalculator } from './CubageCalculator.tsx';
 import React, { useMemo, useState } from 'react';
 import { ArrowRight, Box, CheckCircle2, Home, PackageCheck, Plus, ShieldCheck, Star, Truck } from 'lucide-react';
 import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
@@ -29,6 +30,7 @@ interface TruckFreightPanelProps {
     destinationId: string;
     truckTypeNeeded: TruckType;
     estimatedWeightKg: number;
+    estimatedVolumeM3?: number;
     helpersNeeded: number;
     hasElevator: boolean;
     needsPacking: boolean;
@@ -88,6 +90,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [frDest, setFrDest] = useState('br-santos');
   const [frTruck, setFrTruck] = useState<TruckType>('3/4 Baú');
   const [frWeight, setFrWeight] = useState('1500');
+  const [frVolume, setFrVolume] = useState('12');
   const [frHelpers, setFrHelpers] = useState('2');
   const [frBudget, setFrBudget] = useState('980');
   const [frDate, setFrDate] = useState('');
@@ -143,6 +146,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
         destinationId: frDest,
         truckTypeNeeded: frTruck,
         estimatedWeightKg: Number(frWeight) || 1200,
+        estimatedVolumeM3: Number(frVolume) || 1,
         helpersNeeded: Number(frHelpers) || 2,
         hasElevator: frElevator,
         needsPacking: frPacking,
@@ -567,7 +571,25 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <CubageCalculator
+                onApply={({ volumeM3, weightKg, truck }) => {
+                  setFrVolume(String(volumeM3));
+                  setFrWeight(String(weightKg));
+                  setFrTruck(truck);
+                }}
+              />
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-[11px] text-slate-500 mb-1">Volume (m³)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0.1}
+                    value={frVolume}
+                    onChange={(e) => setFrVolume(e.target.value)}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 text-xs font-bold font-mono-num"
+                  />
+                </div>
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Peso est. (kg)</label>
                   <input
@@ -648,6 +670,12 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                         <span>{f.truckTypeNeeded}</span>
                         <span>·</span>
                         <span className="font-mono-num">{f.estimatedWeightKg} kg</span>
+                        {f.estimatedVolumeM3 ? (
+                          <>
+                            <span>·</span>
+                            <span className="font-mono-num">{f.estimatedVolumeM3} m³</span>
+                          </>
+                        ) : null}
                         <span>·</span>
                         <span>{f.helpersNeeded} ajudantes</span>
                       </div>

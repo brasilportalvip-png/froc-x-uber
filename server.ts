@@ -7,6 +7,7 @@ import { initFirebase, readWebConfig } from './server/firebase.ts';
 import { FirestoreStore } from './server/firestoreStore.ts';
 import { createMercadoPago } from './server/mercadoPago.ts';
 import { FrocService } from './server/services.ts';
+import { createGridGeo, createH3Geo } from './server/geo.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,9 +16,16 @@ const publicUrl = (process.env.PUBLIC_SITE_URL || process.env.APP_URL || '').rep
 
 let servicePromise: Promise<FrocService> | null = null;
 const service = () => {
-  servicePromise ??= initFirebase().then(
-    (fb) =>
+  servicePromise ??= Promise.all([
+    initFirebase(),
+    createH3Geo().catch((e) => {
+      console.warn('H3 indisponível, usando grade simples:', e);
+      return createGridGeo();
+    }),
+  ]).then(
+    ([fb, geo]) =>
       new FrocService(new FirestoreStore(fb.db), {
+        geo,
         files: fb.files,
         adminEmails: (process.env.ADMIN_EMAILS || '').split(','),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
@@ -36,6 +44,7 @@ async function startServer() {
       service,
       verifyToken: async (token) => (await initFirebase()).verifyToken(token),
       webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
+      cronSecret: process.env.CRON_SECRET,
       publicConfig: () => ({
         firebase: readWebConfig(),
         mapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '',

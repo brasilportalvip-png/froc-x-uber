@@ -26,6 +26,10 @@ import type {
   WalletTransaction,
 } from '../src/types/mobility.ts';
 import type { Doc, Store, Tx } from './store.ts';
+import { DEFAULT_SETTINGS, REDEEM_VALUE_CENTS, SETTINGS_LIMITS } from './settings.ts';
+import type { PlatformSettings } from './settings.ts';
+import { createGridGeo, DISPATCH_RING, SURGE_RING } from './geo.ts';
+import type { GeoIndex } from './geo.ts';
 
 export class AppError extends Error {
   status: number;
@@ -41,7 +45,6 @@ const fail = (status: number, code: string, message: string): never => {
   throw new AppError(status, code, message);
 };
 
-export const PROVIDER_SHARE = 0.88;
 export const MIN_WITHDRAWAL_CENTS = 2000;
 const TRUCK_TYPES: TruckType[] = ['VUC / Utilitário', '3/4 Baú', 'Toco Aberto', 'Truck Baú', 'Carreta Sider'];
 const DOC_TYPES = { driver: ['cnh', 'crlv'], trucker: ['cnh', 'crlv', 'antt'] } as const;
@@ -79,7 +82,12 @@ export interface ServiceDeps {
   payments?: PaymentsGateway;
   files?: FileStorage;
   adminEmails?: string[];
+  /** Índice geográfico (H3 em produção; grade simples nos testes). */
+  geo?: GeoIndex;
 }
+
+/** Localização do motorista é considerada "fresca" por 3 minutos. */
+const LOCATION_FRESH_MS = 3 * 60 * 1000;
 
 interface UserDoc extends Doc {
   uid: string;
@@ -106,12 +114,35 @@ interface UserDoc extends Doc {
   truckerSubmittedAt?: string;
   rejectionReason?: string;
   createdAt: string;
+  blocked?: boolean;
+  blockedReason?: string;
+  points?: number;
+  passengerRating?: number;
+  passengerRatingCount?: number;
+  driverLat?: number;
+  driverLng?: number;
+  driverCell?: string;
+  locationAt?: string;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const toCents = (reais: number) => Math.round(reais * 100);
 const toReais = (cents: number) => round2(cents / 100);
-const providerCut = (cents: number) => Math.round(cents * PROVIDER_SHARE);
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/** Preço mínimo da negociação: cobre combustível e tempo (evita oferta abusiva). */
+export function negotiationFloor(distanceKm: number) {
+  const km = Math.max(0.1, distanceKm);
+  const minutes = Math.max(1, Math.round(km * 2));
+  return round2(Math.max(8.5, km * 1.65 + minutes * 0.2));
+}
+
+/** Preço mínimo de frete/mudança (protege o caminhoneiro de lance abaixo do custo). */
+export function freightFloor(distanceKm: number) {
+  return round2(Math.max(150, Math.max(1, distanceKm) * 2.2));
+}
 
 function text(value: unknown, max: number, fallback = ''): string {
   if (typeof value !== 'string') return fallback;
@@ -172,10 +203,53 @@ function uniqueById<T extends Doc>(items: T[]): T[] {
 export class FrocService {
   store: Store;
   deps: ServiceDeps;
+  geo: GeoIndex;
+  private cfg: PlatformSettings = { ...DEFAULT_SETTINGS };
+  private cfgLoadedAt = 0;
+  private lastSweep = 0;
 
   constructor(store: Store, deps: ServiceDeps = {}) {
     this.store = store;
     this.deps = deps;
+    this.geo = deps.geo ?? createGridGeo();
+  }
+
+  // ------------------------------------------------------------ configurações
+
+  async settings(): Promise<PlatformSettings> {
+    if (Date.now() - this.cfgLoadedAt > 30_000) {
+      const stored = await this.store.get<Doc>('settings', 'platform');
+      this.cfg = { ...DEFAULT_SETTINGS, ...(stored as Partial<PlatformSettings> | null) };
+      this.cfgLoadedAt = Date.now();
+    }
+    return this.cfg;
+  }
+
+  /** Parte do prestador, em centavos, conforme a comissão configurada. */
+  private providerCut(cents: number) {
+    return Math.round(cents * (1 - this.cfg.commissionPercent / 100));
+  }
+
+  async updateSettings(auth: AuthUser, patch: Record<string, unknown>) {
+    this.requireAdmin(auth);
+    const current = await this.settings();
+    const next: PlatformSettings = { ...current };
+    for (const [key, limits] of Object.entries(SETTINGS_LIMITS) as [keyof PlatformSettings, [number, number] | 'boolean'][]) {
+      if (!(key in patch)) continue;
+      if (limits === 'boolean') (next as unknown as Record<string, unknown>)[key] = patch[key] === true;
+      else (next as unknown as Record<string, unknown>)[key] = round2(num(patch[key], limits[0], limits[1], key));
+    }
+    await this.store.set('settings', 'platform', { ...next, updatedBy: auth.email, updatedAt: this.iso() });
+    this.cfg = next;
+    this.cfgLoadedAt = Date.now();
+    return next;
+  }
+
+  /** Conta bloqueada pela administração não usa o app (conferido em toda requisição). */
+  async checkAccess(auth: AuthUser) {
+    const user = await this.store.get<UserDoc>('users', auth.uid);
+    if (user?.blocked && !this.isAdmin(auth))
+      fail(403, 'blocked', 'Sua conta está bloqueada' + (user.blockedReason ? `: ${user.blockedReason}` : '.') + ' Fale com o suporte.');
   }
 
   private now() {
@@ -245,6 +319,9 @@ export class FrocService {
       truckModel: user.truckModel,
       truckType: user.truckType,
       truckPlate: user.truckPlate,
+      points: user.points || 0,
+      passengerRating: round2(user.passengerRating ?? 5),
+      pointsPerRedeem: this.cfg.pointsPerRedeem,
     };
   }
 
@@ -324,19 +401,37 @@ export class FrocService {
     return doc ?? fail(404, 'not_found', `${label} não encontrado(a).`);
   }
 
-  /** Paga o prestador (88%) e registra o serviço concluído para os dois lados. */
-  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string) {
+  /** Registra a comissão da plataforma (usado nos relatórios do Admin). */
+  private platformRevenue(tx: Tx, kind: string, grossCents: number, feeCents: number) {
+    const id = randomUUID();
+    tx.set('platformLedger', id, { id, kind, grossCents, feeCents, createdAt: this.iso() });
+  }
+
+  /** Pontos de fidelidade para quem contratou o serviço. */
+  private awardPoints(tx: Tx, client: UserDoc | null, cents: number) {
+    if (!client || cents <= 0 || this.cfg.pointsPerReal <= 0) return;
+    const pts = Math.floor((cents / 100) * this.cfg.pointsPerReal);
+    if (pts <= 0) return;
+    client.points = (client.points || 0) + pts;
+    tx.update('users', client.uid, { points: client.points });
+  }
+
+  /** Paga o prestador (100% menos a comissão) e registra o serviço concluído para os dois lados. */
+  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida') {
+    const pct = this.cfg.commissionPercent;
     if (method === 'froc_pay' && escrowCents > 0) {
-      this.credit(tx, provider, providerCut(escrowCents), `Ganho · ${title} (88% líquido)`, 'ganho_motorista');
-    } else if (method === 'cash' && escrowCents > 0) {
-      // Recebeu em dinheiro: a taxa da plataforma (12%) é descontada da carteira.
-      this.debit(tx, provider, escrowCents - providerCut(escrowCents), `Taxa Froc 12% · ${title} (pago em dinheiro)`, 'taxa', true);
+      this.credit(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`, 'ganho_motorista');
+    } else if (method === 'cash' && escrowCents > 0 && pct > 0) {
+      // Recebeu em dinheiro: a comissão da plataforma é descontada da carteira.
+      this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa Froc ${pct}% · ${title} (pago em dinheiro)`, 'taxa', true);
     }
+    if (escrowCents > 0) this.platformRevenue(tx, kind, escrowCents, escrowCents - this.providerCut(escrowCents));
     provider.completedTrips += 1;
     tx.update('users', provider.uid, { completedTrips: provider.completedTrips });
     if (client && client.uid !== provider.uid) {
       client.completedTrips += 1;
       tx.update('users', client.uid, { completedTrips: client.completedTrips });
+      this.awardPoints(tx, client, escrowCents);
     }
   }
 
@@ -472,11 +567,13 @@ export class FrocService {
 
   async adminOverview(auth: AuthUser): Promise<AdminOverview> {
     this.requireAdmin(auth);
-    const [drivers, truckers, withdrawals, users] = await Promise.all([
+    const [drivers, truckers, withdrawals, users, sos, settings] = await Promise.all([
       this.store.query<UserDoc>('users', [['driverStatus', '==', 'pending']], 100),
       this.store.query<UserDoc>('users', [['truckerStatus', '==', 'pending']], 100),
       this.store.query<Doc>('withdrawals', [['status', '==', 'pending']], 100),
       this.store.count('users', []),
+      this.store.query<Doc>('sos', [['status', '==', 'open']], 100),
+      this.settings(),
     ]);
     const signed = async (path: string) => (this.deps.files ? this.deps.files.signedUrl(path) : '');
     const applications = await Promise.all(
@@ -511,7 +608,9 @@ export class FrocService {
         status: w.status as 'pending',
         createdAt: String(w.createdAt),
       })),
-      totals: { users, pendingApplications: applications.length, pendingWithdrawals: withdrawals.length },
+      totals: { users, pendingApplications: applications.length, pendingWithdrawals: withdrawals.length, openSos: sos.length },
+      sos: byNewest(sos) as unknown as AdminOverview['sos'],
+      settings,
     };
   }
 
@@ -566,7 +665,9 @@ export class FrocService {
     const distanceKm = calculateDistanceKm(origin, destination);
     if (distanceKm > 300) fail(400, 'too_far', 'Para viagens longas, use Caronas.');
     const durationMin = estimateDurationMin(distanceKm, category.id === 'froc_moto' ? 'moto' : 'urban');
-    const price = Math.max(7.5, round2(category.baseFare + distanceKm * category.perKm + durationMin * category.perMin));
+    const surge = await this.surgeAt(origin.lat, origin.lng);
+    const basePrice = Math.max(7.5, round2(category.baseFare + distanceKm * category.perKm + durationMin * category.perMin));
+    const price = round2(basePrice * surge);
     const priceCents = toCents(price);
     const active = await this.store.query<Doc>('rides', [['passengerId', '==', auth.uid]], 200);
     if (active.some((r) => ['searching', 'accepted', 'arriving', 'in_progress'].includes(String(r.status))))
@@ -578,6 +679,7 @@ export class FrocService {
         id,
         passengerId: user.uid,
         passengerName: user.name,
+        passengerRating: round2(user.passengerRating ?? 5),
         origin,
         destination,
         stops: Array.isArray(body.stops) ? body.stops.map((s) => text(s, 120)).filter(Boolean).slice(0, 3) : [],
@@ -588,6 +690,8 @@ export class FrocService {
         price,
         priceCents,
         discountApplied: 0,
+        surgeMultiplier: surge,
+        originCell: this.geo.cellOf(origin.lat, origin.lng),
         paymentMethod: method,
         pinCode: String(randomInt(1000, 10000)),
         status: 'searching',
@@ -606,6 +710,7 @@ export class FrocService {
   }
 
   async rideAction(auth: AuthUser, rideId: string, body: Record<string, unknown>) {
+    await this.settings();
     const action = String(body.action || '');
     if (action === 'driver_accept') {
       await this.approvedUser(auth, 'driver');
@@ -662,7 +767,7 @@ export class FrocService {
           const passenger = await tx.get<UserDoc>('users', String(ride.passengerId));
           const amount = ride.paymentMethod === 'froc_pay' ? Number(ride.escrowCents) : Number(ride.priceCents);
           set({ status: 'completed', etaMin: 0, completedAt: this.iso(), escrowCents: 0 });
-          this.payProvider(tx, driver, passenger, amount, ride.paymentMethod as PaymentMethod, String(ride.categoryLabel));
+          this.payProvider(tx, driver, passenger, amount, ride.paymentMethod as PaymentMethod, String(ride.categoryLabel), 'corrida');
           return { ride };
         }
         case 'cancel': {
@@ -710,6 +815,17 @@ export class FrocService {
           set({ ratedByPassenger: true, passengerStars: stars });
           return { ride };
         }
+        case 'rate_passenger': {
+          if (!isDriver) fail(403, 'forbidden', 'Só o motorista avalia o passageiro.');
+          if (status !== 'completed' || ride.ratedByDriver) fail(409, 'invalid_state', 'Esta corrida não pode ser avaliada.');
+          const stars = Math.round(num(body.stars, 1, 5, 'nota'));
+          const passenger = await this.mustGet<UserDoc>(tx, 'users', String(ride.passengerId), 'Passageiro');
+          const count = Number(passenger.passengerRatingCount || 0);
+          const rating = round2(((passenger.passengerRating ?? 5) * count + stars) / (count + 1));
+          tx.update('users', passenger.uid, { passengerRating: rating, passengerRatingCount: count + 1 });
+          set({ ratedByDriver: true, driverStars: stars });
+          return { ride };
+        }
         default:
           return fail(400, 'invalid_action', 'Ação inválida.');
       }
@@ -737,7 +853,10 @@ export class FrocService {
     const method = paymentMethod(body.paymentMethod);
     const distanceKm = calculateDistanceKm(origin, destination);
     const suggestedPrice = round2(5.5 + distanceKm * 2.15 + 4);
+    const minimum = negotiationFloor(distanceKm);
     const offer = round2(num(body.passengerOffer, 8, 5000, 'oferta'));
+    if (offer < minimum)
+      fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km é ${brl(minimum)} (cobre combustível e tempo do motorista).`);
     const user = await this.ensureUser(auth);
     if (method === 'froc_pay' && user.balanceCents < toCents(offer))
       fail(402, 'insufficient_balance', 'Saldo insuficiente para essa oferta. Recarregue a carteira ou escolha dinheiro.');
@@ -753,6 +872,7 @@ export class FrocService {
       destination,
       distanceKm,
       suggestedPrice,
+      minimumPrice: minimum,
       passengerOffer: offer,
       paymentMethod: method,
       notes: text(body.notes, 200),
@@ -768,6 +888,9 @@ export class FrocService {
   async sendInDriveOffer(auth: AuthUser, id: string, body: Record<string, unknown>) {
     const driver = await this.approvedUser(auth, 'driver');
     const offeredPrice = round2(num(body.offeredPrice, 8, 5000, 'proposta'));
+    const reqDoc = await this.store.get<Doc>('indrive', id);
+    if (reqDoc && offeredPrice < negotiationFloor(Number(reqDoc.distanceKm)))
+      fail(400, 'below_floor', `A proposta mínima é ${brl(negotiationFloor(Number(reqDoc.distanceKm)))}.`);
     const etaMin = Math.round(num(body.etaMin ?? 5, 1, 60, 'tempo'));
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
@@ -821,6 +944,7 @@ export class FrocService {
   }
 
   async completeInDrive(auth: AuthUser, id: string) {
+    await this.settings();
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
       if (r.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista escolhido pode finalizar.');
@@ -831,7 +955,7 @@ export class FrocService {
       const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso() };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Corrida negociada');
+      this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Corrida negociada', 'indrive');
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -967,6 +1091,7 @@ export class FrocService {
   }
 
   async finishCarpool(auth: AuthUser, tripId: string, outcome: 'completed' | 'cancelled') {
+    await this.settings();
     const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
@@ -990,7 +1115,11 @@ export class FrocService {
       if (outcome === 'completed') {
         const total = paid.reduce((acc, b) => acc + Number(b.amountCents), 0);
         for (const b of paid) tx.update('carpoolBookings', String(b.id), { status: 'released' });
-        if (total > 0) this.credit(tx, driver, providerCut(total), `Ganho · carona ${route} (88% líquido)`, 'ganho_motorista');
+        if (total > 0) {
+          this.credit(tx, driver, this.providerCut(total), `Ganho · carona ${route} (${100 - this.cfg.commissionPercent}% líquido)`, 'ganho_motorista');
+          this.platformRevenue(tx, 'carona', total, total - this.providerCut(total));
+          for (const b of paid) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
+        }
         driver.completedTrips += 1;
         tx.update('users', driver.uid, { completedTrips: driver.completedTrips });
       } else {
@@ -1087,6 +1216,7 @@ export class FrocService {
   }
 
   async finishEmptyTruck(auth: AuthUser, id: string, action: 'complete' | 'cancel') {
+    await this.settings();
     const route = await this.store.transaction(async (tx) => {
       const t = await this.mustGet<Doc>(tx, 'emptyTrucks', id, 'Caminhão');
       const isTrucker = t.truckerId === auth.uid;
@@ -1101,7 +1231,7 @@ export class FrocService {
         const client = await tx.get<UserDoc>('users', String(t.reservedById));
         tx.update('emptyTrucks', id, { status: 'completed', escrowCents: 0, completedAt: this.iso() });
         t.status = 'completed';
-        this.payProvider(tx, trucker, client, escrow, 'froc_pay', `frete ${label}`);
+        this.payProvider(tx, trucker, client, escrow, 'froc_pay', `frete ${label}`, 'retorno_vazio');
         return t;
       }
       if (t.status === 'reserved') {
@@ -1131,6 +1261,8 @@ export class FrocService {
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const distanceKm = calculateDistanceKm(origin, destination);
     const kinds = ['mudanca_residencial', 'carreto_rapido', 'carga_paletizada', 'veiculo_moto'];
+    if (Number(body.proposedBudget) < freightFloor(distanceKm))
+      fail(400, 'below_floor', `O orçamento mínimo para ${distanceKm} km é ${brl(freightFloor(distanceKm))}.`);
     const id = randomUUID();
     const doc: Doc = {
       id,
@@ -1146,6 +1278,8 @@ export class FrocService {
       helpersNeeded: Math.round(num(body.helpersNeeded ?? 0, 0, 10, 'ajudantes')),
       hasElevator: body.hasElevator === true,
       needsPacking: body.needsPacking === true,
+      estimatedVolumeM3: round2(num(body.estimatedVolumeM3 ?? 1, 0.1, 150, 'volume')),
+      minimumPrice: freightFloor(distanceKm),
       proposedBudget: round2(num(body.proposedBudget, 50, 200000, 'orçamento')),
       scheduledDate: text(body.scheduledDate, 60) || fail(400, 'invalid_date', 'Informe a data da coleta.'),
       status: 'open_bids',
@@ -1164,6 +1298,7 @@ export class FrocService {
       const f = await this.mustGet<Doc>(tx, 'freights', id, 'Frete');
       if (f.clientId === auth.uid) fail(403, 'own_freight', 'Este pedido é seu.');
       if (f.status !== 'open_bids') fail(409, 'closed', 'Este frete não recebe mais lances.');
+      if (price < freightFloor(Number(f.distanceKm))) fail(400, 'below_floor', `O lance mínimo é ${brl(freightFloor(Number(f.distanceKm)))}.`);
       const others = ((f.bids as Doc[]) || []).filter((b) => b.truckerId !== auth.uid);
       const bid = {
         id: randomUUID(),
@@ -1210,6 +1345,7 @@ export class FrocService {
   }
 
   async finishFreight(auth: AuthUser, id: string, action: 'deliver' | 'cancel') {
+    await this.settings();
     const item = await this.store.transaction(async (tx) => {
       const f = await this.mustGet<Doc>(tx, 'freights', id, 'Frete');
       const escrow = Number(f.escrowCents || 0);
@@ -1220,7 +1356,7 @@ export class FrocService {
         const client = await tx.get<UserDoc>('users', String(f.clientId));
         tx.update('freights', id, { status: 'delivered', escrowCents: 0, deliveredAt: this.iso() });
         f.status = 'delivered';
-        this.payProvider(tx, trucker, client, escrow, 'froc_pay', String(f.title));
+        this.payProvider(tx, trucker, client, escrow, 'froc_pay', String(f.title), 'frete');
         return f;
       }
       if (f.clientId !== auth.uid) fail(403, 'forbidden', 'Só quem pediu o frete pode cancelar.');
@@ -1234,9 +1370,247 @@ export class FrocService {
     return this.freightView(item, auth.uid);
   }
 
+  // ------------------------------------------- H3: preço dinâmico e localização
+
+  /** Multiplicador do preço na região: mais pedidos que motoristas por perto = preço sobe. */
+  async surgeAt(lat: number, lng: number): Promise<number> {
+    const cfg = await this.settings();
+    if (!cfg.surgeEnabled) return 1;
+    const area = new Set(this.geo.ring(this.geo.cellOf(lat, lng), SURGE_RING));
+    const [searching, online] = await Promise.all([
+      this.store.query<Doc>('rides', [['status', '==', 'searching']], 300),
+      this.store.query<UserDoc>('users', [['driverOnline', '==', true]], 500),
+    ]);
+    const now = this.now().getTime();
+    const demand = searching.filter((r) => area.has(String(r.originCell))).length;
+    const supply = online.filter(
+      (u) => u.driverCell && area.has(u.driverCell) && now - Date.parse(String(u.locationAt || 0)) < LOCATION_FRESH_MS,
+    ).length;
+    const ratio = (demand + 1) / (supply + 1);
+    const mult = 1 + Math.max(0, ratio - 1) * 0.5;
+    return Math.min(cfg.maxSurge, Math.round(mult * 10) / 10);
+  }
+
+  async quoteRide(auth: AuthUser, body: Record<string, unknown>) {
+    await this.ensureUser(auth);
+    const origin = resolvePoint(body.originPoint, body.originId);
+    const destination = resolvePoint(body.destinationPoint, body.destinationId);
+    const distanceKm = calculateDistanceKm(origin, destination);
+    const surge = await this.surgeAt(origin.lat, origin.lng);
+    return {
+      surge,
+      distanceKm,
+      prices: RIDE_CATEGORIES.map((c) => {
+        const durationMin = estimateDurationMin(distanceKm, c.id === 'froc_moto' ? 'moto' : 'urban');
+        return { categoryId: c.id, price: round2(Math.max(7.5, round2(c.baseFare + distanceKm * c.perKm + durationMin * c.perMin)) * surge) };
+      }),
+    };
+  }
+
+  /** Motorista online envia a posição do celular; o passageiro vê o carro andando no mapa. */
+  async updateLocation(auth: AuthUser, latValue: unknown, lngValue: unknown) {
+    const user = await this.anyProvider(auth);
+    const lat = num(latValue, -90, 90, 'latitude');
+    const lng = num(lngValue, -180, 180, 'longitude');
+    const at = this.iso();
+    const cell = this.geo.cellOf(lat, lng);
+    await this.store.update('users', user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, locationAt: at });
+    const location = { lat: round6(lat), lng: round6(lng), at };
+    const [rides, deals] = await Promise.all([
+      this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
+      this.store.query<Doc>('indrive', [['driverId', '==', user.uid]], 100),
+    ]);
+    await Promise.all([
+      ...rides
+        .filter((r) => ['accepted', 'arriving', 'in_progress'].includes(String(r.status)))
+        .map((r) => this.store.update('rides', String(r.id), { driverLocation: location })),
+      ...deals.filter((r) => r.status === 'matched').map((r) => this.store.update('indrive', String(r.id), { driverLocation: location })),
+    ]);
+    return { ok: true, cell };
+  }
+
+  // ------------------------------------- tarefas com prazo (o que o Cadence faz)
+
+  /**
+   * Varredura de prazos: corrida sem motorista e negociação sem resposta não ficam
+   * paradas para sempre. Roda sozinha (no máximo 1x por minuto) e também pode ser
+   * chamada por um agendador externo em /api/cron/sweep.
+   */
+  async sweep(force = false) {
+    if (!force && Date.now() - this.lastSweep < 60_000) return { skipped: true };
+    this.lastSweep = Date.now();
+    const cfg = await this.settings();
+    const now = this.now().getTime();
+    let rides = 0;
+    let deals = 0;
+    for (const r of await this.store.query<Doc>('rides', [['status', '==', 'searching']], 300)) {
+      if (now - Date.parse(String(r.createdAt)) < cfg.rideSearchTimeoutMin * 60_000) continue;
+      const done = await this.store.transaction(async (tx) => {
+        const ride = await tx.get<Doc>('rides', String(r.id));
+        if (!ride || ride.status !== 'searching') return false;
+        const passenger = await tx.get<UserDoc>('users', String(ride.passengerId));
+        const escrow = Number(ride.escrowCents || 0);
+        tx.update('rides', String(r.id), { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'timeout' });
+        if (passenger && escrow > 0) this.credit(tx, passenger, escrow, 'Estorno · nenhum motorista disponível a tempo', 'estorno');
+        return true;
+      });
+      if (done) rides++;
+    }
+    for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) {
+      if (now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) continue;
+      await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
+      deals++;
+    }
+    return { ridesCancelled: rides, requestsExpired: deals };
+  }
+
+  // ------------------------------------------------------------- SOS e pontos
+
+  async createSos(auth: AuthUser, body: Record<string, unknown>) {
+    const user = await this.ensureUser(auth);
+    const kind = ['ride', 'indrive', 'carpool', 'truck', 'freight', 'general'].includes(String(body.kind)) ? String(body.kind) : 'general';
+    const refId = text(body.refId, 80);
+    let trip: Doc | null = null;
+    if (refId && (kind === 'ride' || kind === 'indrive')) {
+      trip = await this.store.get<Doc>(kind === 'ride' ? 'rides' : 'indrive', refId);
+      if (!trip || (trip.passengerId !== user.uid && trip.driverId !== user.uid)) fail(403, 'forbidden', 'Você não participa desta viagem.');
+    }
+    const lat = Number(body.lat);
+    const lng = Number(body.lng);
+    const id = randomUUID();
+    const doc: Doc = {
+      id,
+      uid: user.uid,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      kind,
+      refId,
+      lat: Number.isFinite(lat) ? round6(lat) : null,
+      lng: Number.isFinite(lng) ? round6(lng) : null,
+      message: text(body.message, 500),
+      status: 'open',
+      trip: trip
+        ? {
+            origin: (trip.origin as GeoPoint)?.name,
+            destination: (trip.destination as GeoPoint)?.name,
+            passengerName: trip.passengerName,
+            driverName: trip.driverName ?? null,
+            vehiclePlate: trip.vehiclePlate ?? null,
+            vehicleModel: trip.vehicleModel ?? null,
+          }
+        : null,
+      createdAt: this.iso(),
+    };
+    await this.store.set('sos', id, doc);
+    return { id };
+  }
+
+  async resolveSos(auth: AuthUser, id: unknown, note: unknown) {
+    this.requireAdmin(auth);
+    const sos = (await this.store.get<Doc>('sos', String(id))) ?? fail(404, 'not_found', 'Alerta não encontrado.');
+    if (sos.status !== 'open') fail(409, 'not_open', 'Este alerta já foi resolvido.');
+    await this.store.update('sos', String(id), { status: 'resolved', resolvedBy: auth.email, note: text(note, 300), resolvedAt: this.iso() });
+    return { ok: true };
+  }
+
+  async redeemPoints(auth: AuthUser) {
+    const cfg = await this.settings();
+    await this.ensureUser(auth);
+    await this.store.transaction(async (tx) => {
+      const user = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Usuário');
+      if ((user.points || 0) < cfg.pointsPerRedeem)
+        fail(409, 'not_enough_points', `Você precisa de ${cfg.pointsPerRedeem} pontos para trocar por ${brl(REDEEM_VALUE_CENTS / 100)}.`);
+      user.points = (user.points || 0) - cfg.pointsPerRedeem;
+      tx.update('users', user.uid, { points: user.points });
+      this.credit(tx, user, REDEEM_VALUE_CENTS, `Bônus fidelidade (${cfg.pointsPerRedeem} pontos)`, 'bonus');
+      this.platformRevenue(tx, 'fidelidade', 0, -REDEEM_VALUE_CENTS);
+    });
+    return { ok: true };
+  }
+
+  // ------------------------------------------------------- admin: usuários e relatórios
+
+  async adminUsers(auth: AuthUser, search: unknown) {
+    this.requireAdmin(auth);
+    const q = text(search, 120).toLowerCase();
+    const users = q.includes('@')
+      ? await this.store.query<UserDoc>('users', [['email', '==', q]], 5)
+      : byNewest(await this.store.query<UserDoc>('users', [], 300)).slice(0, 100);
+    return users
+      .filter((u) => !q || q.includes('@') || u.name.toLowerCase().includes(q) || String(u.phone).includes(q))
+      .map((u) => ({
+        uid: u.uid,
+        name: u.name,
+        email: u.email,
+        phone: u.phone,
+        createdAt: u.createdAt,
+        balance: toReais(u.balanceCents),
+        completedTrips: u.completedTrips,
+        rating: round2(u.rating),
+        passengerRating: round2(u.passengerRating ?? 5),
+        driverStatus: u.driverStatus,
+        truckerStatus: u.truckerStatus,
+        blocked: Boolean(u.blocked),
+        blockedReason: u.blockedReason || '',
+      }));
+  }
+
+  async setBlocked(auth: AuthUser, uid: unknown, blocked: unknown, reason: unknown) {
+    this.requireAdmin(auth);
+    if (uid === auth.uid) fail(400, 'self', 'Você não pode bloquear a própria conta.');
+    const user = (await this.store.get<UserDoc>('users', String(uid))) ?? fail(404, 'not_found', 'Usuário não encontrado.');
+    const why = text(reason, 200);
+    if (blocked === true && why.length < 5) fail(400, 'reason_required', 'Explique o motivo do bloqueio.');
+    await this.store.update('users', user.uid, {
+      blocked: blocked === true,
+      blockedReason: blocked === true ? why : '',
+      driverOnline: blocked === true ? false : user.driverOnline,
+    });
+    return { ok: true };
+  }
+
+  async adminReports(auth: AuthUser, days: unknown = 30) {
+    this.requireAdmin(auth);
+    const period = Math.round(num(days ?? 30, 1, 365, 'dias'));
+    const since = new Date(this.now().getTime() - period * 864e5).toISOString();
+    const entries = (await this.store.query<Doc>('platformLedger', [], 20000)).filter((e) => String(e.createdAt) >= since);
+    const byKind: Record<string, { count: number; gross: number; fee: number }> = {};
+    for (const e of entries) {
+      const k = String(e.kind);
+      byKind[k] ??= { count: 0, gross: 0, fee: 0 };
+      if (Number(e.grossCents) > 0) byKind[k].count += 1;
+      byKind[k].gross += Number(e.grossCents);
+      byKind[k].fee += Number(e.feeCents);
+    }
+    const online = await this.store.query<UserDoc>('users', [['driverOnline', '==', true]], 1000);
+    const total = Object.values(byKind).reduce((a, k) => ({ gross: a.gross + k.gross, fee: a.fee + k.fee, count: a.count + k.count }), { gross: 0, fee: 0, count: 0 });
+    return {
+      days: period,
+      completedServices: total.count,
+      grossVolume: toReais(total.gross),
+      platformRevenue: toReais(total.fee),
+      driversOnline: online.length,
+      byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, { count: v.count, gross: toReais(v.gross), fee: toReais(v.fee) }])),
+    };
+  }
+
   // ------------------------------------------------------------ visão geral
 
+  /**
+   * Despacho por região (H3): com a localização do motorista em dia, ele vê só os pedidos
+   * da região dele (~3,5 km). Sem localização, vê todos (para não ficar sem corridas).
+   */
+  private nearby(user: UserDoc, rides: Doc[]): Doc[] {
+    const fresh = user.driverCell && this.now().getTime() - Date.parse(String(user.locationAt || 0)) < LOCATION_FRESH_MS;
+    if (!fresh) return rides;
+    const area = new Set(this.geo.ring(user.driverCell!, DISPATCH_RING));
+    return rides.filter((r) => !r.originCell || area.has(String(r.originCell)));
+  }
+
   async bootstrap(auth: AuthUser) {
+    await this.settings();
+    await this.sweep().catch((e) => console.warn('Varredura de prazos falhou:', e));
     const user = await this.ensureUser(auth);
     const uid = auth.uid;
     const isDriver = user.driverStatus === 'approved';
@@ -1296,7 +1670,7 @@ export class FrocService {
 
     return {
       profile: this.profileView(user, auth),
-      rides: recent([...myRides, ...drivingRides, ...queueRides.filter((r) => r.passengerId !== uid)], notOld).map((r) => this.rideView(r, uid)),
+      rides: recent([...myRides, ...drivingRides, ...this.nearby(user, queueRides).filter((r) => r.passengerId !== uid)], notOld).map((r) => this.rideView(r, uid)),
       indriveRequests: recent([...myInDrive, ...drivingInDrive, ...openInDrive.filter((r) => r.passengerId !== uid)], notOld).map((r) => this.indriveView(r, uid)),
       carpools: recent([...openCarpools, ...myCarpools, ...bookedTrips], notOld).map((c) =>
         this.carpoolView(c, uid, myBookings, driverTripBookings.get(String(c.id))),

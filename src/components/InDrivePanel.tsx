@@ -1,3 +1,4 @@
+import { SosButton } from './SosButton.tsx';
 import React, { useMemo, useState } from 'react';
 import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
@@ -52,8 +53,13 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
     [liveDistanceKm, origin, destination]
   );
   const suggested = useMemo(() => Math.round((5.5 + distanceKm * 2.15 + 4) * 100) / 100, [distanceKm]);
+  // Mesmo piso do servidor: cobre combustível e tempo do motorista.
+  const minimum = useMemo(() => {
+    const km = Math.max(0.1, distanceKm);
+    return Math.round(Math.max(8.5, km * 1.65 + Math.max(1, Math.round(km * 2)) * 0.2) * 100) / 100;
+  }, [distanceKm]);
 
-  const [offerPrice, setOfferPrice] = useState<string>(String(Math.round(suggested * 0.85)));
+  const [offerPrice, setOfferPrice] = useState<string>(String(Math.ceil(Math.max(minimum, suggested * 0.85))));
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('froc_pay');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -122,7 +128,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
               />
               <button
                 type="button"
-                onClick={() => setOfferPrice(String(Math.max(8, Math.round((Number(offerPrice) || suggested) - 2))))}
+                onClick={() => setOfferPrice(String(Math.max(Math.ceil(minimum), Math.round((Number(offerPrice) || suggested) - 2))))}
                 className="min-w-[44px] min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 -2
@@ -135,6 +141,9 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                 +2
               </button>
             </div>
+            <p className={`text-[11px] ${Number(offerPrice) < minimum ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
+              Oferta mínima para {distanceKm} km: {formatBRL(minimum)} (cobre combustível e tempo do motorista).
+            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <select
@@ -312,6 +321,11 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                     <div className="text-slate-600 dark:text-slate-400">
                       {m.origin.name.split('·')[0]} → {m.destination.name.split('·')[0]} · {m.paymentMethod === 'cash' ? 'dinheiro' : 'carteira Froc'}
                     </div>
+                    <SosButton
+                      kind="indrive"
+                      refId={m.id}
+                      shareText={`Viagem negociada de ${m.origin.name} para ${m.destination.name}${chosen ? `, motorista ${chosen.driverName}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}` : ''}.`}
+                    />
                     {role === 'driver' ? (
                       <button
                         type="button"
