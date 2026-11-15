@@ -3,6 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, Banknote, LogOut, QrCode, Wallet } from 'l
 import { formatBRL } from '../data/locations.ts';
 import type { UserProfile, WalletTransaction } from '../types/mobility.ts';
 import { ProviderOnboarding } from './ProviderOnboarding.tsx';
+import { resendVerification } from '../lib/session.ts';
 
 interface WalletAccountPanelProps {
   profile: UserProfile;
@@ -36,6 +37,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   const [phone, setPhone] = useState(profile.phone);
   const [city, setCity] = useState(profile.city);
   const [busy, setBusy] = useState<string | null>(null);
+  const [verifyMsg, setVerifyMsg] = useState('');
   const isProvider = profile.driverStatus === 'approved' || profile.truckerStatus === 'approved';
 
   const run = async (key: string, fn: () => Promise<void>) => {
@@ -163,7 +165,30 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-2.5 text-xs"
       >
         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Meus dados</h4>
-        <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · confirme seu e-mail pelo link que enviamos'}</div>
+        <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · e-mail ainda não confirmado'}</div>
+        {!profile.emailVerified && (
+          <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 p-2.5 space-y-2 text-[11px] text-amber-800 dark:text-amber-200">
+            <div>Confirme seu e-mail para liberar saques{profile.isAdmin ? '' : ' e, se você for administrador, a aba Admin'}. Depois de clicar no link, esta tela atualiza sozinha em alguns segundos.</div>
+            <button
+              type="button"
+              disabled={busy === 'verify'}
+              onClick={() =>
+                void run('verify', async () => {
+                  try {
+                    const r = await resendVerification();
+                    setVerifyMsg(r === 'already' ? 'E-mail já confirmado. Atualizando...' : 'Link enviado. Confira a caixa de entrada e o spam.');
+                  } catch (e) {
+                    setVerifyMsg((e as Error).message);
+                  }
+                })
+              }
+              className="w-full min-h-[36px] rounded-lg bg-amber-500 text-white font-bold cursor-pointer"
+            >
+              {busy === 'verify' ? 'Enviando...' : 'Enviar link de confirmação'}
+            </button>
+            {verifyMsg && <div className="font-semibold">{verifyMsg}</div>}
+          </div>
+        )}
         <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome completo" className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-semibold" />
         <div className="grid grid-cols-2 gap-2">
           <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Celular com DDD" className="min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />

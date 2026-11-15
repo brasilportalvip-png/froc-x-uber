@@ -76,6 +76,20 @@ export async function signUp(name: string, email: string, password: string) {
   }
 }
 
+/** Reenvia o link de confirmação de e-mail (contas antigas não recebem no cadastro). */
+export async function resendVerification() {
+  const user = requireAuth().currentUser;
+  if (!user) throw new Error('Faça login para continuar.');
+  await user.reload().catch(() => undefined);
+  if (user.emailVerified) return 'already';
+  try {
+    await sendEmailVerification(user);
+    return 'sent';
+  } catch (e) {
+    throw friendly(e);
+  }
+}
+
 export async function resetPassword(email: string) {
   try {
     await sendPasswordResetEmail(requireAuth(), email.trim());
@@ -92,7 +106,15 @@ export async function logout() {
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const user = requireAuth().currentUser;
   if (!user) throw new Error('Faça login para continuar.');
-  const token = await user.getIdToken();
+  // Quem ainda não confirmou o e-mail: confere de novo no Firebase. Assim que o link de
+  // confirmação for clicado, o token é renovado e o servidor passa a ver "verificado"
+  // (necessário para liberar a aba Admin) sem precisar sair e entrar.
+  let renew = false;
+  if (!user.emailVerified) {
+    await user.reload().catch(() => undefined);
+    renew = user.emailVerified;
+  }
+  const token = await user.getIdToken(renew);
   const res = await fetch(path, {
     method: init.method || (init.body ? 'POST' : 'GET'),
     headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
