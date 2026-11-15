@@ -3,7 +3,7 @@
  * Node (server.ts: local, Render, Cloud Run) quanto pela função da Vercel (api/index.mjs).
  */
 import { createApp } from './app.ts';
-import { initFirebase, readWebConfig } from './firebase.ts';
+import { explainTokenError, firebaseDiagnostics, initFirebase, readWebConfig } from './firebase.ts';
 import { FirestoreStore } from './firestoreStore.ts';
 import { createMercadoPago } from './mercadoPago.ts';
 import { FrocService, parseAdminEmails } from './services.ts';
@@ -54,6 +54,8 @@ export function buildApp() {
     webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
     cronSecret: process.env.CRON_SECRET,
     configStatus,
+    diagnostics: firebaseDiagnostics,
+    explainTokenError,
     publicConfig: () => ({
       firebase: readWebConfig(),
       mapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '',

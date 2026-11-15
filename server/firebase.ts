@@ -22,6 +22,68 @@ export function readWebConfig(): Record<string, string> | null {
   }
 }
 
+/**
+ * Diagnóstico sem segredos: confere se a chave do servidor e a configuração web são do
+ * MESMO projeto Firebase (senão todo login falha com "sessão expirada") e se a chave abre.
+ */
+export async function firebaseDiagnostics() {
+  let serviceAccountProject: string | null = null;
+  let keyKind: string | null = null;
+  let keyProblem: string | null = null;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (!raw) keyProblem = 'FIREBASE_SERVICE_ACCOUNT_KEY vazia';
+  else {
+    try {
+      const parsed = JSON.parse(raw);
+      serviceAccountProject = typeof parsed.project_id === 'string' ? parsed.project_id : null;
+      const email = String(parsed.client_email || '');
+      keyKind = email.startsWith('firebase-adminsdk') ? 'firebase-adminsdk (correta)' : email ? 'outra conta de serviço (pode não ter permissão de login)' : 'sem client_email';
+      if (parsed.type !== 'service_account') keyProblem = 'o JSON não é uma chave de conta de serviço (type deveria ser service_account)';
+      else if (!String(parsed.private_key || '').includes('PRIVATE KEY')) keyProblem = 'private_key ausente ou cortada';
+    } catch {
+      keyProblem = 'não é um JSON válido (copie o arquivo .json inteiro, de { até })';
+    }
+  }
+  const webProject = readWebConfig()?.projectId ?? null;
+  let adminInit = 'ok';
+  try {
+    await initFirebase();
+  } catch (e) {
+    adminInit = String((e as Error)?.message || e).slice(0, 200);
+  }
+  return {
+    serviceAccountProject,
+    webProject,
+    sameProject: Boolean(serviceAccountProject && webProject && serviceAccountProject === webProject),
+    keyKind,
+    keyProblem,
+    adminInit,
+  };
+}
+
+/** Traduz a falha de conferência do login para algo que dá para corrigir. */
+export function explainTokenError(error: unknown): { status: number; message: string; reason: string } {
+  const code = String((error as { code?: string })?.code || '');
+  const msg = String((error as Error)?.message || error);
+  if (code === 'auth/id-token-expired') return { status: 401, message: 'Sessão expirada. Entre novamente.', reason: 'expired' };
+  if (/aud|audience|iss|issuer/i.test(msg))
+    return {
+      status: 503,
+      message:
+        'Configuração do servidor: a chave FIREBASE_SERVICE_ACCOUNT_KEY é de um projeto Firebase diferente do FIREBASE_WEB_CONFIG. Abra /api/health para ver os dois projetos.',
+      reason: 'project_mismatch',
+    };
+  if (/FIREBASE_SERVICE_ACCOUNT_KEY|private key|PEM|credential|invalid_grant|DECODER/i.test(msg))
+    return {
+      status: 503,
+      message: 'Configuração do servidor: a chave FIREBASE_SERVICE_ACCOUNT_KEY não abriu. Abra /api/health para ver o motivo.',
+      reason: 'bad_key',
+    };
+  if (code === 'auth/id-token-revoked' || code === 'auth/user-disabled' || code === 'auth/user-not-found')
+    return { status: 401, message: 'Sessão encerrada. Entre novamente.', reason: code };
+  return { status: 401, message: 'Não foi possível confirmar seu login. Saia e entre novamente.', reason: code || 'unknown' };
+}
+
 let cached: Promise<FirebaseBundle> | null = null;
 
 export function initFirebase(): Promise<FirebaseBundle> {
@@ -66,7 +128,9 @@ export function initFirebase(): Promise<FirebaseBundle> {
       db,
       files,
       async verifyToken(token: string): Promise<AuthUser> {
-        const decoded = await auth.verifyIdToken(token, true);
+        // Sem "checkRevoked": evita uma consulta extra (e uma permissão extra da chave) a cada
+        // requisição. Conta bloqueada é conferida pelo próprio app (checkAccess).
+        const decoded = await auth.verifyIdToken(token);
         return {
           uid: decoded.uid,
           email: String(decoded.email || ''),

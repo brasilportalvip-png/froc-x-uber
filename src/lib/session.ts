@@ -135,12 +135,15 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     await user.reload().catch(() => undefined);
     renew = user.emailVerified;
   }
-  const token = await user.getIdToken(renew);
-  const res = await fetch(path, {
-    method: init.method || (init.body ? 'POST' : 'GET'),
-    headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
-    body: init.body ? JSON.stringify(init.body) : undefined,
-  });
+  const send = async (fresh: boolean) =>
+    fetch(path, {
+      method: init.method || (init.body ? 'POST' : 'GET'),
+      headers: { Authorization: `Bearer ${await user.getIdToken(fresh)}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+      body: init.body ? JSON.stringify(init.body) : undefined,
+    });
+  let res = await send(renew);
+  // Token recusado: pega um novo no Firebase e tenta uma vez mais antes de mostrar erro.
+  if (res.status === 401) res = await send(true);
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) {
     if (res.status === 413) throw new Error('Arquivo grande demais. Envie uma foto menor ou um PDF de até 3 MB.');
