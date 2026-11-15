@@ -2037,6 +2037,70 @@ function createApp(options) {
   return app;
 }
 
+// server/firebaseToken.ts
+import { createPublicKey, verify } from "node:crypto";
+var CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+var SKEW_SECONDS = 300;
+var TokenError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
+async function fetchGoogleCerts() {
+  const res = await fetch(CERTS_URL, { signal: AbortSignal.timeout(1e4) });
+  if (!res.ok) throw new TokenError("auth/internal-error", `N\xE3o foi poss\xEDvel baixar as chaves do Google (${res.status}).`);
+  const certs = await res.json();
+  const maxAge = /max-age=(\d+)/.exec(res.headers.get("cache-control") || "");
+  return { certs, maxAgeSeconds: maxAge ? Number(maxAge[1]) : 3600 };
+}
+function b64urlJson(part) {
+  try {
+    return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+  } catch {
+    throw new TokenError("auth/argument-error", "Token mal formado.");
+  }
+}
+function createTokenVerifier(options) {
+  const { projectId } = options;
+  if (!projectId) throw new Error("projectId do Firebase n\xE3o encontrado (confira FIREBASE_SERVICE_ACCOUNT_KEY).");
+  const fetchCerts = options.fetchCerts ?? fetchGoogleCerts;
+  const now = options.nowSeconds ?? (() => Math.floor(Date.now() / 1e3));
+  let cache = null;
+  const certFor = async (kid) => {
+    if (!cache || cache.expiresAt <= now() || !cache.certs[kid]) {
+      const fresh = await fetchCerts();
+      cache = { certs: fresh.certs, expiresAt: now() + Math.max(60, fresh.maxAgeSeconds) };
+    }
+    const pem = cache.certs[kid];
+    if (!pem) throw new TokenError("auth/argument-error", "Token assinado com chave desconhecida.");
+    return pem;
+  };
+  return async function verifyIdToken(token) {
+    const parts = String(token || "").split(".");
+    if (parts.length !== 3) throw new TokenError("auth/argument-error", "Token mal formado.");
+    const header = b64urlJson(parts[0]);
+    const payload = b64urlJson(parts[1]);
+    if (header.alg !== "RS256" || typeof header.kid !== "string")
+      throw new TokenError("auth/argument-error", "Token com algoritmo inv\xE1lido.");
+    const t = now();
+    if (payload.aud !== projectId)
+      throw new TokenError("auth/argument-error", `Firebase ID token has incorrect "aud" (audience) claim. Expected "${projectId}" but got "${String(payload.aud)}".`);
+    if (payload.iss !== `https://securetoken.google.com/${projectId}`)
+      throw new TokenError("auth/argument-error", 'Firebase ID token has incorrect "iss" (issuer) claim.');
+    if (typeof payload.exp !== "number" || payload.exp <= t) throw new TokenError("auth/id-token-expired", "Token expirado.");
+    if (typeof payload.iat !== "number" || payload.iat > t + SKEW_SECONDS) throw new TokenError("auth/argument-error", "Token emitido no futuro.");
+    if (typeof payload.auth_time === "number" && payload.auth_time > t + SKEW_SECONDS)
+      throw new TokenError("auth/argument-error", "Login com hor\xE1rio inv\xE1lido.");
+    if (typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 128)
+      throw new TokenError("auth/argument-error", "Token sem usu\xE1rio.");
+    const key = createPublicKey(await certFor(header.kid));
+    const ok = verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], "base64url"));
+    if (!ok) throw new TokenError("auth/argument-error", "Assinatura do token inv\xE1lida.");
+    return { ...payload, uid: payload.sub };
+  };
+}
+
 // server/firebase.ts
 function readWebConfig() {
   const raw = process.env.FIREBASE_WEB_CONFIG;
@@ -2115,13 +2179,12 @@ function initFirebase() {
     }
     if (credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
     const { initializeApp, cert, getApps } = await import("firebase-admin/app");
-    const { getAuth } = await import("firebase-admin/auth");
     const { getFirestore } = await import("firebase-admin/firestore");
     const { getStorage } = await import("firebase-admin/storage");
     const web = readWebConfig();
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET || web?.storageBucket;
     const app = getApps()[0] ?? initializeApp({ credential: cert(credentials), projectId: credentials.project_id, ...bucketName ? { storageBucket: bucketName } : {} });
-    const auth = getAuth(app);
+    const verifyIdToken = createTokenVerifier({ projectId: String(credentials.project_id || readWebConfig()?.projectId || "") });
     const databaseId = process.env.FIRESTORE_DATABASE_ID;
     const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
     const files = bucketName ? {
@@ -2137,7 +2200,7 @@ function initFirebase() {
       db,
       files,
       async verifyToken(token) {
-        const decoded = await auth.verifyIdToken(token);
+        const decoded = await verifyIdToken(token);
         return {
           uid: decoded.uid,
           email: String(decoded.email || ""),

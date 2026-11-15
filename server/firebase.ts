@@ -4,6 +4,7 @@
  * configuração web pública de FIREBASE_WEB_CONFIG (JSON copiado do console do Firebase).
  */
 import type { AuthUser, FileStorage } from './services.ts';
+import { createTokenVerifier } from './firebaseToken.ts';
 
 export interface FirebaseBundle {
   db: unknown;
@@ -98,7 +99,6 @@ export function initFirebase(): Promise<FirebaseBundle> {
     }
     if (credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
     const { initializeApp, cert, getApps } = await import('firebase-admin/app');
-    const { getAuth } = await import('firebase-admin/auth');
     const { getFirestore } = await import('firebase-admin/firestore');
     const { getStorage } = await import('firebase-admin/storage');
     const web = readWebConfig();
@@ -106,7 +106,8 @@ export function initFirebase(): Promise<FirebaseBundle> {
     const app =
       getApps()[0] ??
       initializeApp({ credential: cert(credentials as never), projectId: credentials.project_id, ...(bucketName ? { storageBucket: bucketName } : {}) });
-    const auth = getAuth(app);
+    // Login conferido sem o módulo firebase-admin/auth (ele não abre na Vercel; ver firebaseToken.ts).
+    const verifyIdToken = createTokenVerifier({ projectId: String(credentials.project_id || readWebConfig()?.projectId || '') });
     // Projetos criados pelo AI Studio às vezes usam um banco com nome próprio.
     const databaseId = process.env.FIRESTORE_DATABASE_ID;
     const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
@@ -130,7 +131,7 @@ export function initFirebase(): Promise<FirebaseBundle> {
       async verifyToken(token: string): Promise<AuthUser> {
         // Sem "checkRevoked": evita uma consulta extra (e uma permissão extra da chave) a cada
         // requisição. Conta bloqueada é conferida pelo próprio app (checkAccess).
-        const decoded = await auth.verifyIdToken(token);
+        const decoded = await verifyIdToken(token);
         return {
           uid: decoded.uid,
           email: String(decoded.email || ''),
