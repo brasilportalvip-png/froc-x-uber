@@ -1,0 +1,6 @@
+{
+  "name": "Froc X Uber",
+  "description": "Plataforma 4 em 1 de mobilidade urbana, negociação de corridas, caronas intermunicipais e fretes com retorno vazio de caminhões.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
