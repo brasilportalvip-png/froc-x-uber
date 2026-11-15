@@ -30,6 +30,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
   const [phone, setPhone] = useState(profile.phone);
   const [truckType, setTruckType] = useState<TruckType>(profile.truckType);
   const [companyName, setCompanyName] = useState(profile.companyName);
+  const [rntrc, setRntrc] = useState(profile.rntrc || '');
   // Documentos já enviados ficam marcados mesmo depois de recarregar a página.
   const [sentLocal, setSent] = useState<Record<string, boolean>>({});
   const fromServer = (kind === 'driver' ? profile.driverDocsSent : profile.truckerDocsSent) || [];
@@ -61,7 +62,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
         e.preventDefault();
         setBusy('apply');
         try {
-          await onApply(kind, { vehicle, plate, phone, truckType, companyName });
+          await onApply(kind, { vehicle, plate, phone, truckType, companyName, rntrc });
         } catch {
           /* a mensagem de erro já aparece na tela */
         } finally {
@@ -99,6 +100,16 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
                   <option key={t}>{t}</option>
                 ))}
               </select>
+            </label>
+            <label className="block">
+              <span className="block text-[11px] text-slate-500 mb-1">RNTRC (registro na ANTT)</span>
+              <input
+                value={rntrc}
+                onChange={(e) => setRntrc(e.target.value)}
+                inputMode="numeric"
+                placeholder="Número que está no seu certificado da ANTT"
+                className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3"
+              />
             </label>
             <label className="block">
               <span className="block text-[11px] text-slate-500 mb-1">Empresa (opcional)</span>

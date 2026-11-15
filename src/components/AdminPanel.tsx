@@ -127,6 +127,19 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                   {app.truckType ? ` · ${app.truckType}` : ''}
                   {app.companyName ? ` · ${app.companyName}` : ''}
                 </div>
+                {app.kind === 'trucker' && (
+                  <div className="text-slate-600 dark:text-slate-300">
+                    RNTRC <strong className="font-mono-num">{app.rntrc || 'não informado'}</strong>
+                    {app.rntrc && (
+                      <>
+                        {' · '}
+                        <a href="https://consultapublica.antt.gov.br/Site/ConsultaRNTRC.aspx" target="_blank" rel="noreferrer" className="font-semibold text-emerald-700 dark:text-emerald-400 underline">
+                          conferir na ANTT
+                        </a>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   {app.documents.map((d) => (
                     <a key={d.type} href={d.url} target="_blank" rel="noreferrer" className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 font-semibold text-emerald-700 dark:text-emerald-400">

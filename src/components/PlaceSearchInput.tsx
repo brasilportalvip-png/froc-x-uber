@@ -6,9 +6,22 @@ import type { GeoPoint } from '../types/mobility.ts';
 interface PlaceSearchInputProps {
   placeholder: string;
   onSelectPlace: (point: GeoPoint) => void;
+  /** 'cities' = só cidades (caronas, rotas de caminhão). Padrão: qualquer endereço. */
+  mode?: 'address' | 'cities';
 }
 
-export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder, onSelectPlace }) => {
+type AddressPart = { longText?: string | null; shortText?: string | null; types?: string[] };
+
+/** Cidade e UF a partir dos componentes de endereço do Google. */
+export function cityAndState(parts: AddressPart[] | null | undefined): { city: string; state: string } {
+  const list = parts || [];
+  const find = (type: string) => list.find((p) => p.types?.includes(type));
+  const city = find('locality') || find('administrative_area_level_2') || find('sublocality');
+  const state = find('administrative_area_level_1');
+  return { city: city?.longText || '', state: (state?.shortText || '').slice(0, 2).toUpperCase() };
+}
+
+export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder, onSelectPlace, mode = 'address' }) => {
   const placesLib = useMapsLibrary('places');
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<google.maps.places.AutocompleteSuggestion[]>([]);
@@ -31,6 +44,7 @@ export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder,
         input: query,
         sessionToken: sessionTokenRef.current ?? undefined,
         includedRegionCodes: ['br'],
+        ...(mode === 'cities' ? { includedPrimaryTypes: ['(cities)'] } : {}),
       })
         .then((res: { suggestions?: google.maps.places.AutocompleteSuggestion[] }) => {
           setSuggestions(res.suggestions || []);
@@ -43,7 +57,7 @@ export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder,
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [placesLib, query]);
+  }, [placesLib, query, mode]);
 
   if (!placesLib) {
     return null;
@@ -54,21 +68,23 @@ export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder,
     try {
       const place = suggestion.placePrediction.toPlace();
       await place.fetchFields({
-        fields: ['displayName', 'formattedAddress', 'location'],
+        fields: ['displayName', 'formattedAddress', 'location', 'addressComponents'],
       });
       if (place.location) {
         const lat = typeof place.location.lat === 'function' ? place.location.lat() : Number(place.location.lat);
         const lng = typeof place.location.lng === 'function' ? place.location.lng() : Number(place.location.lng);
-        const label = place.displayName || place.formattedAddress || query;
+        const { city, state } = cityAndState(place.addressComponents as AddressPart[] | undefined);
+        const label =
+          mode === 'cities' ? `${city || place.displayName || query}${state ? ` · ${state}` : ''}` : place.displayName || place.formattedAddress || query;
         onSelectPlace({
           id: `place-${place.id || Date.now()}`,
           name: label,
-          city: place.formattedAddress?.split(',')[1]?.trim() || 'Brasil',
-          state: 'BR',
-          zone: 'urban',
+          city: city || place.formattedAddress?.split(',')[1]?.trim() || 'Brasil',
+          state: state || 'BR',
+          zone: mode === 'cities' ? 'intercity' : 'urban',
           lat,
           lng,
-          kind: 'avenue',
+          kind: mode === 'cities' ? 'city' : 'avenue',
         });
       }
       setQuery('');

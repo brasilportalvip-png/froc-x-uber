@@ -214,6 +214,7 @@ export interface UserProfile {
   rejectionReason?: string;
   completedTrips: number;
   companyName: string;
+  rntrc: string;
   points: number;
   pointsPerRedeem: number;
   /** Comissão atual da plataforma (%), definida pelo Admin. */
@@ -255,6 +256,7 @@ export interface DriverApplicationView {
   plate: string;
   truckType?: TruckType;
   companyName?: string;
+  rntrc?: string;
   submittedAt: string;
   documents: { type: string; url: string }[];
 }

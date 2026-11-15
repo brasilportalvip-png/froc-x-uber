@@ -50,7 +50,7 @@ async function topUp(u: AuthUser, reais: number) {
 const balance = async (u: AuthUser) => (await svc.bootstrap(u)).profile.walletBalance;
 async function approve(u: AuthUser, kind: 'driver' | 'trucker') {
   for (const d of kind === 'driver' ? ['cnh', 'crlv'] : ['cnh', 'crlv', 'antt']) await svc.uploadDocument(u, kind, d, 'image/png', 'eA==');
-  await svc.applyAsProvider(u, kind, { phone: '11988887777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú' });
+  await svc.applyAsProvider(u, kind, { phone: '11988887777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
   await svc.reviewApplication(admin, u.uid, kind, 'approved', '');
 }
 const minutes = (n: number) => {
