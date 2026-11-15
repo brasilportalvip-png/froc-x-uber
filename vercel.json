@@ -4,7 +4,97 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api" },
-    { "source": "/((?!api/|legal/|assets/).*)", "destination": "/index.html" }
+    {
+      "source": "/api/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/blog",
+      "destination": "/api"
+    },
+    {
+      "source": "/blog/:slug",
+      "destination": "/api"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api"
+    },
+    {
+      "source": "/sitemap-paginas.xml",
+      "destination": "/api"
+    },
+    {
+      "source": "/sitemap-blog.xml",
+      "destination": "/api"
+    },
+    {
+      "source": "/rss.xml",
+      "destination": "/api"
+    },
+    {
+      "source": "/corridas-por-aplicativo",
+      "destination": "/api"
+    },
+    {
+      "source": "/caronas-intermunicipais",
+      "destination": "/api"
+    },
+    {
+      "source": "/fretes-e-mudancas",
+      "destination": "/api"
+    },
+    {
+      "source": "/seja-motorista",
+      "destination": "/api"
+    },
+    {
+      "source": "/((?!api/|legal/|assets/|blog).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "geolocation=(self), camera=(self), microphone=(), payment=(), usb=(), interest-cohort=()"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
+        },
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://maps.googleapis.com https://maps.gstatic.com https://apis.google.com https://www.gstatic.com https://*.firebaseapp.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com https://storage.googleapis.com; connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com https://*.firebaseio.com https://*.firebaseapp.com; frame-src https://*.firebaseapp.com https://accounts.google.com https://*.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
   ]
 }

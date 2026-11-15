@@ -113,7 +113,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
       {showPublish ? (
         <form
           onSubmit={handlePublish}
-          className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
+          className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
         >
           <h4 className="text-sm font-bold text-slate-900 dark:text-white">Publicar carona intermunicipal</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -192,9 +192,9 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Buscar cidade (ex: Rio, Campinas, Curitiba...)"
-              className="flex-1 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+              className="flex-1 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111013] px-3.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
             />
-            <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 min-h-[44px]">
+            <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111013] px-3 min-h-[44px]">
               <Users className="w-4 h-4 text-slate-500" />
               <select
                 value={seatsWanted}
@@ -218,7 +218,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
               <div
                 key={trip.id}
                 onClick={() => onSelectRouteOnMap(trip.origin, trip.destination)}
-                className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 p-4 space-y-3 transition cursor-pointer"
+                className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 p-4 space-y-3 transition cursor-pointer"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1 min-w-0">

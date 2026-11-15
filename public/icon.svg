@@ -1,6 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#0B0F17"/>
-  <path d="M128 156H384V212H192V244H344V298H192V368H128V156Z" fill="#10B981"/>
-  <path d="M278 308L322 252L366 308L384 368H336L322 324L308 368H260L278 308Z" fill="#F8FAFC"/>
-  <circle cx="364" cy="184" r="24" fill="#F59E0B"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7E08A"/>
+      <stop offset="0.5" stop-color="#D4AF37"/>
+      <stop offset="1" stop-color="#9C7A1C"/>
+    </linearGradient>
+    <linearGradient id="p" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF4FA7"/>
+      <stop offset="1" stop-color="#C2006B"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#050505"/>
+  <rect x="10" y="10" width="492" height="492" rx="104" stroke="url(#g)" stroke-width="8"/>
+  <path d="M128 156H384V212H192V244H344V298H192V368H128V156Z" fill="url(#p)"/>
+  <path d="M278 308L322 252L366 308L384 368H336L322 324L308 368H260L278 308Z" fill="#FFFFFF"/>
+  <circle cx="364" cy="184" r="24" fill="url(#g)"/>
 </svg>

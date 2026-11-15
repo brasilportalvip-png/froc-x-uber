@@ -42,7 +42,7 @@ export const PWAInstallButton: React.FC = () => {
           aria-modal="true"
           aria-labelledby="pwa-guide-title"
         >
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-6 shadow-2xl">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-6 shadow-2xl">
             <div className="flex items-center justify-between gap-4">
               <h3 id="pwa-guide-title" className="text-lg font-bold text-slate-900 dark:text-white">
                 Instalar Froc X Uber no celular ou PC

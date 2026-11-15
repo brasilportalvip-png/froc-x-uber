@@ -1,3 +1,4 @@
+import { CARGO_VEHICLE_TYPES } from '../data/cargoVehicles.ts';
 import { CubageCalculator } from './CubageCalculator.tsx';
 import truckImg from '../assets/images/fleet_truck_cargo_1794683388987.jpg';
 import React, { useMemo, useState } from 'react';
@@ -50,7 +51,7 @@ interface TruckFreightPanelProps {
   canPublishTruck: boolean;
 }
 
-const TRUCK_TYPES: TruckType[] = ['VUC / Utilitário', '3/4 Baú', 'Toco Aberto', 'Truck Baú', 'Carreta Sider'];
+const TRUCK_TYPES: TruckType[] = [...CARGO_VEHICLE_TYPES];
 
 export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   role,
@@ -233,8 +234,8 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               type="text"
               value={searchCity}
               onChange={(e) => setSearchCity(e.target.value)}
-              placeholder="Filtrar rota ou caminhão (ex: Curitiba, Sider)..."
-              className="flex-1 min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+              placeholder="Filtrar rota ou veículo (ex: Curitiba, Van, Sider)..."
+              className="flex-1 min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111013] px-3 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
             />
             {role === 'trucker' && canPublishTruck && (
             <button
@@ -251,10 +252,10 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
           {showCreateForm ? (
             <form
               onSubmit={handlePublishEmpty}
-              className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
+              className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
             >
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                Cadastrar caminhão em deslocamento vazio
+                Cadastrar veículo de carga em deslocamento vazio
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <PlacePicker label="Origem da viagem" mode="cities" value={etOrigin} onChange={setEtOrigin} />
@@ -263,7 +264,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
 
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Tipo de caminhão</label>
+                  <label className="block text-[11px] text-slate-500 mb-1">Veículo</label>
                   <div className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold flex items-center">
                     {etType} · {profile.truckPlate}
                   </div>
@@ -348,7 +349,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 <div
                   key={t.id}
                   onClick={() => onSelectRouteOnMap(t.origin, t.destination)}
-                  className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 hover:border-amber-500/70 p-4 space-y-3 transition cursor-pointer"
+                  className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 hover:border-amber-500/70 p-4 space-y-3 transition cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -428,7 +429,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                   {t.mine === 'owner' && (
                     <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs space-y-2" onClick={(e) => e.stopPropagation()}>
                       <div className="font-semibold text-slate-900 dark:text-white">
-                        {t.status === 'completed' ? 'Frete concluído.' : 'Você reservou este caminhão. Valor retido até a entrega.'}
+                        {t.status === 'completed' ? 'Frete concluído.' : 'Você reservou este veículo. Valor retido até a entrega.'}
                       </div>
                       {t.truckerPhone && <div>Combine com o caminhoneiro: <strong className="font-mono-num">{t.truckerPhone}</strong></div>}
                       {t.status === 'reserved' && (
@@ -487,7 +488,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
           {showCreateForm ? (
             <form
               onSubmit={handleCreateFreight}
-              className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
+              className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
             >
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">Novo pedido de mudança ou frete</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -623,7 +624,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 <div
                   key={f.id}
                   onClick={() => onSelectRouteOnMap(f.origin, f.destination)}
-                  className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3 cursor-pointer"
+                  className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3 cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

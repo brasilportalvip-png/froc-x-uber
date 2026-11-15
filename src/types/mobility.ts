@@ -123,7 +123,7 @@ export interface CarpoolTrip {
   bookedByUserSeats: number;
 }
 
-export type TruckType = 'VUC / Utilitário' | '3/4 Baú' | 'Toco Aberto' | 'Truck Baú' | 'Carreta Sider';
+export type { CargoVehicleType as TruckType } from '../data/cargoVehicles.ts';
 
 export interface EmptyTruckRoute {
   id: string;
@@ -219,6 +219,8 @@ export interface UserProfile {
   pointsPerRedeem: number;
   /** Comissão atual da plataforma (%), definida pelo Admin. */
   commissionPercent: number;
+  /** Conta criada antes da inauguração (10/03/2027): selo de membro fundador. */
+  founder?: boolean;
   /** Documentos já enviados (para não pedir de novo depois de recarregar a página). */
   driverDocsSent: string[];
   truckerDocsSent: string[];

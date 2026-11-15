@@ -8,6 +8,11 @@ import { FirestoreStore } from './firestoreStore.ts';
 import { createMercadoPago } from './mercadoPago.ts';
 import { FrocService, parseAdminEmails } from './services.ts';
 import { createGridGeo, createH3Geo } from './geo.ts';
+import { SupportDesk } from './support.ts';
+import { BlogService, createIndexNow } from './blog.ts';
+import { createGemini } from './ai/gemini.ts';
+import { AiTeam } from './ai/team.ts';
+import type { Store } from './store.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -22,7 +27,33 @@ export function publicSiteUrl() {
  */
 export const COLLECTION_PREFIX = process.env.FIRESTORE_COLLECTION_PREFIX ?? 'froc_';
 
+export interface Platform {
+  store: Store;
+  service: FrocService;
+  support: SupportDesk;
+  blog: BlogService;
+  team: AiTeam;
+}
+
 let servicePromise: Promise<FrocService> | null = null;
+let platformPromise: Promise<Platform> | null = null;
+let sharedStore: Store | null = null;
+
+/** Serviços extras (atendimento, blog, Equipe IA) usando o mesmo banco do app. */
+export function getPlatform() {
+  platformPromise ??= getService().then((service) => {
+    const store = sharedStore!;
+    const llm = createGemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL });
+    const support = new SupportDesk(store);
+    const blog = new BlogService(store, { llm, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
+    const team = new AiTeam({ store, service, support, blog, llm, configStatus });
+    return { store, service, support, blog, team };
+  });
+  platformPromise.catch(() => {
+    platformPromise = null;
+  });
+  return platformPromise;
+}
 
 export function getService() {
   const publicUrl = publicSiteUrl();
@@ -33,13 +64,15 @@ export function getService() {
       return createGridGeo();
     }),
   ]).then(
-    ([fb, geo]) =>
-      new FrocService(new FirestoreStore(fb.db, COLLECTION_PREFIX), {
+    ([fb, geo]) => {
+      sharedStore = new FirestoreStore(fb.db, COLLECTION_PREFIX);
+      return new FrocService(sharedStore, {
         geo,
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
-      }),
+      });
+    },
   );
   servicePromise.catch(() => {
     servicePromise = null;
@@ -50,6 +83,8 @@ export function getService() {
 export function buildApp() {
   return createApp({
     service: getService,
+    platform: getPlatform,
+    siteUrl: () => publicSiteUrl() || 'https://froc-x-uber.vercel.app',
     verifyToken: async (token) => (await initFirebase()).verifyToken(token),
     webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
     cronSecret: process.env.CRON_SECRET,
@@ -76,6 +111,8 @@ export function configStatus() {
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
     cron: Boolean(process.env.CRON_SECRET),
+    ai: Boolean(process.env.GEMINI_API_KEY),
+    aiModel: process.env.GEMINI_MODEL || 'automático',
     firestoreDatabase: process.env.FIRESTORE_DATABASE_ID || '(default)',
     collectionPrefix: COLLECTION_PREFIX,
   };

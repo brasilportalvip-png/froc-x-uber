@@ -97,6 +97,62 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 | MERCADO_PAGO_ACCESS_TOKEN | para recargas | Mercado Pago |
 | MERCADO_PAGO_WEBHOOK_SECRET | para recargas | Mercado Pago |
 | CRON_SECRET | recomendado | você inventa |
+| GEMINI_API_KEY | para a Equipe IA, o atendimento e o blog | a mesma chave da Froc.IA (Google AI Studio → Get API key) |
+| GEMINI_MODEL | não | deixe vazio (usa os modelos da Froc.IA automaticamente) |
+| GOOGLE_SITE_VERIFICATION | para o Google Search Console | só o código da metatag (item 7) |
+| BING_SITE_VERIFICATION | para o Bing Webmaster | só o código da metatag (item 7) |
+
+## 7. Equipe IA, atendimento e blog
+
+**Ligar a IA:** cadastre `GEMINI_API_KEY` na Vercel (a mesma chave da Froc.IA) e faça **Redeploy**.
+O `/api/health` passa a mostrar `"ai": true`.
+
+**Equipe IA (Admin → 🤖 Equipe IA):** a Froc central e 19 especialistas (atendimento, cadastros,
+financeiro, antifraude, SOS, manutenção, preços, marketing/SEO, redes sociais, relatórios, jurídico/LGPD...).
+Todos falam com a voz da Froc e consultam o sistema de verdade.
+- Eles **leem tudo**, respondem pessoas, resolvem SOS, escrevem posts e anotam pendências **sozinhos**.
+- **Dinheiro, banimento, aprovação de cadastro e configurações** ficam em
+  **"Aguardando sua aprovação"**: nada disso acontece sem o seu toque em **Aprovar**.
+- Tudo fica em **Admin → Auditoria** (quem fez, o quê, quando — pessoa ou agente).
+- Eles não veem as fotos dos documentos: confira as imagens antes de aprovar um cadastro.
+
+**Atendimento:** o botão rosa no canto do app abre o chat com a Froc. Ela responde na hora com os dados
+da conta da própria pessoa e chama a equipe quando precisa (Admin → Atendimento).
+Limite: 60 mensagens por pessoa por dia (protege a sua conta do Gemini).
+
+**Blog diário:** o mesmo agendador do item 5 dispara, a partir das 7h, 1 post por dia em `/blog`, com SEO
+(título, descrição, palavra-chave, perguntas frequentes, dados estruturados) e avisa o Bing na hora (IndexNow).
+Post fora do padrão vira rascunho em vez de ir ao ar. Admin → Blog e SEO: gerar outro na hora, publicar ou tirar do ar.
+Relatório diário da Froc: Admin → Equipe IA → Relatórios diários.
+
+**Google Search Console (dia 1):**
+1. <https://search.google.com/search-console> → **Adicionar propriedade** → **Prefixo do URL** → `https://froc-x-uber.vercel.app/`.
+2. Método **Tag HTML**: copie só o código de dentro de `content="..."`, cadastre em `GOOGLE_SITE_VERIFICATION` na Vercel e faça **Redeploy**. Volte e clique **Verificar**.
+3. Em **Sitemaps**, envie `sitemap.xml`.
+4. Em **Inspeção de URL**, peça indexação da página inicial, de `/blog` e das 4 páginas de serviço.
+
+**Bing Webmaster (dia 1):** <https://www.bing.com/webmasters> → **Importar do Google Search Console**
+(ou use a metatag em `BING_SITE_VERIFICATION`). Envie o `sitemap.xml`. O IndexNow já está ligado.
+
+**Sobre "1º lugar":** nenhum sistema garante a primeira posição no Google ou no Bing. O que está pronto é a
+parte técnica perfeita + 1 conteúdo útil por dia + aviso imediato aos buscadores. A posição vem com o tempo,
+com **links de outros sites** (parceiros, imprensa local, perfis da marca) e com gente usando o app.
+Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` e o `index.html` (canonical).
+
+## 8. Proteção
+- Cabeçalhos de segurança no site inteiro (HTTPS obrigatório, anti-clickjacking, anti-sniffing, permissões do navegador).
+- Política de conteúdo (CSP) em modo **observação**: registra no console o que seria bloqueado, sem quebrar nada.
+- Limites por conta que valem para todos os servidores: recargas, saques, SOS, documentos, cadastro, atendimento e Equipe IA.
+- Auditoria de toda ação administrativa (pessoa ou IA). Agente de IA nunca aprova a própria proposta.
+- Na Vercel: **Settings → Security → Attack Challenge Mode** liga um desafio anti-robô se o site sofrer ataque.
+- No Firebase: **Authentication → Configurações → Proteção contra enumeração de e-mail** (ative).
+
+## 9. Teste de pessoa real (navegador de verdade)
+- O instalador roda `npm run e2e`: um Chrome de verdade abre o site novo no **computador** e num **celular**
+  (Pixel 7) e usa como uma pessoa: pop-up, contagem regressiva, botões, perguntas, tamanho da tela.
+- Depois que a Vercel publicar, rode **TESTAR_PRODUCAO.cmd**: testa o site no ar (servidor, proteção da API,
+  cabeçalhos, todos os sitemaps e páginas, SEO). Para testar também o login, crie uma conta de **teste** e
+  coloque `E2E_EMAIL` e `E2E_PASSWORD` no arquivo `.env` da pasta.
 
 ## Como o dinheiro funciona
 
@@ -114,9 +170,10 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 - **Usuários:** buscar e bloquear contas, sempre com motivo.
 - **Relatórios:** serviços, volume e receita por modalidade.
 - **Configurações:** comissão, preço dinâmico (H3), prazos automáticos e pontos.
+- **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 39 testes automáticos das regras de negócio.
+`npm test` roda 58 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

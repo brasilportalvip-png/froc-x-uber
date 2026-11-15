@@ -3,7 +3,9 @@ import type { User } from 'firebase/auth';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import { Car, HandCoins, Map as MapIcon, Moon, Shield, Sun, Truck, Users, Wallet } from 'lucide-react';
 import { AdminPanel } from './components/AdminPanel.tsx';
-import { AuthScreen } from './components/AuthScreen.tsx';
+import { Landing } from './components/Landing.tsx';
+import { SupportChat } from './components/SupportChat.tsx';
+import { takeIntent } from './lib/launch.ts';
 import { BlaBlaCarPanel } from './components/BlaBlaCarPanel.tsx';
 import { GoogleMapsView } from './components/GoogleMapsView.tsx';
 import { InDrivePanel } from './components/InDrivePanel.tsx';
@@ -34,7 +36,14 @@ export default function App() {
 
   const [activeModule, setActiveModule] = useState<AppModule>('rides');
   const [role, setRole] = useState<UserRole>('passenger');
-  const [isDark, setIsDark] = useState<boolean>(false);
+  // Padrão: tema preto (identidade Froc). A escolha da pessoa fica salva no aparelho.
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('froc-theme') !== 'light';
+    } catch {
+      return true;
+    }
+  });
   const [showMobileMap, setShowMobileMap] = useState<boolean>(true);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -52,7 +61,24 @@ export default function App() {
     const root = document.documentElement;
     if (isDark) root.classList.add('dark');
     else root.classList.remove('dark');
+    try {
+      localStorage.setItem('froc-theme', isDark ? 'dark' : 'light');
+    } catch {
+      /* navegador sem armazenamento */
+    }
   }, [isDark]);
+
+  // Quem tocou em "Quero ser motorista" / "Cadastrar meu veículo de carga" na página inicial
+  // já entra no app com o perfil certo aberto.
+  useEffect(() => {
+    if (!user) return;
+    const intent = takeIntent();
+    if (intent === 'driver') setRole('driver');
+    if (intent === 'trucker') {
+      setRole('trucker');
+      setActiveModule('freight');
+    }
+  }, [user]);
 
   // 1) Configuração pública + acompanhamento do login
   useEffect(() => {
@@ -276,16 +302,16 @@ export default function App() {
   const useGoogleMaps = Boolean(mapsApiKey) && isOnline;
 
   const appShell = (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100">
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-transparent text-slate-900 dark:text-slate-100">
       {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-30 h-14 lg:h-16 px-4 lg:px-6 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-8">
+      <header className="sticky top-0 z-30 h-14 lg:h-16 px-4 lg:px-6 bg-white/95 dark:bg-[#050505]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-8">
         <a
           href="#top"
           onClick={(e) => {
             e.preventDefault();
             handleSelectModule('rides');
           }}
-          className="font-display text-lg lg:text-xl font-extrabold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+          className="font-display text-lg lg:text-xl font-extrabold tracking-tight whitespace-nowrap shrink-0 froc-logo"
         >
           Froc X Uber
         </a>
@@ -296,7 +322,7 @@ export default function App() {
               { id: 'rides', label: 'Corridas' },
               { id: 'indrive', label: 'Negociar' },
               { id: 'carpool', label: 'Caronas' },
-              { id: 'freight', label: 'Caminhões' },
+              { id: 'freight', label: 'Cargas' },
               { id: 'wallet', label: 'Conta' },
               ...(profile?.isAdmin ? [{ id: 'admin', label: 'Admin' }] : []),
             ] as { id: AppModule; label: string }[]
@@ -307,7 +333,7 @@ export default function App() {
               onClick={() => handleSelectModule(item.id)}
               className={`py-1.5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 activeModule === item.id
-                  ? 'border-emerald-600 text-slate-900 dark:text-white font-semibold'
+                  ? 'border-emerald-600 froc-nav-active text-slate-900 dark:text-white font-semibold'
                   : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
@@ -362,7 +388,7 @@ export default function App() {
 
           {/* Desktop Bottom Metric Strip */}
           {state && (
-            <div className="hidden lg:grid grid-cols-4 gap-4 absolute bottom-4 right-4 left-64 z-10 rounded-2xl bg-white/92 dark:bg-[#131924]/92 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-5 py-3 shadow-sm">
+            <div className="hidden lg:grid grid-cols-4 gap-4 absolute bottom-4 right-4 left-64 z-10 rounded-2xl bg-white/92 dark:bg-[#111013]/92 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-5 py-3 shadow-sm">
               <div>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">Uber / 99</div>
                 <div className="text-sm font-bold font-mono-num text-slate-900 dark:text-white">
@@ -392,7 +418,7 @@ export default function App() {
         </section>
 
         {/* Left Workspace */}
-        <section className="lg:order-1 flex flex-col lg:h-full lg:overflow-hidden bg-slate-50 dark:bg-[#0B0F17]">
+        <section className="lg:order-1 flex flex-col lg:h-full lg:overflow-hidden bg-slate-50 dark:bg-[#050505]">
           <div className="px-4 pt-3 pb-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#101622] space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900 flex-1">
@@ -400,7 +426,7 @@ export default function App() {
                   [
                     { id: 'passenger', label: 'Passageiro' },
                     { id: 'driver', label: 'Motorista' },
-                    { id: 'trucker', label: 'Caminhoneiro' },
+                    { id: 'trucker', label: 'Transportador' },
                   ] as { id: UserRole; label: string }[]
                 ).map((r) => (
                   <button
@@ -483,7 +509,7 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <>
+              <div key={activeModule} className="froc-enter space-y-4">
                 {role !== 'passenger' && !roleApproved && ['rides', 'indrive', 'carpool', 'freight'].includes(activeModule) && (
                   <ProviderOnboarding
                     kind={role === 'trucker' ? 'trucker' : 'driver'}
@@ -594,7 +620,7 @@ export default function App() {
                     onRedeem={handleRedeem}
                   />
                 )}
-              </>
+              </div>
             )}
           </div>
         </section>
@@ -641,15 +667,16 @@ export default function App() {
         </div>
       )}
 
+      {state && <SupportChat />}
       <OfflineIndicator />
     </div>
   );
 
   if (user === undefined)
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0B0F17] text-sm text-slate-500">Carregando Froc X Uber...</div>
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#050505] text-sm text-slate-500">Carregando Froc X Uber...</div>
     );
-  if (user === null) return <AuthScreen configError={configError} />;
+  if (user === null) return <Landing configError={configError} />;
 
   if (useGoogleMaps) {
     return (

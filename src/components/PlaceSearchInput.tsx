@@ -98,7 +98,7 @@ export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder,
 
   return (
     <div className="relative">
-      <div className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#131924] px-2.5 min-h-[38px]">
+      <div className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111013] px-2.5 min-h-[38px]">
         <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
         <input
           type="text"
@@ -111,7 +111,7 @@ export const PlaceSearchInput: React.FC<PlaceSearchInputProps> = ({ placeholder,
       </div>
 
       {open && suggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full mt-1 z-30 max-h-48 overflow-y-auto rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-700 shadow-xl divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="absolute left-0 right-0 top-full mt-1 z-30 max-h-48 overflow-y-auto rounded-xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-700 shadow-xl divide-y divide-slate-100 dark:divide-slate-800">
           {suggestions.map((s, idx) => (
             <li key={idx}>
               <button

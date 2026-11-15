@@ -1,3 +1,4 @@
+import { CARGO_VEHICLES } from '../data/cargoVehicles.ts';
 import React, { useMemo, useState } from 'react';
 import type { TruckType } from '../types/mobility.ts';
 
@@ -16,14 +17,10 @@ const ITEMS: { id: string; label: string; m3: number; kg: number }[] = [
   { id: 'caixa', label: 'Caixa média (60 L)', m3: 0.06, kg: 15 },
 ];
 
-/** Capacidade útil aproximada de cada tipo de caminhão. */
-const TRUCKS: { type: TruckType; m3: number; kg: number }[] = [
-  { type: 'VUC / Utilitário', m3: 12, kg: 1500 },
-  { type: '3/4 Baú', m3: 22, kg: 4000 },
-  { type: 'Toco Aberto', m3: 30, kg: 6000 },
-  { type: 'Truck Baú', m3: 45, kg: 12000 },
-  { type: 'Carreta Sider', m3: 90, kg: 27000 },
-];
+/** Capacidade útil aproximada de cada veículo de carga (do menor para o maior). */
+const TRUCKS: { type: TruckType; m3: number; kg: number }[] = [...CARGO_VEHICLES]
+  .map((v) => ({ type: v.type, m3: v.m3, kg: v.kg }))
+  .sort((a, b) => a.m3 - b.m3 || a.kg - b.kg);
 
 interface Props {
   onApply: (result: { volumeM3: number; weightKg: number; truck: TruckType }) => void;

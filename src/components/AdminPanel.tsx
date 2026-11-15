@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { formatBRL } from '../data/locations.ts';
 import { api } from '../lib/session.ts';
+import { AiTeamPanel, AuditPanel, BlogAdminPanel, ProposalsBox, SupportAdminPanel } from './AdminAiPanels.tsx';
 import type { AdminOverview, AdminReport, AdminUserRow, PlatformSettingsView } from '../types/mobility.ts';
 
 const DOC_LABEL: Record<string, string> = { cnh: 'CNH', crlv: 'CRLV', antt: 'ANTT' };
@@ -12,11 +13,11 @@ const KIND_LABEL: Record<string, string> = {
   retorno_vazio: 'Retorno vazio',
   fidelidade: 'Bônus de fidelidade (custo)',
 };
-type Tab = 'pendencias' | 'sos' | 'usuarios' | 'relatorios' | 'config';
+type Tab = 'equipe' | 'pendencias' | 'sos' | 'atendimento' | 'usuarios' | 'relatorios' | 'blog' | 'config' | 'auditoria';
 
 /** Painel da administração: cadastros, saques, SOS, usuários, relatórios e configurações. */
 export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToast }) => {
-  const [tab, setTab] = useState<Tab>('pendencias');
+  const [tab, setTab] = useState<Tab>('equipe');
   const [data, setData] = useState<AdminOverview | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -75,14 +76,18 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
       <div className="text-sm text-slate-500">Carregando...</div>
     );
 
-  const card = 'rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-2';
+  const card = 'rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2';
   const input = 'w-full min-h-[38px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3';
   const tabs: [Tab, string][] = [
+    ['equipe', '🤖 Equipe IA'],
     ['pendencias', `Pendências (${data.totals.pendingApplications + data.totals.pendingWithdrawals})`],
     ['sos', `SOS (${data.totals.openSos})`],
+    ['atendimento', 'Atendimento'],
     ['usuarios', 'Usuários'],
     ['relatorios', 'Relatórios'],
+    ['blog', 'Blog e SEO'],
     ['config', 'Configurações'],
+    ['auditoria', 'Auditoria'],
   ];
 
   return (
@@ -106,6 +111,12 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
           </button>
         ))}
       </div>
+
+      {tab === 'equipe' && <AiTeamPanel onToast={onToast} />}
+      {tab !== 'equipe' && <ProposalsBox onToast={onToast} />}
+      {tab === 'atendimento' && <SupportAdminPanel onToast={onToast} />}
+      {tab === 'blog' && <BlogAdminPanel onToast={onToast} />}
+      {tab === 'auditoria' && <AuditPanel onToast={onToast} />}
 
       {tab === 'pendencias' && (
         <>

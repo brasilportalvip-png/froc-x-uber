@@ -7,9 +7,26 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError, FrocService } from './services.ts';
 import type { AuthUser } from './services.ts';
 import { verifyMercadoPagoSignature } from './mercadoPago.ts';
+import type { SupportDesk } from './support.ts';
+import type { BlogService } from './blog.ts';
+import { SERVICE_PAGES, renderBlogIndex, renderPost, renderServicePage, rssFeed, sitemapBlog, sitemapIndex, sitemapPages } from './blog.ts';
+import type { AiTeam } from './ai/team.ts';
+import { consumeQuota } from './rateLimit.ts';
+import type { Store } from './store.ts';
+
+export interface PlatformParts {
+  store: Store;
+  support: SupportDesk;
+  blog: BlogService;
+  team: AiTeam;
+}
 
 export interface AppOptions {
   service: FrocService | (() => Promise<FrocService>);
+  /** Atendimento, blog e Equipe IA (opcional nos testes antigos). */
+  platform?: () => Promise<PlatformParts>;
+  /** Endereço público do site (para canonical, sitemaps e RSS). */
+  siteUrl?: () => string;
   verifyToken: (token: string) => Promise<AuthUser>;
   publicConfig: () => Record<string, unknown>;
   webhookSecret?: string;
@@ -127,21 +144,90 @@ export function createApp(options: AppOptions) {
     wrap(async (req) => {
       const key = String(req.headers['x-cron-key'] || '');
       if (!options.cronSecret || key !== options.cronSecret) throw new AppError(401, 'unauthorized', 'Chave inválida.');
-      return (await service()).sweep(true);
+      const sweep = await (await service()).sweep(true);
+      // Rotina diária (post do blog + relatório da Equipe IA): roda 1x por dia, a partir das 7h de Brasília.
+      let daily: unknown = null;
+      const hourBr = (new Date().getUTCHours() + 21) % 24;
+      if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
+      return { sweep, daily };
     }),
   );
+
+  // ----- páginas públicas para o Google e o Bing (HTML pronto, sem depender de JavaScript)
+  const site = () => (options.siteUrl?.() || '').replace(/\/+$/, '');
+  const platform = async () => {
+    if (!options.platform) throw new AppError(503, 'unavailable', 'Recurso indisponível.');
+    return options.platform();
+  };
+  const sendPage = (res: Response, type: string, body: string, maxAge = 600) => {
+    res.setHeader('Content-Type', `${type}; charset=utf-8`);
+    res.setHeader('Cache-Control', `public, max-age=60, s-maxage=${maxAge}, stale-while-revalidate=86400`);
+    res.send(body);
+  };
+  const publicPage =
+    (fn: (req: Request, res: Response) => Promise<void>) =>
+    async (req: Request, res: Response) => {
+      try {
+        await fn(req, res);
+      } catch (error) {
+        console.error('Erro em página pública:', error);
+        if (!res.headersSent) res.status(503).type('text/plain').send('Página temporariamente indisponível. Tente em instantes.');
+      }
+    };
+  app.get('/sitemap.xml', publicPage(async (_req, res) => {
+    const posts = await (await platform()).blog.list({ limit: 1 }).catch(() => []);
+    sendPage(res, 'application/xml', sitemapIndex(site(), posts[0]?.updatedAt || posts[0]?.publishedAt));
+  }));
+  app.get('/sitemap-paginas.xml', publicPage(async (_req, res) => sendPage(res, 'application/xml', sitemapPages(site()), 86400)));
+  app.get('/sitemap-blog.xml', publicPage(async (_req, res) => sendPage(res, 'application/xml', sitemapBlog(site(), await (await platform()).blog.list()))));
+  app.get('/rss.xml', publicPage(async (_req, res) => sendPage(res, 'application/rss+xml', rssFeed(site(), await (await platform()).blog.list({ limit: 50 })))));
+  app.get('/blog', publicPage(async (_req, res) => sendPage(res, 'text/html', renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()))));
+  app.get('/blog/:slug', publicPage(async (req, res) => {
+    const { blog } = await platform();
+    const slug = String(req.params.slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
+    const post = await blog.get(slug);
+    if (!post || !post.published) {
+      res.status(404);
+      return sendPage(res, 'text/html', renderBlogIndex(await blog.list({ limit: 30 }), site()).replace('<h1>', '<p class="meta">Este artigo não existe ou saiu do ar. Veja os mais recentes:</p><h1>'), 60);
+    }
+    const related = (await blog.list({ limit: 6 })).filter((p) => p.slug !== post.slug).slice(0, 4);
+    sendPage(res, 'text/html', renderPost(post, site(), related));
+  }));
+  for (const page of SERVICE_PAGES) {
+    app.get(`/${page.slug}`, publicPage(async (_req, res) => {
+      const latest = await (await platform()).blog.list({ limit: 3 }).catch(() => []);
+      sendPage(res, 'text/html', renderServicePage(page, site(), latest), 3600);
+    }));
+  }
 
   // ----- com login
   const api = express.Router();
   api.use(requireAuth);
   const limited = rateLimit(20, 60_000);
+  /**
+   * Limite que vale para todas as instâncias (fica no banco), por conta. Se o banco falhar,
+   * não bloqueia a pessoa (o limite em memória continua valendo).
+   */
+  const guard =
+    (bucket: string, max: number, windowMs: number, message: string) => async (req: AuthedRequest, res: Response, next: NextFunction) => {
+      if (!options.platform) return next();
+      try {
+        const { store } = await options.platform();
+        await consumeQuota(store, `${bucket}:${(req.auth as AuthUser).uid}`, max, windowMs, message);
+        return next();
+      } catch (error) {
+        if (error instanceof AppError) return res.status(error.status).json({ error: error.message, code: error.code });
+        console.warn('Limite persistente indisponível:', error);
+        return next();
+      }
+    };
 
   api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req))));
   api.patch('/profile', wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
 
   api.post('/rides/quote', wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
   api.post('/driver/location', rateLimit(30, 60_000), wrap(async (req) => (await service()).updateLocation(a(req), req.body?.lat, req.body?.lng)));
-  api.post('/sos', rateLimit(5, 60_000), wrap(async (req) => (await service()).createSos(a(req), req.body || {})));
+  api.post('/sos', rateLimit(5, 60_000), guard('sos', 20, 3600_000, 'Muitos alertas em pouco tempo. Em emergência ligue 190.'), wrap(async (req) => (await service()).createSos(a(req), req.body || {})));
   api.post('/wallet/redeem', limited, wrap(async (req) => (await service()).redeemPoints(a(req))));
   api.post('/rides', limited, wrap(async (req) => (await service()).createRide(a(req), req.body || {})));
   api.patch('/rides/:id', wrap(async (req) => ({ ride: await (await service()).rideAction(a(req), id(req), req.body || {}) })));
@@ -169,16 +255,17 @@ export function createApp(options: AppOptions) {
   api.post('/freights/:id/deliver', wrap(async (req) => ({ freight: await (await service()).finishFreight(a(req), id(req), 'deliver') })));
   api.post('/freights/:id/cancel', wrap(async (req) => ({ freight: await (await service()).finishFreight(a(req), id(req), 'cancel') })));
 
-  api.post('/wallet/topup', limited, wrap(async (req) => (await service()).createTopup(a(req), req.body?.amount)));
+  api.post('/wallet/topup', limited, guard('topup', 15, 3600_000, 'Muitas recargas em uma hora. Tente mais tarde.'), wrap(async (req) => (await service()).createTopup(a(req), req.body?.amount)));
   api.post('/wallet/topups/:id/confirm', wrap(async (req) => (await service()).confirmTopup(id(req), a(req).uid)));
-  api.post('/wallet/withdraw', limited, wrap(async (req) => (await service()).requestWithdrawal(a(req), req.body?.amount, req.body?.pixKey)));
+  api.post('/wallet/withdraw', limited, guard('withdraw', 5, 864e5, 'Limite de 5 pedidos de saque por dia.'), wrap(async (req) => (await service()).requestWithdrawal(a(req), req.body?.amount, req.body?.pixKey)));
 
   api.post(
     '/driver/documents',
     rateLimit(15, 60_000),
+    guard('docs', 40, 864e5, 'Muitos envios de documentos hoje. Tente amanhã.'),
     wrap(async (req) => (await service()).uploadDocument(a(req), req.body?.kind, req.body?.docType, req.body?.contentType, req.body?.dataBase64)),
   );
-  api.post('/driver/apply', limited, wrap(async (req) => (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {})));
+  api.post('/driver/apply', limited, guard('apply', 10, 864e5, 'Muitas tentativas de cadastro hoje.'), wrap(async (req) => (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {})));
 
   api.get('/admin/overview', wrap(async (req) => (await service()).adminOverview(a(req))));
   api.post(
@@ -191,6 +278,68 @@ export function createApp(options: AppOptions) {
   api.patch('/admin/settings', wrap(async (req) => (await service()).updateSettings(a(req), req.body || {})));
   api.post('/admin/sos/:id/resolve', wrap(async (req) => (await service()).resolveSos(a(req), id(req), req.body?.note)));
   api.post('/admin/withdrawals/:id', wrap(async (req) => (await service()).resolveWithdrawal(a(req), id(req), req.body?.decision)));
+
+  // ----- atendimento (pessoa ↔ Froc ↔ equipe)
+  const quota = async (req: AuthedRequest, bucket: string, max: number, windowMs: number, message: string) => {
+    const { store } = await platform();
+    await consumeQuota(store, `${bucket}:${a(req).uid}`, max, windowMs, message);
+  };
+  api.get('/support', wrap(async (req) => (await platform()).team.supportView(a(req))));
+  api.post(
+    '/support',
+    limited,
+    wrap(async (req) => {
+      await quota(req, 'support', 60, 864e5, 'Você atingiu o limite de mensagens de hoje. A equipe continua vendo sua conversa.');
+      return (await platform()).team.supportMessage(a(req), req.body?.message);
+    }),
+  );
+
+  // ----- administração: Equipe IA, atendimento, blog e auditoria
+  const admin = async (req: AuthedRequest) => {
+    const svc = await service();
+    if (!svc.isAdmin(a(req))) throw new AppError(403, 'forbidden', 'Acesso restrito à administração.');
+    return platform();
+  };
+  api.get('/admin/ai/agents', wrap(async (req) => {
+    const p = await admin(req);
+    return { configured: p.team.configured, agents: p.team.agents() };
+  }));
+  api.post('/admin/ai/chat', wrap(async (req) => {
+    const p = await admin(req);
+    await quota(req, 'ai-admin', 400, 864e5, 'Limite diário de mensagens para a Equipe IA atingido (protege sua conta do Gemini).');
+    return p.team.chat(a(req), req.body?.agentId, req.body?.message, req.body?.conversationId);
+  }));
+  api.get('/admin/ai/conversations/:id', wrap(async (req) => (await admin(req)).team.conversation(a(req), id(req))));
+  api.get('/admin/ai/proposals', wrap(async (req) => (await admin(req)).team.proposals(a(req), String(req.query.status || 'pending'))));
+  api.post('/admin/ai/proposals/:id', wrap(async (req) => (await admin(req)).team.decide(a(req), id(req), req.body?.decision)));
+  api.get('/admin/ai/reports', wrap(async (req) => (await admin(req)).team.reports(a(req))));
+  api.post('/admin/ai/daily', wrap(async (req) => (await admin(req)).team.daily(true)));
+  api.get('/admin/audit', wrap(async (req) => (await service()).auditLog(a(req), Number(req.query.limit) || 150)));
+  api.get('/admin/support', wrap(async (req) => (await admin(req)).support.listOpen(100)));
+  api.get('/admin/support/:id', wrap(async (req) => ((await admin(req)).support.get(id(req))).then((c) => c ?? { messages: [] })));
+  api.post('/admin/support/:id/reply', wrap(async (req) => {
+    const p = await admin(req);
+    const chat = await p.support.get(id(req));
+    if (!chat) throw new AppError(404, 'not_found', 'Conversa não encontrada.');
+    const r = await p.support.append({ uid: chat.uid }, 'equipe', String(req.body?.text || ''), a(req).email);
+    await (await service()).audit(a(req), 'atendimento_respondido', chat.uid);
+    return r;
+  }));
+  api.post('/admin/support/:id/close', wrap(async (req) => (await admin(req)).support.close(id(req))));
+  api.get('/admin/blog', wrap(async (req) => (await admin(req)).blog.list({ includeDrafts: true, limit: 200 })));
+  api.post('/admin/blog/generate', wrap(async (req) => {
+    const p = await admin(req);
+    const out = await p.blog.generate({ topic: req.body?.topic ? String(req.body.topic).slice(0, 200) : undefined, author: 'Froc IA · Marketing e SEO' });
+    await (await service()).audit(a(req), 'post_criado', out.post.slug, { publicado: out.post.published });
+    return { slug: out.post.slug, title: out.post.title, published: out.post.published, problems: out.problems };
+  }));
+  api.post('/admin/blog/:id/publish', wrap(async (req) => {
+    const p = await admin(req);
+    const r = await p.blog.setPublished(id(req), req.body?.published === true);
+    if (!r) throw new AppError(404, 'not_found', 'Post não encontrado.');
+    await (await service()).audit(a(req), req.body?.published === true ? 'post_publicado' : 'post_retirado', id(req));
+    return r;
+  }));
 
   app.use('/api', api);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));

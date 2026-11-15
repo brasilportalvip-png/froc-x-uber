@@ -1,11 +1,62 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Identidade Froc X Uber: preto, branco, rosa pink e dourado.
+ * As cores "emerald" do código viram rosa pink, "amber" vira ouro e "slate" vira
+ * preto/grafite neutro. Assim todo o app muda de uma vez, sem caçar classe por classe.
+ */
+@theme {
+  --color-emerald-50: #fff0f7;
+  --color-emerald-100: #ffe0ef;
+  --color-emerald-200: #ffc2df;
+  --color-emerald-300: #ff94c6;
+  --color-emerald-400: #ff5aa8;
+  --color-emerald-500: #ff2d95;
+  --color-emerald-600: #e6087f;
+  --color-emerald-700: #bf0569;
+  --color-emerald-800: #9c0857;
+  --color-emerald-900: #7d0b48;
+  --color-emerald-950: #4a0026;
+
+  --color-amber-50: #fffbea;
+  --color-amber-100: #fff3c4;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #f9d36b;
+  --color-amber-400: #f2c14e;
+  --color-amber-500: #d4af37;
+  --color-amber-600: #b8932a;
+  --color-amber-700: #94741f;
+  --color-amber-800: #6f5617;
+  --color-amber-900: #4d3c10;
+  --color-amber-950: #2b2108;
+
+  --color-slate-50: #fafafa;
+  --color-slate-100: #f4f4f5;
+  --color-slate-200: #e7e7ea;
+  --color-slate-300: #d4d4d8;
+  --color-slate-400: #a1a1aa;
+  --color-slate-500: #77777f;
+  --color-slate-600: #52525b;
+  --color-slate-700: #3a3a40;
+  --color-slate-800: #232327;
+  --color-slate-900: #141416;
+  --color-slate-950: #0a0a0b;
+
+  --color-pink-froc: #ff2d95;
+  --color-gold-froc: #d4af37;
+}
+
 @layer base {
   :root {
     --font-display: 'Outfit', system-ui, sans-serif;
     --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --froc-pink: #ff2d95;
+    --froc-pink-deep: #c2006b;
+    --froc-gold: #d4af37;
+    --froc-gold-light: #f7e08a;
+    --froc-black: #050505;
   }
 
   body {
@@ -23,23 +74,208 @@
   }
 }
 
-/* Custom subtle scrollbars */
+/* ---------- Fundo vivo: brilhos rosa e dourado que se movem devagar ---------- */
+.dark body::before,
+body.froc-glow::before {
+  content: '';
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 35% at 15% 10%, rgba(255, 45, 149, 0.16), transparent 70%),
+    radial-gradient(35% 30% at 85% 15%, rgba(212, 175, 55, 0.13), transparent 70%),
+    radial-gradient(45% 40% at 60% 95%, rgba(255, 45, 149, 0.10), transparent 70%);
+  animation: froc-aurora 22s ease-in-out infinite alternate;
+}
+
+@keyframes froc-aurora {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(3%, -2%, 0) scale(1.06); }
+  100% { transform: translate3d(-3%, 2%, 0) scale(1.02); }
+}
+
+/* ---------- Logo e textos em ouro com reflexo ---------- */
+.froc-logo {
+  background: linear-gradient(100deg, #ffffff 0%, var(--froc-gold-light) 22%, var(--froc-gold) 40%, var(--froc-pink) 62%, #ffffff 80%, var(--froc-gold-light) 100%);
+  background-size: 220% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: froc-shine 6s linear infinite;
+  filter: drop-shadow(0 0 12px rgba(255, 45, 149, 0.25));
+}
+html:not(.dark) .froc-logo {
+  background-image: linear-gradient(100deg, #111 0%, var(--froc-pink-deep) 35%, var(--froc-gold) 55%, #111 80%, var(--froc-pink-deep) 100%);
+}
+
+.froc-gold-text {
+  background: linear-gradient(100deg, #b8932a, #f7e08a 30%, #d4af37 50%, #fff6cc 65%, #b8932a);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: froc-shine 5s linear infinite;
+}
+
+@keyframes froc-shine {
+  to { background-position: 220% center; }
+}
+
+/* ---------- Botões principais: rosa com brilho que passa ---------- */
+button[class~='bg-emerald-600'],
+a[class~='bg-emerald-600'],
+button[class~='bg-emerald-500'],
+.froc-btn {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(135deg, #ff4fa7 0%, #e6087f 55%, #b00064 100%);
+  box-shadow: 0 6px 22px -8px rgba(255, 45, 149, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition: transform 0.18s ease, box-shadow 0.25s ease, filter 0.25s ease;
+}
+button[class~='bg-emerald-600']::after,
+a[class~='bg-emerald-600']::after,
+button[class~='bg-emerald-500']::after,
+.froc-btn::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -75%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(110deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: skewX(-20deg);
+  animation: froc-sweep 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+button[class~='bg-emerald-600']:hover:not(:disabled),
+a[class~='bg-emerald-600']:hover,
+button[class~='bg-emerald-500']:hover:not(:disabled),
+.froc-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: 0 10px 30px -8px rgba(255, 45, 149, 0.85), 0 0 0 1px rgba(212, 175, 55, 0.55);
+}
+button[class~='bg-emerald-600']:active:not(:disabled),
+button[class~='bg-emerald-500']:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+@keyframes froc-sweep {
+  0%, 60% { left: -75%; }
+  100% { left: 135%; }
+}
+
+/* Botões dourados (destaques, ofertas) */
+button[class~='bg-amber-500'],
+.froc-btn-gold {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(135deg, #f7e08a 0%, #d4af37 45%, #9c7a1c 100%);
+  color: #1a1305 !important;
+  box-shadow: 0 6px 22px -8px rgba(212, 175, 55, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* ---------- Cartões: borda com reflexo dourado ao passar o dedo/mouse ---------- */
+.dark [class*='rounded-2xl'][class*='border'] {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.dark [class*='rounded-2xl'][class*='border']:hover {
+  border-color: rgba(212, 175, 55, 0.45);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.12), 0 12px 40px -18px rgba(255, 45, 149, 0.45);
+}
+
+/* Moldura dourada animada */
+.froc-frame {
+  position: relative;
+  border-radius: 1.25rem;
+  padding: 1px;
+  background: linear-gradient(120deg, rgba(212, 175, 55, 0.9), rgba(255, 45, 149, 0.85), rgba(247, 224, 138, 0.9), rgba(255, 45, 149, 0.85));
+  background-size: 300% 300%;
+  animation: froc-frame 8s ease infinite;
+}
+.froc-frame > * {
+  border-radius: calc(1.25rem - 1px);
+}
+@keyframes froc-frame {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ---------- Entradas suaves ---------- */
+.froc-enter {
+  animation: froc-enter 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes froc-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.froc-pop {
+  animation: froc-pop 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.3) both;
+}
+@keyframes froc-pop {
+  from { opacity: 0; transform: scale(0.85) translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.froc-float {
+  animation: froc-float 5s ease-in-out infinite;
+}
+@keyframes froc-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.froc-pulse-pink {
+  animation: froc-pulse-pink 2.4s ease-in-out infinite;
+}
+@keyframes froc-pulse-pink {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 45, 149, 0.55); }
+  50% { box-shadow: 0 0 0 10px rgba(255, 45, 149, 0); }
+}
+
+/* Faíscas douradas (decoração) */
+.froc-sparkle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fff6cc 0%, #d4af37 50%, transparent 70%);
+  animation: froc-twinkle 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes froc-twinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+
+/* Navegação ativa com sublinhado ouro → rosa */
+.froc-nav-active {
+  border-image: linear-gradient(90deg, var(--froc-gold), var(--froc-pink)) 1;
+}
+
+/* Quem prefere menos movimento: sem animações */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Barras de rolagem discretas */
 .froc-scroll::-webkit-scrollbar {
   width: 5px;
   height: 5px;
 }
-
 .froc-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-
 .froc-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
+  background: rgba(255, 45, 149, 0.35);
   border-radius: 9999px;
 }
-
 .froc-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.55);
+  background: rgba(212, 175, 55, 0.6);
 }
 
 .pb-safe {

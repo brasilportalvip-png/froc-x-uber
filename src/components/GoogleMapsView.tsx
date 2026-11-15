@@ -200,7 +200,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
 
       {/* Top Route Summary HUD */}
       <div className="absolute top-3 left-3 right-16 pointer-events-none flex flex-wrap items-center gap-2 z-10">
-        <div className="pointer-events-auto inline-flex items-center gap-2.5 rounded-xl bg-white/95 dark:bg-[#131924]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3.5 py-2 shadow-sm text-xs">
+        <div className="pointer-events-auto inline-flex items-center gap-2.5 rounded-xl bg-white/95 dark:bg-[#111013]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3.5 py-2 shadow-sm text-xs">
           <Navigation className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <span className="font-semibold text-slate-900 dark:text-white truncate max-w-[140px] sm:max-w-xs">
             {origin.zone === 'intercity' ? origin.city : origin.name.split('·')[0]}
@@ -220,7 +220,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
         </div>
 
         {onSelectLocationFromMap && (
-          <div className="pointer-events-auto hidden sm:inline-flex items-center gap-1 rounded-xl bg-white/95 dark:bg-[#131924]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-1 shadow-sm">
+          <div className="pointer-events-auto hidden sm:inline-flex items-center gap-1 rounded-xl bg-white/95 dark:bg-[#111013]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-1 shadow-sm">
             <button
               type="button"
               onClick={() => setPickTarget(pickTarget === 'origin' ? null : 'origin')}
@@ -251,7 +251,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
       <button
         type="button"
         onClick={handleLocateMe}
-        className="absolute top-3 right-3 z-10 w-10 h-10 rounded-xl bg-white/95 dark:bg-[#131924]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
+        className="absolute top-3 right-3 z-10 w-10 h-10 rounded-xl bg-white/95 dark:bg-[#111013]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
         aria-label="Centralizar no meu GPS"
       >
         <LocateFixed className="w-4 h-4" />

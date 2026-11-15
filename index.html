@@ -3,19 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Froc X Uber — Mobilidade 4 em 1, Caronas e Fretes</title>
+    <title>Froc X Uber: corridas, caronas e fretes num app só</title>
     <meta
       name="description"
-      content="Plataforma 4 em 1 reunindo corridas instantâneas (Uber/99), negociação de preço (inDrive), caronas intermunicipais (BlaBlaCar) e fretes com retorno vazio de caminhões e mudanças."
+      content="App 4 em 1 para todo o Brasil: corrida com preço antes, negociação de valor, carona entre cidades e fretes com caminhão, van e utilitário. Inauguração 10/03/2027."
     />
-    <meta property="og:title" content="Froc X Uber — Mobilidade 4 em 1, Caronas e Fretes" />
+    <link rel="canonical" href="https://froc-x-uber.vercel.app/" />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:site_name" content="Froc X Uber" />
+    <meta property="og:title" content="Froc X Uber: corridas, caronas e fretes num app só" />
     <meta
       property="og:description"
-      content="Corridas urbanas, leilão de preço, caronas de longa distância e espaço exclusivo para caminhoneiros em retorno vazio e mudanças."
+      content="Corridas com PIN de segurança, preço negociado, caronas intermunicipais e fretes com caminhão, van e utilitário em todo o Brasil."
     />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://froc-x-uber.vercel.app/" />
+    <meta property="og:image" content="https://froc-x-uber.vercel.app/pwa-512x512.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="theme-color" content="#0B0F17" />
+    <link rel="alternate" type="application/rss+xml" title="Blog Froc X Uber" href="/rss.xml" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://froc-x-uber.vercel.app/#org",
+            "name": "Froc X Uber",
+            "url": "https://froc-x-uber.vercel.app/",
+            "logo": "https://froc-x-uber.vercel.app/pwa-512x512.png"
+          },
+          {
+            "@type": "WebSite",
+            "name": "Froc X Uber",
+            "url": "https://froc-x-uber.vercel.app/",
+            "inLanguage": "pt-BR",
+            "publisher": { "@id": "https://froc-x-uber.vercel.app/#org" }
+          },
+          {
+            "@type": "WebApplication",
+            "name": "Froc X Uber",
+            "url": "https://froc-x-uber.vercel.app/",
+            "applicationCategory": "TravelApplication",
+            "operatingSystem": "Android, iOS, Windows, macOS",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "BRL" }
+          }
+        ]
+      }
+    </script>
+    <meta name="theme-color" content="#050505" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -29,8 +65,19 @@
       rel="stylesheet"
     />
   </head>
-  <body class="bg-slate-50 text-slate-900 dark:bg-[#0B0F17] dark:text-slate-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300">
+  <body class="bg-slate-50 text-slate-900 dark:bg-[#050505] dark:text-slate-100 antialiased selection:bg-emerald-500/30 selection:text-white">
     <div id="root"></div>
+    <noscript>
+      <h1>Froc X Uber: corridas, caronas e fretes num app só</h1>
+      <p>App 4 em 1 para todo o Brasil. Ative o JavaScript para usar o app, ou leia:</p>
+      <ul>
+        <li><a href="/corridas-por-aplicativo">Corrida por aplicativo</a></li>
+        <li><a href="/caronas-intermunicipais">Carona intermunicipal</a></li>
+        <li><a href="/fretes-e-mudancas">Fretes e mudanças</a></li>
+        <li><a href="/seja-motorista">Seja motorista</a></li>
+        <li><a href="/blog">Blog</a></li>
+      </ul>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

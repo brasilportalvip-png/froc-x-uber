@@ -51,7 +51,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl bg-slate-900 dark:bg-[#131924] border border-slate-800 text-white p-5 space-y-4">
+      <div className="rounded-2xl bg-slate-900 dark:bg-[#111013] border border-slate-800 text-white p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-slate-300 font-semibold">
             <Wallet className="w-4 h-4 text-emerald-400" />
@@ -91,7 +91,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         </p>
       </div>
 
-      <div className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-3 text-xs">
+      <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-3 text-xs">
         <div>
           <div className="text-sm font-bold text-slate-900 dark:text-white">Pontos Froc: {profile.points}</div>
           <div className="text-slate-500">
@@ -117,7 +117,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
               setWithdrawAmount('');
             });
           }}
-          className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-2 text-xs"
+          className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2 text-xs"
         >
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
             <Banknote className="w-4 h-4 text-emerald-600" />
@@ -134,7 +134,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         </form>
       )}
 
-      <div className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+      <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3">
         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Extrato</h4>
         {transactions.length === 0 && <div className="text-xs text-slate-500">Nenhuma movimentação ainda.</div>}
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -162,10 +162,15 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
           e.preventDefault();
           void run('profile', () => onUpdateProfile({ name, phone, city }));
         }}
-        className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-2.5 text-xs"
+        className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2.5 text-xs"
       >
         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Meus dados</h4>
         <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · e-mail ainda não confirmado'}</div>
+        {profile.founder && (
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/60 bg-black px-3 py-1 text-[11px] font-bold">
+            <span className="froc-gold-text">★ Membro fundador</span>
+          </div>
+        )}
         {!profile.emailVerified && (
           <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 p-2.5 space-y-2 text-[11px] text-amber-800 dark:text-amber-200">
             <div>Confirme seu e-mail para proteger sua conta (e, se você for o administrador, liberar a aba Admin). Depois de clicar no link do e-mail, volte aqui: a tela atualiza sozinha em alguns segundos.</div>

@@ -9,6 +9,7 @@
  * - Toda mudança de dinheiro acontece dentro de uma transação (lê tudo, depois grava).
  * - Nada é simulado: sem motorista inventado, sem saldo inventado, sem pagamento sem cobrança.
  */
+import { CARGO_VEHICLE_TYPES } from '../src/data/cargoVehicles.ts';
 import { randomUUID, randomInt } from 'node:crypto';
 import { BRAZIL_LOCATIONS, calculateDistanceKm, estimateDurationMin, RIDE_CATEGORIES } from '../src/data/locations.ts';
 import type {
@@ -46,7 +47,7 @@ const fail = (status: number, code: string, message: string): never => {
 };
 
 export const MIN_WITHDRAWAL_CENTS = 2000;
-const TRUCK_TYPES: TruckType[] = ['VUC / Utilitário', '3/4 Baú', 'Toco Aberto', 'Truck Baú', 'Carreta Sider'];
+const TRUCK_TYPES: TruckType[] = [...CARGO_VEHICLE_TYPES];
 const DOC_TYPES = { driver: ['cnh', 'crlv'], trucker: ['cnh', 'crlv', 'antt'] } as const;
 const ALLOWED_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 export const MAX_DOC_BYTES = 3 * 1024 * 1024;
@@ -56,7 +57,15 @@ export interface AuthUser {
   email: string;
   emailVerified: boolean;
   name?: string;
+  /**
+   * Preenchido só pelo próprio servidor quando quem age é um agente da Equipe IA
+   * (nunca vem do navegador: o token do Firebase não tem este campo).
+   */
+  agent?: string;
 }
+
+/** Grande inauguração: quem cria a conta antes disso ganha o selo de membro fundador. */
+export const LAUNCH_AT_ISO = '2027-03-10T03:00:00.000Z';
 
 export interface PaymentsGateway {
   configured: boolean;
@@ -259,6 +268,7 @@ export class FrocService {
     await this.store.set('settings', 'platform', { ...next, updatedBy: auth.email, updatedAt: this.iso() });
     this.cfg = next;
     this.cfgLoadedAt = Date.now();
+    await this.audit(auth, 'configuracoes_alteradas', 'platform', { antes: current, depois: next });
     return next;
   }
 
@@ -278,7 +288,30 @@ export class FrocService {
   }
 
   isAdmin(auth: AuthUser) {
+    if (auth.agent) return true;
     return auth.emailVerified && parseAdminEmails(this.deps.adminEmails).includes(auth.email.trim().toLowerCase());
+  }
+
+  /** Registro de auditoria: quem (pessoa ou agente de IA) fez o quê, quando. */
+  async audit(auth: AuthUser | null, action: string, target: string, details: Record<string, unknown> = {}) {
+    const id = randomUUID();
+    await this.store
+      .set('audit', id, {
+        id,
+        action,
+        target,
+        actor: auth ? auth.email || auth.uid : 'sistema',
+        actorType: auth?.agent ? 'ia' : auth ? 'admin' : 'sistema',
+        agent: auth?.agent || '',
+        details: JSON.parse(JSON.stringify(details ?? {})),
+        createdAt: this.iso(),
+      })
+      .catch((e) => console.error('Falha ao gravar auditoria:', e));
+  }
+
+  async auditLog(auth: AuthUser, limit = 100) {
+    this.requireAdmin(auth);
+    return byNewest(await this.store.query<Doc>('audit', [], 1000)).slice(0, Math.min(500, limit));
   }
 
   // ---------------------------------------------------------------- usuários
@@ -342,6 +375,7 @@ export class FrocService {
       commissionPercent: this.cfg.commissionPercent,
       driverDocsSent: Object.keys(user.driverDocs || {}),
       truckerDocsSent: Object.keys(user.truckerDocs || {}),
+      founder: String(user.createdAt || '') < LAUNCH_AT_ISO,
     };
   }
 
@@ -576,7 +610,7 @@ export class FrocService {
     const next: Partial<UserDoc> = { phone, rejectionReason: '' };
     if (kind === 'driver') Object.assign(next, { driverVehicle: vehicle, driverPlate: plate, driverStatus: 'pending', driverSubmittedAt: this.iso() });
     else {
-      const truckType = TRUCK_TYPES.includes(body.truckType as TruckType) ? (body.truckType as TruckType) : fail(400, 'invalid_truck', 'Tipo de caminhão inválido.');
+      const truckType = TRUCK_TYPES.includes(body.truckType as TruckType) ? (body.truckType as TruckType) : fail(400, 'invalid_truck', 'Tipo de veículo de carga inválido.');
       Object.assign(next, {
         truckModel: vehicle,
         truckPlate: plate,
@@ -667,6 +701,7 @@ export class FrocService {
       reviewedBy: auth.email,
       reviewedAt: this.iso(),
     });
+    await this.audit(auth, decision === 'approved' ? 'cadastro_aprovado' : 'cadastro_recusado', user.uid, { kind, reason: why, email: user.email });
     return { ok: true };
   }
 
@@ -680,6 +715,7 @@ export class FrocService {
       tx.update('withdrawals', String(id), { status: decision, resolvedBy: auth.email, resolvedAt: this.iso() });
       if (decision === 'rejected') this.credit(tx, user, Number(w.amountCents), 'Saque recusado · valor devolvido', 'estorno');
     });
+    await this.audit(auth, decision === 'paid' ? 'saque_pago' : 'saque_recusado', String(id));
     return { ok: true };
   }
 
@@ -1548,7 +1584,8 @@ export class FrocService {
     this.requireAdmin(auth);
     const sos = (await this.store.get<Doc>('sos', String(id))) ?? fail(404, 'not_found', 'Alerta não encontrado.');
     if (sos.status !== 'open') fail(409, 'not_open', 'Este alerta já foi resolvido.');
-    await this.store.update('sos', String(id), { status: 'resolved', resolvedBy: auth.email, note: text(note, 300), resolvedAt: this.iso() });
+    await this.store.update('sos', String(id), { status: 'resolved', resolvedBy: auth.agent ? `IA (${auth.agent})` : auth.email, note: text(note, 300), resolvedAt: this.iso() });
+    await this.audit(auth, 'sos_resolvido', String(id), { note: text(note, 300) });
     return { ok: true };
   }
 
@@ -1605,6 +1642,7 @@ export class FrocService {
       blockedReason: blocked === true ? why : '',
       driverOnline: blocked === true ? false : user.driverOnline,
     });
+    await this.audit(auth, blocked === true ? 'usuario_bloqueado' : 'usuario_desbloqueado', user.uid, { reason: why, email: user.email });
     return { ok: true };
   }
 
@@ -1631,6 +1669,55 @@ export class FrocService {
       driversOnline: online.length,
       byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, { count: v.count, gross: toReais(v.gross), fee: toReais(v.fee) }])),
     };
+  }
+
+  // ------------------------------------------- consultas da Equipe IA (somente administração)
+
+  /** Ficha completa de um usuário: dados, carteira e últimos serviços. */
+  async adminUserDetail(auth: AuthUser, uid: unknown) {
+    this.requireAdmin(auth);
+    const user = (await this.store.get<UserDoc>('users', String(uid))) ?? fail(404, 'not_found', 'Usuário não encontrado.');
+    const [tx, ridesP, ridesD, sos, withdrawals] = await Promise.all([
+      this.transactions(user.uid),
+      this.store.query<Doc>('rides', [['passengerId', '==', user.uid]], 100),
+      this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
+      this.store.query<Doc>('sos', [['uid', '==', user.uid]], 50),
+      this.store.query<Doc>('withdrawals', [['uid', '==', user.uid]], 50),
+    ]);
+    const { driverDocs: _d, truckerDocs: _t, ...safe } = user;
+    return {
+      user: { ...safe, balance: toReais(user.balanceCents) },
+      wallet: tx.slice(0, 30),
+      rides: byNewest([...ridesP, ...ridesD]).slice(0, 20).map((r) => ({
+        id: r.id,
+        status: r.status,
+        papel: r.passengerId === user.uid ? 'passageiro' : 'motorista',
+        de: (r.origin as GeoPoint | undefined)?.name,
+        para: (r.destination as GeoPoint | undefined)?.name,
+        preco: r.price,
+        criadaEm: r.createdAt,
+      })),
+      sos: byNewest(sos).slice(0, 10),
+      withdrawals: byNewest(withdrawals).slice(0, 10).map((w) => ({ id: w.id, status: w.status, valor: toReais(Number(w.amountCents)), createdAt: w.createdAt })),
+    };
+  }
+
+  /** Últimos pedidos de cada serviço (para a equipe enxergar o movimento). */
+  async adminRecentActivity(auth: AuthUser, limit = 15) {
+    this.requireAdmin(auth);
+    const pick = async (col: string) =>
+      byNewest(await this.store.query<Doc>(col, [], 300))
+        .slice(0, limit)
+        .map((d) => ({
+          id: d.id,
+          status: d.status,
+          de: (d.origin as GeoPoint | undefined)?.name,
+          para: (d.destination as GeoPoint | undefined)?.name,
+          valor: d.price ?? d.pricePerSeat ?? d.proposedBudget ?? d.emptyReturnPrice,
+          criadoEm: d.createdAt,
+        }));
+    const [rides, indrive, carpools, emptyTrucks, freights] = await Promise.all(['rides', 'indrive', 'carpools', 'emptyTrucks', 'freights'].map(pick));
+    return { corridas: rides, negociacoes: indrive, caronas: carpools, veiculosVazios: emptyTrucks, fretes: freights };
   }
 
   // ------------------------------------------------------------ visão geral
