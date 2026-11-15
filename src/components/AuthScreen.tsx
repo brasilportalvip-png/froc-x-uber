@@ -90,7 +90,9 @@ export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configEr
             </div>
             {mode === 'signup' && (
               <p className="text-[11px] text-slate-500">
-                Ao criar a conta você concorda com os termos de uso e a política de privacidade do Froc X Uber.
+                Ao criar a conta você concorda com os{' '}
+                <a href="/legal/termos.html" target="_blank" rel="noreferrer" className="underline">termos de uso</a> e a{' '}
+                <a href="/legal/privacidade.html" target="_blank" rel="noreferrer" className="underline">política de privacidade</a>.
               </p>
             )}
           </form>

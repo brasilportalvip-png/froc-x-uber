@@ -14,6 +14,7 @@ interface WalletAccountPanelProps {
   onUploadDocument: (kind: 'driver' | 'trucker', docType: string, file: File) => Promise<void>;
   onApply: (kind: 'driver' | 'trucker', data: Record<string, string>) => Promise<void>;
   onLogout: () => Promise<void>;
+  onRedeem: () => Promise<void>;
 }
 
 export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
@@ -26,6 +27,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   onUploadDocument,
   onApply,
   onLogout,
+  onRedeem,
 }) => {
   const [topupAmount, setTopupAmount] = useState('50');
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -85,6 +87,23 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         <p className="text-[11px] text-slate-400">
           Pagamento processado pelo Mercado Pago. O saldo entra assim que o pagamento é aprovado.
         </p>
+      </div>
+
+      <div className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-3 text-xs">
+        <div>
+          <div className="text-sm font-bold text-slate-900 dark:text-white">Pontos Froc: {profile.points}</div>
+          <div className="text-slate-500">
+            Ganhe pontos a cada serviço concluído. {profile.pointsPerRedeem} pontos = R$ 5,00 de crédito.
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={profile.points < profile.pointsPerRedeem || busy === 'redeem'}
+          onClick={() => run('redeem', onRedeem)}
+          className="px-3 min-h-[40px] rounded-xl bg-amber-500 text-white font-bold disabled:opacity-50 cursor-pointer shrink-0"
+        >
+          Trocar
+        </button>
       </div>
 
       {isProvider && (
@@ -155,6 +174,8 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         </button>
       </form>
 
+      <div className="text-[11px] text-slate-500">Sua nota como passageiro: ★ {profile.passengerRating}</div>
+
       <ProviderOnboarding kind="driver" profile={profile} onUpload={onUploadDocument} onApply={onApply} />
       <ProviderOnboarding kind="trucker" profile={profile} onUpload={onUploadDocument} onApply={onApply} />
 
@@ -166,6 +187,13 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         <LogOut className="w-4 h-4" />
         Sair da conta
       </button>
+
+      <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11px] text-slate-500 pb-2">
+        <a href="/legal/termos.html" target="_blank" rel="noreferrer" className="underline">Termos de uso</a>
+        <a href="/legal/privacidade.html" target="_blank" rel="noreferrer" className="underline">Privacidade (LGPD)</a>
+        <a href="/legal/seguranca.html" target="_blank" rel="noreferrer" className="underline">Segurança</a>
+        <a href="/legal/ajuda.html" target="_blank" rel="noreferrer" className="underline">Perguntas frequentes</a>
+      </nav>
     </div>
   );
 };

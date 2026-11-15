@@ -1,4 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { SosButton } from './SosButton.tsx';
+import { openReceipt } from '../lib/receipt.ts';
+import { api } from '../lib/session.ts';
 import {
   Bike,
   Car,
@@ -70,6 +73,24 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const [stops, setStops] = useState<string[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [quote, setQuote] = useState<{ surge: number; prices: { categoryId: string; price: number }[] } | null>(null);
+
+  // Preço oficial do servidor (inclui o preço dinâmico da região, calculado com H3).
+  useEffect(() => {
+    if (role !== 'passenger') return;
+    let alive = true;
+    const t = setTimeout(() => {
+      api<{ surge: number; prices: { categoryId: string; price: number }[] }>('/api/rides/quote', {
+        body: { originPoint: origin, destinationPoint: destination, originId: origin.id, destinationId: destination.id },
+      })
+        .then((q) => alive && setQuote(q))
+        .catch(() => alive && setQuote(null));
+    }, 400);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [role, origin.lat, origin.lng, destination.lat, destination.lng]);
 
   const distanceKm = useMemo(
     () => (liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
@@ -80,6 +101,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const activeRide = rides.find((r) => r.mine === 'owner' && isActive(r));
   const toRate = rides.find((r) => r.mine === 'owner' && r.status === 'completed' && !r.ratedByPassenger);
   const myDriving = rides.find((r) => r.mine === 'provider' && isActive(r));
+  const driverToRate = rides.find((r) => r.mine === 'provider' && r.status === 'completed' && !r.ratedByDriver);
   const openQueueRides = rides.filter((r) => r.mine === null && r.status === 'searching');
 
   const handleBook = async () => {
@@ -130,6 +152,19 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
           {profile.driverOnline ? 'Você está ONLINE · recebendo corridas (toque para ficar offline)' : 'Você está offline · toque para ficar online'}
         </button>
 
+        {driverToRate && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2">
+            <div className="text-sm font-semibold text-slate-900 dark:text-white">Avalie o passageiro {driverToRate.passengerName}</div>
+            <div className="flex gap-1">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} type="button" aria-label={`${n} estrela(s)`} onClick={() => onRideAction(driverToRate.id, 'rate_passenger', { stars: n })} className="p-1 cursor-pointer">
+                  <Star className="w-7 h-7 text-amber-500 hover:fill-amber-500" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {myDriving && (
           <div className="rounded-2xl bg-white dark:bg-[#131924] border-2 border-emerald-500 p-4 space-y-3">
             <div className="flex items-start justify-between gap-3">
@@ -139,7 +174,9 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   {myDriving.status === 'arriving' && 'Aguardando o passageiro no embarque'}
                   {myDriving.status === 'in_progress' && 'Em viagem'}
                 </div>
-                <h5 className="text-sm font-bold text-slate-900 dark:text-white">{myDriving.passengerName}</h5>
+                <h5 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {myDriving.passengerName} <span className="text-xs text-amber-500">★ {myDriving.passengerRating ?? 5}</span>
+                </h5>
                 <div className="text-xs text-slate-500">
                   {myDriving.origin.name} → {myDriving.destination.name}
                 </div>
@@ -183,6 +220,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <Send className="w-4 h-4" />
               </button>
             </div>
+            <SosButton
+              kind="ride"
+              refId={myDriving.id}
+              shareText={`Passageiro ${myDriving.passengerName}, de ${myDriving.origin.name} para ${myDriving.destination.name}. Meu carro: ${profile.driverVehicle} placa ${profile.driverPlate}.`}
+            />
             <div className="flex flex-wrap gap-2">
               {myDriving.status === 'accepted' && (
                 <button
@@ -255,7 +297,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       {ride.categoryLabel} · {ride.distanceKm} km · {ride.durationMin} min · {ride.paymentMethod === 'cash' ? 'dinheiro' : 'carteira'}
                     </div>
-                    <h5 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">{ride.passengerName}</h5>
+                    <h5 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                      {ride.passengerName} <span className="text-xs text-amber-500">★ {ride.passengerRating ?? 5}</span>
+                      {(ride.surgeMultiplier ?? 1) > 1 && <span className="ml-1 text-[10px] text-amber-600">alta demanda {ride.surgeMultiplier}x</span>}
+                    </h5>
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.price)}</div>
@@ -378,9 +423,19 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             </div>
           </div>
 
+          {activeRide.status !== 'searching' && (
+            <SosButton
+              kind="ride"
+              refId={activeRide.id}
+              shareText={`Motorista ${activeRide.driverName || ''}, ${activeRide.vehicleModel || ''} placa ${activeRide.vehiclePlate || ''}, de ${activeRide.origin.name} para ${activeRide.destination.name}.`}
+            />
+          )}
           {activeRide.status !== 'in_progress' && (
             <div className="flex flex-wrap gap-2 pt-1">
               <p className="w-full text-[11px] text-slate-500">
+                {activeRide.driverLocation && (
+                  <>Motorista a {calculateDistanceKm(activeRide.driverLocation as GeoPoint, activeRide.origin)} km do embarque (ao vivo no mapa). </>
+                )}
                 Informe o PIN ao motorista só quando entrar no carro.
                 {activeRide.paymentMethod === 'froc_pay' ? ' O valor está retido na carteira e só vai para o motorista no fim da viagem.' : ' Pagamento em dinheiro direto ao motorista.'}
               </p>
@@ -460,12 +515,17 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               <span className="font-semibold text-slate-900 dark:text-white">Escolha sua categoria</span>
               <span className="font-mono-num">{distanceKm} km estimados</span>
             </div>
+            {quote && quote.surge > 1 && (
+              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                Alta demanda na sua região: preço {quote.surge.toFixed(1)}x. Ele volta ao normal quando mais motoristas ficam disponíveis.
+              </div>
+            )}
 
             <div className="space-y-2">
               {RIDE_CATEGORIES.map((cat) => {
                 const dur = estimateDurationMin(distanceKm, cat.id === 'froc_moto' ? 'moto' : 'urban');
                 const rawPrice = cat.baseFare + distanceKm * cat.perKm + dur * cat.perMin;
-                const finalPrice = Math.max(7.5, rawPrice);
+                const finalPrice = quote?.prices.find((p) => p.categoryId === cat.id)?.price ?? Math.max(7.5, rawPrice);
                 const isSelected = selectedCat === cat.id;
 
                 return (
@@ -560,9 +620,30 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                     {r.origin.name.split('·')[0]} → {r.destination.name.split('·')[0]}
                   </span>
                 </div>
-                <span className="font-mono-num font-semibold shrink-0 ml-2 flex items-center gap-1">
+                <span className="font-mono-num font-semibold shrink-0 ml-2 flex items-center gap-2">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
                   {formatBRL(r.price)}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openReceipt({
+                        title: r.categoryLabel,
+                        id: r.id,
+                        date: new Date(r.createdAt).toLocaleString('pt-BR'),
+                        from: r.origin.name,
+                        to: r.destination.name,
+                        provider: r.driverName,
+                        vehicle: r.vehicleModel ? `${r.vehicleModel} · ${r.vehiclePlate}` : undefined,
+                        distanceKm: r.distanceKm,
+                        amount: r.price,
+                        paymentMethod: r.paymentMethod === 'cash' ? 'Dinheiro' : 'Carteira Froc',
+                        customer: profile.name,
+                      })
+                    }
+                    className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 underline cursor-pointer"
+                  >
+                    Recibo
+                  </button>
                 </span>
               </div>
             ))}

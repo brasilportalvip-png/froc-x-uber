@@ -47,7 +47,15 @@ Corridas e negociações em dinheiro continuam funcionando normalmente.
 
 A chave **VITE_GOOGLE_MAPS_API_KEY** é a mesma que você já usa no AI Studio (Maps JavaScript, Routes e Places).
 
-## 5. Publicar
+## 5. Prazos automáticos (opcional, recomendado)
+
+O app cancela sozinho (e devolve o dinheiro) as corridas que ficam sem motorista e expira negociações
+sem resposta. Isso já acontece sempre que alguém abre o app. Para garantir que rode mesmo de madrugada:
+1. Crie a variável **CRON_SECRET** com uma senha longa qualquer.
+2. Em <https://cron-job.org> (grátis) ou no **Cron Job** do Render, agende a cada 5 minutos uma chamada
+   **POST** para `https://SEU-SITE/api/cron/sweep`, com o cabeçalho `x-cron-key: <a mesma senha>`.
+
+## 6. Publicar
 
 O app tem servidor próprio (Node.js + Express). Funciona em qualquer serviço de hospedagem Node. O mais simples é o **Render**:
 
@@ -70,13 +78,31 @@ Também funciona no Google Cloud Run (onde o AI Studio publica), com as mesmas v
 | Corrida paga em dinheiro | O motorista recebe em mãos e a taxa de 12% sai da carteira dele |
 | Saque | O valor sai do saldo; você faz o Pix e marca "Já paguei" no Admin |
 
+## O que o Admin faz
+
+- **Pendências:** aprovar ou recusar motoristas e caminhoneiros (vendo os documentos) e pagar os saques por Pix.
+- **SOS:** alertas de emergência com nome, telefone, viagem, placa e localização no mapa.
+- **Usuários:** buscar e bloquear ou desbloquear contas, sempre com motivo.
+- **Relatórios:** serviços concluídos, volume movimentado e receita da plataforma por modalidade (7, 30 ou 90 dias).
+- **Configurações:** comissão, preço dinâmico (liga/desliga e limite), prazos automáticos e regras de pontos.
+
+## Como funciona o mapa por regiões (H3)
+
+O app usa o **H3**, biblioteca aberta da Uber que divide o mapa em hexágonos de ~0,7 km².
+- **Despacho:** o motorista online (com a localização do celular ligada) vê os pedidos num raio de ~3,5 km.
+- **Preço dinâmico:** se na região do passageiro há mais pedidos que motoristas, o preço sobe (até o limite
+  configurado no Admin). O valor sempre aparece antes de confirmar.
+- **Ao vivo:** o celular do motorista envia a posição a cada ~10 segundos, e o passageiro vê o carro no mapa.
+
 ## Testes
 
-`npm test` roda 25 testes automáticos das regras de negócio: dinheiro retido e liberado, estornos,
-permissões, PIN da corrida, aprovação de motoristas, recarga só depois de aprovada e assinatura do Mercado Pago.
+`npm test` roda 35 testes automáticos das regras de negócio: dinheiro retido e liberado, estornos, permissões,
+PIN, aprovação de motoristas, recarga só depois de aprovada, assinatura do Mercado Pago, despacho e preço
+dinâmico por região, prazos automáticos, SOS, avaliação dos dois lados, pontos, bloqueio, relatórios e preços mínimos.
 
 ## Antes de abrir ao público
 
-- Termos de uso e política de privacidade (LGPD), com CNPJ e contato.
+- Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`
+  (razão social, CNPJ, endereço, e-mail e encarregado de dados) e peça a revisão de um advogado.
 - Verifique as regras da sua cidade para transporte por aplicativo (Lei 13.640/2018) e a ANTT para fretes.
 - Confirme com um contador como a plataforma deve emitir nota da taxa de 12%.

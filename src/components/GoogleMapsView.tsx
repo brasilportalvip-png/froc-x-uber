@@ -11,6 +11,8 @@ interface GoogleMapsViewProps {
   activeTripStatus?: string;
   onRouteTelemetry?: (distanceKm: number, durationMin: number) => void;
   onSelectLocationFromMap?: (point: GeoPoint, target: 'origin' | 'destination') => void;
+  /** Posição real do motorista da corrida em andamento. */
+  driverPoint?: { lat: number; lng: number } | null;
 }
 
 const RouteLayer: React.FC<{
@@ -107,6 +109,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
   activeTripStatus,
   onRouteTelemetry,
   onSelectLocationFromMap,
+  driverPoint,
 }) => {
   const map = useMap();
   const [pickTarget, setPickTarget] = useState<'origin' | 'destination' | null>(null);
@@ -181,6 +184,12 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
         <AdvancedMarker position={{ lat: destination.lat, lng: destination.lng }} title={`Destino: ${destination.name}`}>
           <Pin background="#0F172A" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="B" />
         </AdvancedMarker>
+
+        {driverPoint && (
+          <AdvancedMarker position={driverPoint} title="Seu motorista (ao vivo)">
+            <Pin background="#F59E0B" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="🚗" />
+          </AdvancedMarker>
+        )}
 
         {userGPS && (
           <AdvancedMarker position={userGPS} title="Sua localização atual">

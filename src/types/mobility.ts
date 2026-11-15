@@ -26,6 +26,10 @@ export interface RideOrder {
   driverId?: string;
   mine?: Involvement;
   ratedByPassenger?: boolean;
+  ratedByDriver?: boolean;
+  passengerRating?: number;
+  surgeMultiplier?: number;
+  driverLocation?: { lat: number; lng: number; at: string };
   passengerName: string;
   origin: GeoPoint;
   destination: GeoPoint;
@@ -65,6 +69,8 @@ export interface InDriveOffer {
 
 export interface InDriveRequest {
   id: string;
+  minimumPrice?: number;
+  driverLocation?: { lat: number; lng: number; at: string };
   passengerId?: string;
   driverId?: string;
   mine?: Involvement;
@@ -165,6 +171,8 @@ export interface FreightRequest {
   id: string;
   clientId?: string;
   acceptedTruckerId?: string;
+  estimatedVolumeM3?: number;
+  minimumPrice?: number;
   mine?: Involvement;
   clientPhone?: string;
   truckerPhone?: string;
@@ -190,7 +198,7 @@ export interface FreightRequest {
 export interface WalletTransaction {
   id: string;
   title: string;
-  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa';
+  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa' | 'bonus';
   amount: number;
   type: 'debit' | 'credit';
   date: string;
@@ -206,6 +214,9 @@ export interface UserProfile {
   rejectionReason?: string;
   completedTrips: number;
   companyName: string;
+  points: number;
+  pointsPerRedeem: number;
+  passengerRating: number;
   name: string;
   phone: string;
   city: string;
@@ -253,8 +264,58 @@ export interface WithdrawalView {
   createdAt: string;
 }
 
+export interface SosAlert {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  kind: string;
+  lat: number | null;
+  lng: number | null;
+  message: string;
+  createdAt: string;
+  trip: { origin?: string; destination?: string; passengerName?: string; driverName?: string | null; vehiclePlate?: string | null; vehicleModel?: string | null } | null;
+}
+
+export interface PlatformSettingsView {
+  commissionPercent: number;
+  surgeEnabled: boolean;
+  maxSurge: number;
+  rideSearchTimeoutMin: number;
+  indriveOpenTimeoutMin: number;
+  pointsPerReal: number;
+  pointsPerRedeem: number;
+}
+
 export interface AdminOverview {
   applications: DriverApplicationView[];
   withdrawals: WithdrawalView[];
-  totals: { users: number; pendingApplications: number; pendingWithdrawals: number };
+  totals: { users: number; pendingApplications: number; pendingWithdrawals: number; openSos: number };
+  sos: SosAlert[];
+  settings: PlatformSettingsView;
+}
+
+export interface AdminUserRow {
+  uid: string;
+  name: string;
+  email: string;
+  phone: string;
+  createdAt: string;
+  balance: number;
+  completedTrips: number;
+  rating: number;
+  passengerRating: number;
+  driverStatus: ApprovalStatus;
+  truckerStatus: ApprovalStatus;
+  blocked: boolean;
+  blockedReason: string;
+}
+
+export interface AdminReport {
+  days: number;
+  completedServices: number;
+  grossVolume: number;
+  platformRevenue: number;
+  driversOnline: number;
+  byKind: Record<string, { count: number; gross: number; fee: number }>;
 }
