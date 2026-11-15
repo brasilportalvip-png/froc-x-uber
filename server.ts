@@ -2,56 +2,13 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createApp } from './server/app.ts';
-import { initFirebase, readWebConfig } from './server/firebase.ts';
-import { FirestoreStore } from './server/firestoreStore.ts';
-import { createMercadoPago } from './server/mercadoPago.ts';
-import { FrocService } from './server/services.ts';
-import { createGridGeo, createH3Geo } from './server/geo.ts';
+import { buildApp, configStatus } from './server/runtime.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Endereço público do site (usado nos links de volta do Mercado Pago). */
-const publicUrl = (process.env.PUBLIC_SITE_URL || process.env.APP_URL || '').replace(/\/+$/, '');
-
-let servicePromise: Promise<FrocService> | null = null;
-const service = () => {
-  servicePromise ??= Promise.all([
-    initFirebase(),
-    createH3Geo().catch((e) => {
-      console.warn('H3 indisponível, usando grade simples:', e);
-      return createGridGeo();
-    }),
-  ]).then(
-    ([fb, geo]) =>
-      new FrocService(new FirestoreStore(fb.db), {
-        geo,
-        files: fb.files,
-        adminEmails: (process.env.ADMIN_EMAILS || '').split(','),
-        payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
-      }),
-  );
-  servicePromise.catch(() => {
-    servicePromise = null;
-  });
-  return servicePromise;
-};
-
 async function startServer() {
   const app = express();
-  app.use(
-    createApp({
-      service,
-      verifyToken: async (token) => (await initFirebase()).verifyToken(token),
-      webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
-      cronSecret: process.env.CRON_SECRET,
-      publicConfig: () => ({
-        firebase: readWebConfig(),
-        mapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '',
-        paymentsEnabled: Boolean(process.env.MERCADO_PAGO_ACCESS_TOKEN && publicUrl),
-      }),
-    }),
-  );
+  app.use(buildApp());
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -65,7 +22,7 @@ async function startServer() {
 
   const missing = ['FIREBASE_SERVICE_ACCOUNT_KEY', 'FIREBASE_WEB_CONFIG', 'ADMIN_EMAILS'].filter((k) => !process.env[k]);
   if (missing.length) console.warn('⚠️  Configure as variáveis: ' + missing.join(', ') + ' (veja CONFIGURACAO.md).');
-  if (!process.env.MERCADO_PAGO_ACCESS_TOKEN || !publicUrl)
+  if (!configStatus().mercadoPago || !configStatus().publicSiteUrl)
     console.warn('⚠️  Recargas desativadas até configurar MERCADO_PAGO_ACCESS_TOKEN e PUBLIC_SITE_URL.');
 
   const port = Number(process.env.PORT || 3000);

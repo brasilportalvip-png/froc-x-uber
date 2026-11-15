@@ -45,7 +45,9 @@ export function initFirebase(): Promise<FirebaseBundle> {
       getApps()[0] ??
       initializeApp({ credential: cert(credentials as never), projectId: credentials.project_id, ...(bucketName ? { storageBucket: bucketName } : {}) });
     const auth = getAuth(app);
-    const db = getFirestore(app);
+    // Projetos criados pelo AI Studio às vezes usam um banco com nome próprio.
+    const databaseId = process.env.FIRESTORE_DATABASE_ID;
+    const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
     const files: FileStorage | undefined = bucketName
       ? {
           async save(path, contentType, bytes) {
