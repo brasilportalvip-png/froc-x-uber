@@ -11,33 +11,40 @@ const strip = (data: Doc): Doc => JSON.parse(JSON.stringify(data)) as Doc; // Fi
 
 export class FirestoreStore implements Store {
   db: Firestore;
+  prefix: string;
 
-  constructor(db: Firestore) {
+  /** prefix: separa as coleções do Froc de outros apps no mesmo projeto (ex.: "froc_"). */
+  constructor(db: Firestore, prefix = '') {
     this.db = db;
+    this.prefix = prefix;
+  }
+
+  private col(name: string) {
+    return this.db.collection(this.prefix + name);
   }
 
   async get<T extends Doc>(collection: string, id: string): Promise<T | null> {
-    const snap = await this.db.collection(collection).doc(id).get();
+    const snap = await this.col(collection).doc(id).get();
     return snap.exists ? (snap.data() as T) : null;
   }
 
   async set(collection: string, id: string, data: Doc) {
-    await this.db.collection(collection).doc(id).set(strip(data));
+    await this.col(collection).doc(id).set(strip(data));
   }
 
   async update(collection: string, id: string, data: Doc) {
-    await this.db.collection(collection).doc(id).update(strip(data));
+    await this.col(collection).doc(id).update(strip(data));
   }
 
   async query<T extends Doc>(collection: string, filters: Filter[], limit = 200): Promise<T[]> {
-    let q = this.db.collection(collection);
+    let q = this.col(collection);
     for (const [field, op, value] of filters) q = q.where(field, op, value);
     const snap = await q.limit(limit).get();
     return snap.docs.map((d: { data(): Doc }) => d.data() as T);
   }
 
   async count(collection: string, filters: Filter[]) {
-    let q = this.db.collection(collection);
+    let q = this.col(collection);
     for (const [field, op, value] of filters) q = q.where(field, op, value);
     const snap = await q.count().get();
     return Number(snap.data().count || 0);
@@ -47,14 +54,14 @@ export class FirestoreStore implements Store {
     return this.db.runTransaction(async (t: Firestore) => {
       const tx: Tx = {
         get: async (c, id) => {
-          const snap = await t.get(this.db.collection(c).doc(id));
+          const snap = await t.get(this.col(c).doc(id));
           return snap.exists ? snap.data() : null;
         },
         set: (c, id, d) => {
-          t.set(this.db.collection(c).doc(id), strip(d));
+          t.set(this.col(c).doc(id), strip(d));
         },
         update: (c, id, d) => {
-          t.update(this.db.collection(c).doc(id), strip(d));
+          t.update(this.col(c).doc(id), strip(d));
         },
       };
       return fn(tx);

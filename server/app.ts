@@ -15,6 +15,8 @@ export interface AppOptions {
   webhookSecret?: string;
   /** Chave para o agendador externo chamar /api/cron/sweep. */
   cronSecret?: string;
+  /** O que está configurado (sem mostrar valores secretos). */
+  configStatus?: () => Record<string, unknown>;
 }
 
 type AuthedRequest = Request & { auth?: AuthUser };
@@ -88,7 +90,7 @@ export function createApp(options: AppOptions) {
   const id = (req: Request) => String(req.params.id || '').slice(0, 80);
 
   // ----- públicas
-  app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'froc-x-uber' }));
+  app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'froc-x-uber', config: options.configStatus?.() }));
   app.get('/api/public-config', (_req, res) => res.json(options.publicConfig()));
   app.get('/api/maps-config', (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || '' }));
 

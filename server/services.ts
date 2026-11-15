@@ -521,7 +521,7 @@ export class FrocService {
     const status = kind === 'driver' ? user.driverStatus : user.truckerStatus;
     if (status === 'approved' || status === 'pending') fail(409, 'already_submitted', 'Seu cadastro já foi enviado.');
     const ext = String(contentType) === 'application/pdf' ? 'pdf' : String(contentType).split('/')[1];
-    const path = `documentos/${user.uid}/${kind}-${docType}-${this.now().getTime()}.${ext}`;
+    const path = `froc-x-uber/documentos/${user.uid}/${kind}-${docType}-${this.now().getTime()}.${ext}`;
     await this.deps.files!.save(path, String(contentType), new Uint8Array(bytes));
     const field = kind === 'driver' ? 'driverDocs' : 'truckerDocs';
     await this.store.update('users', user.uid, { [field]: { ...(user[field] as Record<string, string>), [String(docType)]: path } });
