@@ -15,9 +15,9 @@ test.describe('Visitante na página inicial', () => {
     await page.goto('/');
     const popup = page.getByTestId('launch-popup');
     await expect(popup).toBeVisible({ timeout: 10_000 });
-    await expect(popup.getByText('10 de março de 2027')).toBeVisible();
-    await expect(popup.getByText(/dias/i)).toBeVisible();
-    await page.keyboard.press('Escape');
+    await expect(popup.getByRole('heading', { name: /10 de março de 2027/ })).toBeVisible();
+    await expect(popup.getByText('dias', { exact: true })).toBeVisible();
+    await popup.getByRole('button', { name: 'Fechar' }).click();
     await expect(popup).toBeHidden();
     // Não volta no mesmo dia.
     await page.reload();
@@ -43,7 +43,8 @@ test.describe('Visitante na página inicial', () => {
     expect(bg).toBe('rgb(5, 5, 5)');
     expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
     await expect(page.locator('.froc-logo').first()).toBeVisible();
-    for (const s of ['Corridas', 'Negociar', 'Caronas', 'Cargas e fretes']) await expect(page.getByRole('heading', { name: s })).toBeVisible();
+    // exact: o título principal também contém "Corridas" e "caronas".
+    for (const s of ['Corridas', 'Negociar', 'Caronas', 'Cargas e fretes']) await expect(page.getByRole('heading', { name: s, exact: true })).toBeVisible();
     await expect(page.getByText('Caminhões, vans, furgões e utilitários', { exact: false })).toBeVisible();
   });
 
