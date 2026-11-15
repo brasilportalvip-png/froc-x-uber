@@ -108,7 +108,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             onSwap={onSwapLocations}
           />
 
-          <div className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+          <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3">
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-slate-700 dark:text-slate-300">Sua oferta de preço</span>
               <span className="text-slate-500 font-mono-num">
@@ -189,7 +189,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
         {openRequests.map((req) => (
           <div
             key={req.id}
-            className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
+            className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">

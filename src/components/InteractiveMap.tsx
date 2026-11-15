@@ -435,7 +435,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
       {/* Top Left Route Summary HUD */}
       <div className="absolute top-3 left-3 right-16 pointer-events-none flex flex-wrap items-center gap-2">
-        <div className="pointer-events-auto inline-flex items-center gap-2.5 rounded-xl bg-white/95 dark:bg-[#131924]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3.5 py-2 shadow-sm text-xs">
+        <div className="pointer-events-auto inline-flex items-center gap-2.5 rounded-xl bg-white/95 dark:bg-[#111013]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3.5 py-2 shadow-sm text-xs">
           <Navigation className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <span className="font-semibold text-slate-900 dark:text-white truncate max-w-[140px] sm:max-w-xs">
             {origin.zone === 'intercity' ? origin.city : origin.name.split('·')[0]}
@@ -455,7 +455,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         </div>
 
         {onSelectLocationFromMap && (
-          <div className="pointer-events-auto hidden sm:inline-flex items-center gap-1 rounded-xl bg-white/95 dark:bg-[#131924]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-1 shadow-sm">
+          <div className="pointer-events-auto hidden sm:inline-flex items-center gap-1 rounded-xl bg-white/95 dark:bg-[#111013]/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-1 shadow-sm">
             <button
               type="button"
               onClick={() => setPickTarget(pickTarget === 'origin' ? null : 'origin')}
@@ -487,7 +487,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         <button
           type="button"
           onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
-          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#131924]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
+          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#111013]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
           aria-label="Aproximar mapa"
         >
           <Plus className="w-4 h-4" />
@@ -495,7 +495,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         <button
           type="button"
           onClick={() => setZoom((z) => Math.max(0.45, z * 0.8))}
-          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#131924]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
+          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#111013]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
           aria-label="Afastar mapa"
         >
           <Minus className="w-4 h-4" />
@@ -503,7 +503,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         <button
           type="button"
           onClick={handleLocateMe}
-          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#131924]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
+          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#111013]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
           aria-label="Minha localização GPS"
         >
           <LocateFixed className="w-4 h-4" />
@@ -514,7 +514,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             setCenter({ lat: -22.5, lng: -46.8 });
             setZoom(0.65);
           }}
-          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#131924]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
+          className="w-10 h-10 rounded-xl bg-white/95 dark:bg-[#111013]/95 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shadow-sm cursor-pointer"
           aria-label="Visão Brasil / Rodovias"
         >
           <Compass className="w-4 h-4" />
@@ -522,7 +522,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       </div>
 
       {/* Bottom Legend Strip */}
-      <div className="hidden sm:flex absolute bottom-3 left-3 items-center gap-4 rounded-xl bg-white/90 dark:bg-[#131924]/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-[11px] text-slate-600 dark:text-slate-300">
+      <div className="hidden sm:flex absolute bottom-3 left-3 items-center gap-4 rounded-xl bg-white/90 dark:bg-[#111013]/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-[11px] text-slate-600 dark:text-slate-300">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm bg-slate-900 dark:bg-white inline-block" />
           Carros Froc

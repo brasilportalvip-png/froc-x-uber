@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Car, HandCoins, Truck, Users } from 'lucide-react';
 import { resetPassword, signIn, signInWithGoogle, signUp } from '../lib/session.ts';
 
 /** Tela de entrada: entrar, criar conta ou recuperar senha. */
-export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configError }) => {
+export const AuthScreen: React.FC<{
+  configError?: string | null;
+  /** Dentro da página inicial (sem tela cheia). */
+  embedded?: boolean;
+  /** Pedido externo de modo (ex.: botão "Criar conta grátis"); muda a cada clique. */
+  modeRequest?: { mode: 'login' | 'signup'; at: number } | null;
+}> = ({ configError, embedded = false, modeRequest = null }) => {
   const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
+  useEffect(() => {
+    if (modeRequest) setMode(modeRequest.mode);
+  }, [modeRequest]);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,10 +43,10 @@ export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configEr
   const input = 'w-full min-h-[48px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500';
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0B0F17] p-4">
-      <div className="w-full max-w-md space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="font-display text-3xl font-extrabold text-slate-900 dark:text-white">Froc X Uber</h1>
+    <div className={embedded ? 'w-full' : 'min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#050505] p-4'}>
+      <div className={embedded ? 'w-full space-y-4' : 'w-full max-w-md space-y-6'}>
+        <div className={embedded ? 'hidden' : 'text-center space-y-2'}>
+          <h1 className="font-display text-3xl font-extrabold froc-logo">Froc X Uber</h1>
           <p className="text-sm text-slate-600 dark:text-slate-400">Corridas, negociação de preço, caronas e fretes em um só app.</p>
           <div className="flex justify-center gap-4 text-emerald-600 pt-1" aria-hidden>
             <Car className="w-5 h-5" />
@@ -50,7 +59,7 @@ export const AuthScreen: React.FC<{ configError?: string | null }> = ({ configEr
         {configError ? (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">{configError}</div>
         ) : (
-          <form onSubmit={submit} className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-5 space-y-3">
+          <form onSubmit={submit} className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-5 space-y-3">
             <h2 className="text-lg font-bold text-slate-900 dark:text-white">
               {mode === 'login' ? 'Entrar' : mode === 'signup' ? 'Criar conta' : 'Recuperar senha'}
             </h2>

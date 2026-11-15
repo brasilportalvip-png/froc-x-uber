@@ -1,8 +1,9 @@
+import { CARGO_VEHICLE_TYPES } from '../data/cargoVehicles.ts';
 import React, { useState } from 'react';
 import { CheckCircle2, Clock, FileUp, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { TruckType, UserProfile } from '../types/mobility.ts';
 
-const TRUCK_TYPES: TruckType[] = ['VUC / Utilitário', '3/4 Baú', 'Toco Aberto', 'Truck Baú', 'Carreta Sider'];
+const TRUCK_TYPES: TruckType[] = [...CARGO_VEHICLE_TYPES];
 const DOCS: Record<'driver' | 'trucker', { id: string; label: string }[]> = {
   driver: [
     { id: 'cnh', label: 'CNH com EAR (foto ou PDF)' },
@@ -10,7 +11,7 @@ const DOCS: Record<'driver' | 'trucker', { id: string; label: string }[]> = {
   ],
   trucker: [
     { id: 'cnh', label: 'CNH categoria C, D ou E' },
-    { id: 'crlv', label: 'CRLV do caminhão' },
+    { id: 'crlv', label: 'CRLV do veículo' },
     { id: 'antt', label: 'Registro ANTT (RNTRC)' },
   ],
 };
@@ -36,7 +37,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
   const fromServer = (kind === 'driver' ? profile.driverDocsSent : profile.truckerDocsSent) || [];
   const sent: Record<string, boolean> = { ...Object.fromEntries(fromServer.map((d) => [d, true])), ...sentLocal };
   const [busy, setBusy] = useState<string | null>(null);
-  const title = kind === 'driver' ? 'motorista (corridas, negociação e caronas)' : 'caminhoneiro (fretes e retorno vazio)';
+  const title = kind === 'driver' ? 'motorista (corridas, negociação e caronas)' : 'transportador de carga: caminhão, van, furgão, pick-up ou utilitário (fretes, mudanças e retorno vazio)';
 
   if (status === 'approved')
     return (
@@ -69,7 +70,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
           setBusy(null);
         }
       }}
-      className="rounded-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 p-4 space-y-3 text-xs"
+      className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3 text-xs"
     >
       <h4 className="text-sm font-bold text-slate-900 dark:text-white">Quero trabalhar como {title}</h4>
       {status === 'rejected' && (
@@ -94,7 +95,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
         {kind === 'trucker' && (
           <>
             <label className="block">
-              <span className="block text-[11px] text-slate-500 mb-1">Tipo de caminhão</span>
+              <span className="block text-[11px] text-slate-500 mb-1">Tipo de veículo de carga</span>
               <select value={truckType} onChange={(e) => setTruckType(e.target.value as TruckType)} className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5">
                 {TRUCK_TYPES.map((t) => (
                   <option key={t}>{t}</option>

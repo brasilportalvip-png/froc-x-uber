@@ -7,6 +7,17 @@ import {VitePWA} from 'vite-plugin-pwa';
 export default defineConfig(() => {
   return {
     plugins: [
+      {
+        // Códigos de verificação do Google Search Console e do Bing Webmaster (variáveis na Vercel).
+        name: 'froc-site-verification',
+        transformIndexHtml(html: string) {
+          const tags = [
+            process.env.GOOGLE_SITE_VERIFICATION && `<meta name="google-site-verification" content="${process.env.GOOGLE_SITE_VERIFICATION.replace(/"/g, '')}" />`,
+            process.env.BING_SITE_VERIFICATION && `<meta name="msvalidate.01" content="${process.env.BING_SITE_VERIFICATION.replace(/"/g, '')}" />`,
+          ].filter(Boolean);
+          return tags.length ? html.replace('</head>', `    ${tags.join('\n    ')}\n  </head>`) : html;
+        },
+      },
       react(),
       tailwindcss(),
       VitePWA({
@@ -18,8 +29,8 @@ export default defineConfig(() => {
           short_name: 'Froc X',
           description:
             'Super App 4 em 1: corridas estilo Uber e 99, negociação inDrive, caronas BlaBlaCar e fretes com retorno vazio de caminhões.',
-          theme_color: '#0B0F17',
-          background_color: '#0B0F17',
+          theme_color: '#050505',
+          background_color: '#050505',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -47,7 +58,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/legal\//],
+          navigateFallbackDenylist: [/^\/api\//, /^\/legal\//, /^\/blog/, /^\/sitemap/, /^\/rss\.xml/, /^\/robots\.txt/, /^\/(corridas-por-aplicativo|caronas-intermunicipais|fretes-e-mudancas|seja-motorista)/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

@@ -1,0 +1,6 @@
+# Froc X Uber
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://froc-x-uber.vercel.app/sitemap.xml

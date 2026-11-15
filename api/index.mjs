@@ -2,5 +2,5 @@
 // O arquivo _server.mjs é gerado por "npm run build" (esbuild) a partir de server/.
 import app from './_server.mjs';
 
-export const config = { maxDuration: 30 };
+export const config = { maxDuration: 60 };
 export default app;
