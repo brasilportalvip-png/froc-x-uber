@@ -1,0 +1,9 @@
+rules_version = '2';
+// Documentos dos motoristas (CNH, CRLV, ANTT) só são enviados e lidos pelo servidor.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

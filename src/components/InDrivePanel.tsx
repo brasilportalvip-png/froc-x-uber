@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
-import type { GeoPoint, InDriveRequest, UserProfile, UserRole } from '../types/mobility.ts';
+import type { GeoPoint, InDriveRequest, PaymentMethod, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
 
 interface InDrivePanelProps {
@@ -21,11 +21,13 @@ interface InDrivePanelProps {
     originPoint: GeoPoint;
     destinationPoint: GeoPoint;
     passengerOffer: number;
-    paymentMethod: 'pix' | 'cash' | 'card';
+    paymentMethod: PaymentMethod;
     notes: string;
   }) => Promise<void>;
   onSendDriverOffer: (requestId: string, offeredPrice: number, etaMin: number, note: string) => Promise<void>;
   onAcceptOffer: (requestId: string, offerId: string) => Promise<void>;
+  onCompleteRequest: (requestId: string) => Promise<void>;
+  onCancelRequest: (requestId: string) => Promise<void>;
 }
 
 export const InDrivePanel: React.FC<InDrivePanelProps> = ({
@@ -42,6 +44,8 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
   onCreateRequest,
   onSendDriverOffer,
   onAcceptOffer,
+  onCompleteRequest,
+  onCancelRequest,
 }) => {
   const distanceKm = useMemo(
     () => (liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
@@ -50,7 +54,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
   const suggested = useMemo(() => Math.round((5.5 + distanceKm * 2.15 + 4) * 100) / 100, [distanceKm]);
 
   const [offerPrice, setOfferPrice] = useState<string>(String(Math.round(suggested * 0.85)));
-  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'cash' | 'card'>('pix');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('froc_pay');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -58,8 +62,10 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
   const [counterPrices, setCounterPrices] = useState<Record<string, string>>({});
   const [counterNotes, setCounterNotes] = useState<Record<string, string>>({});
 
-  const openRequests = requests.filter((r) => r.status === 'open');
-  const matchedRequests = requests.filter((r) => r.status === 'matched');
+  // Passageiro vê os próprios pedidos; motorista vê os pedidos abertos dos outros.
+  const openRequests = requests.filter((r) => r.status === 'open' && (role === 'driver' ? r.mine !== 'owner' : r.mine === 'owner'));
+  const matchedRequests = requests.filter((r) => r.status === 'matched' && (role === 'driver' ? r.mine === 'provider' : r.mine === 'owner'));
+  const hasActiveOwn = requests.some((r) => r.mine === 'owner' && (r.status === 'open' || r.status === 'matched'));
 
   const handlePublish = async () => {
     setSubmitting(true);
@@ -85,7 +91,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
         <strong>Modo Froc inDrive:</strong> você propõe o quanto quer pagar e negocia direto com os motoristas em tempo real, sem tarifa dinâmica surpresa.
       </div>
 
-      {role === 'passenger' && (
+      {role === 'passenger' && !hasActiveOwn && (
         <div className="space-y-3">
           <LocationSelector
             origin={origin}
@@ -133,12 +139,13 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <select
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as 'pix' | 'cash' | 'card')}
+                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                 className="min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 text-xs font-semibold text-slate-900 dark:text-white cursor-pointer"
               >
-                <option value="pix" className="bg-white dark:bg-slate-900">Pagamento via Pix</option>
+                <option value="froc_pay" className="bg-white dark:bg-slate-900">
+                  Carteira Froc ({formatBRL(profile.walletBalance)})
+                </option>
                 <option value="cash" className="bg-white dark:bg-slate-900">Dinheiro em mãos</option>
-                <option value="card" className="bg-white dark:bg-slate-900">Maquininha / Cartão</option>
               </select>
               <input
                 type="text"
@@ -166,7 +173,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-            {role === 'driver' ? `Pedidos para contraproposta (${openRequests.length})` : `Leilão ao vivo (${openRequests.length})`}
+            {role === 'driver' ? `Pedidos para contraproposta (${openRequests.length})` : `Seu pedido aguardando propostas (${openRequests.length})`}
           </h4>
         </div>
 
@@ -178,7 +185,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {req.passengerName} · {req.distanceKm} km · {req.paymentMethod.toUpperCase()}
+                  {req.passengerName} · {req.distanceKm} km · {req.paymentMethod === 'cash' ? 'dinheiro' : 'carteira Froc'}
                 </div>
                 <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
                   {req.origin.name.split('·')[0]} → {req.destination.name.split('·')[0]}
@@ -218,11 +225,11 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                     type="button"
                     onClick={async () => {
                       const val = Number(counterPrices[req.id] ?? req.passengerOffer);
-                      await onSendDriverOffer(req.id, val, 4, counterNotes[req.id] || 'Chego em 4 min!');
+                      await onSendDriverOffer(req.id, val, 5, counterNotes[req.id] || '');
                     }}
                     className="px-3.5 min-h-[40px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap cursor-pointer"
                   >
-                    Enviar Lance
+                    {req.offers.length ? 'Atualizar lance' : 'Enviar lance'}
                   </button>
                 </div>
               </div>
@@ -231,7 +238,13 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             {/* Incoming Driver Offers */}
             <div className="space-y-2 pt-1">
               <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                {req.offers.length} {req.offers.length === 1 ? 'proposta recebida' : 'propostas recebidas'}
+                {role === 'driver'
+                  ? req.offers.length
+                    ? 'Sua proposta enviada:'
+                    : 'Você ainda não enviou proposta.'
+                  : req.offers.length
+                    ? `${req.offers.length} ${req.offers.length === 1 ? 'proposta recebida' : 'propostas recebidas'}`
+                    : 'Aguardando propostas dos motoristas (a tela atualiza sozinha)...'}
               </div>
               {req.offers.map((offer) => (
                 <div
@@ -270,26 +283,52 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                 </div>
               ))}
             </div>
+            {role === 'passenger' && (
+              <button
+                type="button"
+                onClick={() => onCancelRequest(req.id)}
+                className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+              >
+                Cancelar pedido
+              </button>
+            )}
           </div>
         ))}
 
         {matchedRequests.length > 0 && (
           <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-            <div className="text-xs font-semibold text-slate-500">Negociações fechadas</div>
-            {matchedRequests.slice(0, 2).map((m) => {
+            <div className="text-xs font-semibold text-slate-500">Viagens negociadas em andamento</div>
+            {matchedRequests.map((m) => {
               const chosen = m.offers.find((o) => o.id === m.acceptedOfferId);
               return (
                 <div
                   key={m.id}
                   className="rounded-xl bg-emerald-50 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-900 p-3 flex items-center justify-between text-xs"
                 >
-                  <div>
+                  <div className="space-y-1.5">
                     <div className="font-bold text-slate-900 dark:text-white">
-                      Fechado com {chosen?.driverName} ({chosen?.vehiclePlate})
+                      {role === 'driver' ? `Passageiro: ${m.passengerName}` : `Fechado com ${chosen?.driverName} (${chosen?.vehicleModel} · ${chosen?.vehiclePlate})`}
                     </div>
                     <div className="text-slate-600 dark:text-slate-400">
-                      {m.origin.name.split('·')[0]} → {m.destination.name.split('·')[0]}
+                      {m.origin.name.split('·')[0]} → {m.destination.name.split('·')[0]} · {m.paymentMethod === 'cash' ? 'dinheiro' : 'carteira Froc'}
                     </div>
+                    {role === 'driver' ? (
+                      <button
+                        type="button"
+                        onClick={() => onCompleteRequest(m.id)}
+                        className="px-3 min-h-[36px] rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Finalizar viagem
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onCancelRequest(m.id)}
+                        className="px-3 min-h-[36px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                      >
+                        Cancelar (valor volta para a carteira)
+                      </button>
+                    )}
                   </div>
                   <div className="font-bold font-mono-num text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                     <TrendingDown className="w-3.5 h-3.5" />

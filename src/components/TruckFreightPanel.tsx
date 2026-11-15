@@ -37,6 +37,9 @@ interface TruckFreightPanelProps {
   }) => Promise<void>;
   onSendFreightBid: (freightId: string, price: number, helpersIncluded: number, note: string) => Promise<void>;
   onAcceptFreightBid: (freightId: string, bidId: string) => Promise<void>;
+  onTruckAction: (id: string, action: 'complete' | 'cancel') => Promise<void>;
+  onFreightAction: (id: string, action: 'deliver' | 'cancel') => Promise<void>;
+  canPublishTruck: boolean;
 }
 
 const TRUCK_TYPES: TruckType[] = ['VUC / Utilitário', '3/4 Baú', 'Toco Aberto', 'Truck Baú', 'Carreta Sider'];
@@ -52,6 +55,9 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   onCreateFreight,
   onSendFreightBid,
   onAcceptFreightBid,
+  onTruckAction,
+  onFreightAction,
+  canPublishTruck,
 }) => {
   const [subTab, setSubTab] = useState<'empty_return' | 'moving_freight'>('empty_return');
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -63,12 +69,13 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   // Empty truck publish state (Trucker)
   const [etOrigin, setEtOrigin] = useState('br-curitiba');
   const [etDest, setEtDest] = useState('sp-paulista');
-  const [etType, setEtType] = useState<TruckType>('Carreta Sider');
+  // O tipo de caminhão é o do cadastro aprovado (não muda por anúncio).
+  const etType: TruckType = profile.truckType;
   const [etDir, setEtDir] = useState<'indo_vazio' | 'voltando_vazio' | 'espaco_parcial'>('voltando_vazio');
   const [etTons, setEtTons] = useState('18');
   const [etCubic, setEtCubic] = useState('60');
   const [etPrice, setEtPrice] = useState('1650');
-  const [etDate, setEtDate] = useState('Hoje · 22:00');
+  const [etDate, setEtDate] = useState('');
   const [etMoving, setEtMoving] = useState(true);
   const [etLiftgate, setEtLiftgate] = useState(true);
 
@@ -83,6 +90,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [frWeight, setFrWeight] = useState('1500');
   const [frHelpers, setFrHelpers] = useState('2');
   const [frBudget, setFrBudget] = useState('980');
+  const [frDate, setFrDate] = useState('');
   const [frElevator, setFrElevator] = useState(true);
   const [frPacking, setFrPacking] = useState(true);
 
@@ -139,7 +147,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
         hasElevator: frElevator,
         needsPacking: frPacking,
         proposedBudget: Number(frBudget) || 950,
-        scheduledDate: 'Esta semana · 08:30',
+        scheduledDate: frDate,
       });
       setShowCreateForm(false);
     } finally {
@@ -212,6 +220,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               placeholder="Filtrar rota ou caminhão (ex: Curitiba, Sider)..."
               className="flex-1 min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
             />
+            {role === 'trucker' && canPublishTruck && (
             <button
               type="button"
               onClick={() => setShowCreateForm((v) => !v)}
@@ -220,6 +229,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>{showCreateForm ? 'Ver Rotas' : 'Estou Indo/Vindo Vazio'}</span>
             </button>
+            )}
           </div>
 
           {showCreateForm ? (
@@ -264,17 +274,9 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Tipo de caminhão</label>
-                  <select
-                    value={etType}
-                    onChange={(e) => setEtType(e.target.value as TruckType)}
-                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold"
-                  >
-                    {TRUCK_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2.5 text-xs font-semibold flex items-center">
+                    {etType} · {profile.truckPlate}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Situação da carroceria</label>
@@ -322,6 +324,8 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                   <label className="block text-[11px] text-slate-500 mb-1">Saída</label>
                   <input
                     type="text"
+                    required
+                    placeholder="Ex.: 20/12 às 22h"
                     value={etDate}
                     onChange={(e) => setEtDate(e.target.value)}
                     className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 text-xs font-semibold"
@@ -408,9 +412,10 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                       </div>
                     </div>
 
+                    {t.mine === null && t.status === 'available' && (
                     <button
                       type="button"
-                      disabled={t.status === 'reserved' || busyId === t.id}
+                      disabled={busyId === t.id}
                       onClick={async (e) => {
                         e.stopPropagation();
                         setBusyId(t.id);
@@ -426,13 +431,46 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                           : 'bg-slate-900 dark:bg-amber-600 hover:opacity-90 text-white'
                       }`}
                     >
-                      {t.status === 'reserved'
-                        ? 'Reservado'
-                        : busyId === t.id
-                          ? 'Reservando...'
-                          : 'Reservar Retorno'}
+                      {busyId === t.id ? 'Reservando...' : 'Reservar (pago pela carteira)'}
                     </button>
+                    )}
                   </div>
+                  {t.mine === 'owner' && (
+                    <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs space-y-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="font-semibold text-slate-900 dark:text-white">
+                        {t.status === 'completed' ? 'Frete concluído.' : 'Você reservou este caminhão. Valor retido até a entrega.'}
+                      </div>
+                      {t.truckerPhone && <div>Combine com o caminhoneiro: <strong className="font-mono-num">{t.truckerPhone}</strong></div>}
+                      {t.status === 'reserved' && (
+                        <button type="button" onClick={() => onTruckAction(t.id, 'cancel')} className="px-3 min-h-[36px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer">
+                          Cancelar reserva (estorno)
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {t.mine === 'provider' && (
+                    <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 text-xs space-y-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="font-semibold text-slate-900 dark:text-white">
+                        {t.status === 'available' && 'Sua rota está na vitrine aguardando cliente.'}
+                        {t.status === 'reserved' && `Reservado por ${t.reservedBy}.`}
+                        {t.status === 'completed' && 'Frete concluído e pago.'}
+                        {t.status === 'cancelled' && 'Rota cancelada.'}
+                      </div>
+                      {t.status === 'reserved' && t.reservedPhone && <div>Telefone do cliente: <strong className="font-mono-num">{t.reservedPhone}</strong></div>}
+                      <div className="flex gap-2">
+                        {t.status === 'reserved' && (
+                          <button type="button" onClick={() => onTruckAction(t.id, 'complete')} className="flex-1 min-h-[36px] rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer">
+                            Entrega feita · receber
+                          </button>
+                        )}
+                        {(t.status === 'available' || t.status === 'reserved') && (
+                          <button type="button" onClick={() => onTruckAction(t.id, 'cancel')} className="px-3 min-h-[36px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer">
+                            {t.status === 'available' ? 'Retirar rota' : 'Cancelar (cliente é reembolsado)'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -444,6 +482,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
             <span className="text-xs text-slate-600 dark:text-slate-300">
               Solicite mudanças, carretos ou cargas e compare lances de caminhoneiros.
             </span>
+            {role !== 'trucker' && (
             <button
               type="button"
               onClick={() => setShowCreateForm((v) => !v)}
@@ -452,6 +491,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>{showCreateForm ? 'Ver Pedidos' : 'Pedir Mudança / Frete'}</span>
             </button>
+            )}
           </div>
 
           {showCreateForm ? (
@@ -546,6 +586,17 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                     value={frHelpers}
                     onChange={(e) => setFrHelpers(e.target.value)}
                     className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 text-xs font-bold font-mono-num"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-500 mb-1">Data e horário da coleta</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex.: 20/12 às 8h"
+                    value={frDate}
+                    onChange={(e) => setFrDate(e.target.value)}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 text-xs font-semibold"
                   />
                 </div>
                 <div>
@@ -684,7 +735,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                             <div className="text-sm font-bold font-mono-num text-emerald-600 dark:text-emerald-400">
                               {formatBRL(b.price)}
                             </div>
-                            {f.status === 'open_bids' ? (
+                            {f.status === 'open_bids' && f.mine === 'owner' ? (
                               <button
                                 type="button"
                                 onClick={() => onAcceptFreightBid(f.id, b.id)}
@@ -704,12 +755,38 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                     })}
                   </div>
 
+                  {f.mine === 'owner' && f.bids.length === 0 && f.status === 'open_bids' && (
+                    <div className="text-xs text-slate-500">Aguardando lances dos caminhoneiros (a tela atualiza sozinha).</div>
+                  )}
                   {f.status === 'booked' && (
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                      <PackageCheck className="w-4 h-4" />
-                      <span>Frete confirmado com seguro de carga Froc Proteção.</span>
+                    <div className="space-y-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                        <PackageCheck className="w-4 h-4" />
+                        <span>Frete contratado: o valor fica retido até a entrega ser confirmada.</span>
+                      </div>
+                      {f.mine === 'owner' && f.truckerPhone && <div>Telefone do caminhoneiro: <strong className="font-mono-num">{f.truckerPhone}</strong></div>}
+                      {f.mine === 'provider' && f.clientPhone && <div>Telefone do cliente: <strong className="font-mono-num">{f.clientPhone}</strong></div>}
+                      {f.mine === 'provider' && (
+                        <button type="button" onClick={() => onFreightAction(f.id, 'deliver')} className="px-3 min-h-[36px] rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer">
+                          Entrega feita · receber
+                        </button>
+                      )}
                     </div>
                   )}
+                  {f.mine === 'owner' && (f.status === 'open_bids' || f.status === 'booked') && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onFreightAction(f.id, 'cancel');
+                      }}
+                      className="px-3 min-h-[36px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                    >
+                      {f.status === 'booked' ? 'Cancelar frete (valor volta para a carteira)' : 'Cancelar pedido'}
+                    </button>
+                  )}
+                  {f.status === 'delivered' && <div className="text-xs font-semibold text-emerald-600">Entregue.</div>}
+                  {f.status === 'cancelled' && <div className="text-xs font-semibold text-slate-500">Cancelado.</div>}
                 </div>
               ))}
             </div>
