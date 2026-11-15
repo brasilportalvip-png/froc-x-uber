@@ -64,6 +64,13 @@
     overscroll-behavior-y: contain;
   }
 
+  /* Fundo preto garantido no tema escuro (não depende de classe gerada no index.html). */
+  html.dark,
+  html.dark body {
+    background-color: #050505;
+    color: #f4f4f5;
+  }
+
   h1, h2, h3, .font-display {
     font-family: var(--font-display);
   }

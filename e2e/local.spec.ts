@@ -39,13 +39,15 @@ test.describe('Visitante na página inicial', () => {
   test('identidade visual: fundo preto, logo animado e serviços', async ({ page }) => {
     await skipPopup(page);
     await page.goto('/');
+    await expect(page.locator('#servicos')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.classList.contains('dark')), 'tema escuro ligado').toBe(true);
     const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bg).toBe('rgb(5, 5, 5)');
-    expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
-    await expect(page.locator('.froc-logo').first()).toBeVisible();
+    expect(bg, 'cor de fundo da página').toBe('rgb(5, 5, 5)');
+    await expect(page.locator('header .froc-logo'), 'logo no topo').toBeVisible();
     // exact: o título principal também contém "Corridas" e "caronas".
-    for (const s of ['Corridas', 'Negociar', 'Caronas', 'Cargas e fretes']) await expect(page.getByRole('heading', { name: s, exact: true })).toBeVisible();
-    await expect(page.getByText('Caminhões, vans, furgões e utilitários', { exact: false })).toBeVisible();
+    for (const s of ['Corridas', 'Negociar', 'Caronas', 'Cargas e fretes'])
+      await expect(page.locator('#servicos').locator('..').getByRole('heading', { name: s, exact: true }), `cartão ${s}`).toBeVisible();
+    await expect(page.getByText(/vans, furgões e utilitários: mudança/), 'vans e utilitários em Cargas').toBeVisible();
   });
 
   test('perguntas frequentes abrem e fecham', async ({ page }) => {
