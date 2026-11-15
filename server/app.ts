@@ -17,6 +17,10 @@ export interface AppOptions {
   cronSecret?: string;
   /** O que está configurado (sem mostrar valores secretos). */
   configStatus?: () => Record<string, unknown>;
+  /** Diagnóstico do Firebase (projetos e chave), sem segredos. */
+  diagnostics?: () => Promise<Record<string, unknown>>;
+  /** Explica por que um token foi recusado. */
+  explainTokenError?: (error: unknown) => { status: number; message: string; reason: string };
 }
 
 type AuthedRequest = Request & { auth?: AuthUser };
@@ -73,8 +77,10 @@ export function createApp(options: AppOptions) {
     try {
       req.auth = await options.verifyToken(token);
       if (!req.auth.email) return res.status(401).json({ error: 'Conta sem e-mail.', code: 'unauthenticated' });
-    } catch {
-      return res.status(401).json({ error: 'Sessão expirada. Entre novamente.', code: 'unauthenticated' });
+    } catch (error) {
+      const why = options.explainTokenError?.(error) ?? { status: 401, message: 'Sessão expirada. Entre novamente.', reason: 'unknown' };
+      console.error('Login recusado pelo servidor:', why.reason, String((error as Error)?.message || error).slice(0, 300));
+      return res.status(why.status).json({ error: why.message, code: why.status === 401 ? 'unauthenticated' : 'server_config', reason: why.reason });
     }
     try {
       await (await service()).checkAccess(req.auth);
@@ -90,7 +96,10 @@ export function createApp(options: AppOptions) {
   const id = (req: Request) => String(req.params.id || '').slice(0, 80);
 
   // ----- públicas
-  app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'froc-x-uber', config: options.configStatus?.() }));
+  app.get('/api/health', async (_req, res) => {
+    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : undefined;
+    res.json({ ok: true, service: 'froc-x-uber', config: options.configStatus?.(), firebase });
+  });
   app.get('/api/public-config', (_req, res) => res.json(options.publicConfig()));
   app.get('/api/maps-config', (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || '' }));
 

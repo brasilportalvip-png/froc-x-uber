@@ -1936,8 +1936,10 @@ function createApp(options) {
     try {
       req.auth = await options.verifyToken(token);
       if (!req.auth.email) return res.status(401).json({ error: "Conta sem e-mail.", code: "unauthenticated" });
-    } catch {
-      return res.status(401).json({ error: "Sess\xE3o expirada. Entre novamente.", code: "unauthenticated" });
+    } catch (error) {
+      const why = options.explainTokenError?.(error) ?? { status: 401, message: "Sess\xE3o expirada. Entre novamente.", reason: "unknown" };
+      console.error("Login recusado pelo servidor:", why.reason, String(error?.message || error).slice(0, 300));
+      return res.status(why.status).json({ error: why.message, code: why.status === 401 ? "unauthenticated" : "server_config", reason: why.reason });
     }
     try {
       await (await service()).checkAccess(req.auth);
@@ -1950,7 +1952,10 @@ function createApp(options) {
   };
   const a = (req) => req.auth;
   const id = (req) => String(req.params.id || "").slice(0, 80);
-  app.get("/api/health", (_req, res) => res.json({ ok: true, service: "froc-x-uber", config: options.configStatus?.() }));
+  app.get("/api/health", async (_req, res) => {
+    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : void 0;
+    res.json({ ok: true, service: "froc-x-uber", config: options.configStatus?.(), firebase });
+  });
   app.get("/api/public-config", (_req, res) => res.json(options.publicConfig()));
   app.get("/api/maps-config", (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || "" }));
   app.post(
@@ -2043,6 +2048,60 @@ function readWebConfig() {
     return null;
   }
 }
+async function firebaseDiagnostics() {
+  let serviceAccountProject = null;
+  let keyKind = null;
+  let keyProblem = null;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (!raw) keyProblem = "FIREBASE_SERVICE_ACCOUNT_KEY vazia";
+  else {
+    try {
+      const parsed = JSON.parse(raw);
+      serviceAccountProject = typeof parsed.project_id === "string" ? parsed.project_id : null;
+      const email = String(parsed.client_email || "");
+      keyKind = email.startsWith("firebase-adminsdk") ? "firebase-adminsdk (correta)" : email ? "outra conta de servi\xE7o (pode n\xE3o ter permiss\xE3o de login)" : "sem client_email";
+      if (parsed.type !== "service_account") keyProblem = "o JSON n\xE3o \xE9 uma chave de conta de servi\xE7o (type deveria ser service_account)";
+      else if (!String(parsed.private_key || "").includes("PRIVATE KEY")) keyProblem = "private_key ausente ou cortada";
+    } catch {
+      keyProblem = "n\xE3o \xE9 um JSON v\xE1lido (copie o arquivo .json inteiro, de { at\xE9 })";
+    }
+  }
+  const webProject = readWebConfig()?.projectId ?? null;
+  let adminInit = "ok";
+  try {
+    await initFirebase();
+  } catch (e) {
+    adminInit = String(e?.message || e).slice(0, 200);
+  }
+  return {
+    serviceAccountProject,
+    webProject,
+    sameProject: Boolean(serviceAccountProject && webProject && serviceAccountProject === webProject),
+    keyKind,
+    keyProblem,
+    adminInit
+  };
+}
+function explainTokenError(error) {
+  const code = String(error?.code || "");
+  const msg = String(error?.message || error);
+  if (code === "auth/id-token-expired") return { status: 401, message: "Sess\xE3o expirada. Entre novamente.", reason: "expired" };
+  if (/aud|audience|iss|issuer/i.test(msg))
+    return {
+      status: 503,
+      message: "Configura\xE7\xE3o do servidor: a chave FIREBASE_SERVICE_ACCOUNT_KEY \xE9 de um projeto Firebase diferente do FIREBASE_WEB_CONFIG. Abra /api/health para ver os dois projetos.",
+      reason: "project_mismatch"
+    };
+  if (/FIREBASE_SERVICE_ACCOUNT_KEY|private key|PEM|credential|invalid_grant|DECODER/i.test(msg))
+    return {
+      status: 503,
+      message: "Configura\xE7\xE3o do servidor: a chave FIREBASE_SERVICE_ACCOUNT_KEY n\xE3o abriu. Abra /api/health para ver o motivo.",
+      reason: "bad_key"
+    };
+  if (code === "auth/id-token-revoked" || code === "auth/user-disabled" || code === "auth/user-not-found")
+    return { status: 401, message: "Sess\xE3o encerrada. Entre novamente.", reason: code };
+  return { status: 401, message: "N\xE3o foi poss\xEDvel confirmar seu login. Saia e entre novamente.", reason: code || "unknown" };
+}
 var cached = null;
 function initFirebase() {
   cached ??= (async () => {
@@ -2078,7 +2137,7 @@ function initFirebase() {
       db,
       files,
       async verifyToken(token) {
-        const decoded = await auth.verifyIdToken(token, true);
+        const decoded = await auth.verifyIdToken(token);
         return {
           uid: decoded.uid,
           email: String(decoded.email || ""),
@@ -2182,6 +2241,8 @@ function buildApp() {
     webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,
     cronSecret: process.env.CRON_SECRET,
     configStatus,
+    diagnostics: firebaseDiagnostics,
+    explainTokenError,
     publicConfig: () => ({
       firebase: readWebConfig(),
       mapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || "",
