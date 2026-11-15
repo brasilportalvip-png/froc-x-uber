@@ -17,6 +17,8 @@ import {
 import { calculateDistanceKm, estimateDurationMin, formatBRL, RIDE_CATEGORIES } from '../data/locations.ts';
 import type { GeoPoint, PaymentMethod, RideCategoryId, RideOrder, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
+import sedanImg from '../assets/images/fleet_sedan_urban_1794683389130.jpg';
+import motoImg from '../assets/images/fleet_moto_express_1794683388258.jpg';
 
 interface Uber99PanelProps {
   role: UserRole;
@@ -42,12 +44,13 @@ interface Uber99PanelProps {
   onSetOnline: (online: boolean) => Promise<void>;
 }
 
+// Importadas pelo Vite: o caminho /src/... não existe no site publicado.
 const FLEET_IMAGES: Record<RideCategoryId, string> = {
-  froc_x: '/src/assets/images/fleet_sedan_urban_1794683389130.jpg',
-  froc_99: '/src/assets/images/fleet_sedan_urban_1794683389130.jpg',
-  froc_comfort: '/src/assets/images/fleet_sedan_urban_1794683389130.jpg',
-  froc_moto: '/src/assets/images/fleet_moto_express_1794683388258.jpg',
-  froc_delivery: '/src/assets/images/fleet_moto_express_1794683388258.jpg',
+  froc_x: sedanImg,
+  froc_99: sedanImg,
+  froc_comfort: sedanImg,
+  froc_moto: motoImg,
+  froc_delivery: motoImg,
 };
 
 export const Uber99Panel: React.FC<Uber99PanelProps> = ({
@@ -138,7 +141,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
           </div>
           <div className="text-right shrink-0">
             <div className="text-[11px] text-slate-400">Repasse Uber/99</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono-num">88% líquido</div>
+            <div className="text-sm font-bold text-emerald-400 font-mono-num">{100 - (profile.commissionPercent ?? 12)}% líquido</div>
           </div>
         </div>
 
@@ -304,7 +307,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.price)}</div>
-                    <div className="text-[11px] text-slate-500 font-mono-num">Você recebe {formatBRL(ride.price * 0.88)}</div>
+                    <div className="text-[11px] text-slate-500 font-mono-num">Você recebe {formatBRL(ride.price * (1 - (profile.commissionPercent ?? 12) / 100))}</div>
                   </div>
                 </div>
                 <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">

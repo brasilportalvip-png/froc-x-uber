@@ -21,19 +21,20 @@ export function createMercadoPago(options: {
       signal: AbortSignal.timeout(15000),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`mercadopago_${res.status}`);
+    if (!res.ok) throw new Error(`mercadopago_${res.status}: ${String((body as { message?: string }).message || '').slice(0, 160)}`);
     return body as Record<string, any>;
   };
 
   return {
     configured: Boolean(token && base),
-    async createCheckout({ reference, amountCents, title, payerEmail }) {
+    // O e-mail do pagador não é preenchido: se for o mesmo da conta vendedora (ex.: o dono
+    // testando), o Mercado Pago recusa o pagamento. A pessoa informa os dados no checkout.
+    async createCheckout({ reference, amountCents, title }) {
       const pref = await call('/checkout/preferences', {
         method: 'POST',
         headers: { 'X-Idempotency-Key': reference },
         body: JSON.stringify({
           items: [{ id: reference, title, quantity: 1, currency_id: 'BRL', unit_price: amountCents / 100 }],
-          payer: { email: payerEmail },
           external_reference: reference,
           back_urls: {
             success: `${base}/?recarga=${reference}`,

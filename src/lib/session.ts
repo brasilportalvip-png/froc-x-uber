@@ -8,6 +8,8 @@ import type { Auth, User } from 'firebase/auth';
 import {
   createUserWithEmailAndPassword,
   getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
   onAuthStateChanged,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -50,6 +52,14 @@ const AUTH_ERRORS: Record<string, string> = {
   'auth/invalid-email': 'E-mail inválido.',
   'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.',
   'auth/network-request-failed': 'Sem conexão com a internet.',
+  'auth/popup-closed-by-user': 'Janela do Google fechada antes de terminar. Tente de novo.',
+  'auth/cancelled-popup-request': 'Janela do Google fechada antes de terminar. Tente de novo.',
+  'auth/popup-blocked': 'O navegador bloqueou a janela do Google. Permita pop-ups para este site e tente de novo.',
+  'auth/unauthorized-domain':
+    'Este endereço ainda não está autorizado no Firebase. No console do Firebase: Authentication > Configurações > Domínios autorizados > adicione froc-x-uber.vercel.app.',
+  'auth/operation-not-allowed': 'Este tipo de login não está ativado no Firebase (Authentication > Método de login).',
+  'auth/account-exists-with-different-credential': 'Este e-mail já entra de outro jeito. Use e-mail e senha.',
+  'auth/user-disabled': 'Esta conta foi desativada.',
 };
 
 function friendly(error: unknown): Error {
@@ -60,6 +70,17 @@ function friendly(error: unknown): Error {
 export async function signIn(email: string, password: string) {
   try {
     await signInWithEmailAndPassword(requireAuth(), email.trim(), password);
+  } catch (e) {
+    throw friendly(e);
+  }
+}
+
+/** Entrar com a conta Google (o e-mail já vem confirmado pelo Google). */
+export async function signInWithGoogle() {
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signInWithPopup(requireAuth(), provider);
   } catch (e) {
     throw friendly(e);
   }
@@ -121,8 +142,39 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     body: init.body ? JSON.stringify(init.body) : undefined,
   });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new Error(data.error || 'Erro de conexão com o servidor.');
+  if (!res.ok) {
+    if (res.status === 413) throw new Error('Arquivo grande demais. Envie uma foto menor ou um PDF de até 3 MB.');
+    throw new Error(data.error || (res.status >= 500 ? 'O servidor não respondeu. Tente de novo em instantes.' : 'Erro de conexão com o servidor.'));
+  }
   return data as T;
+}
+
+/**
+ * Fotos de celular costumam ter 4 a 10 MB. Antes de enviar, a foto é reduzida
+ * (lado maior 1800 px, JPEG) para ficar leve e passar no limite do servidor.
+ * PDF vai como está (limite de 3 MB).
+ */
+export async function prepareUpload(file: File): Promise<{ contentType: string; dataBase64: string; size: number }> {
+  if (file.type === 'application/pdf') {
+    if (file.size > 3 * 1024 * 1024) throw new Error('O PDF deve ter até 3 MB. Se puder, envie uma foto do documento.');
+    return { contentType: file.type, dataBase64: await fileToBase64(file), size: file.size };
+  }
+  if (!file.type.startsWith('image/')) throw new Error('Envie uma foto (JPG, PNG) ou PDF.');
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) {
+    if (file.size > 3 * 1024 * 1024) throw new Error('Não consegui ler esta foto. Tire outra foto ou envie em JPG.');
+    return { contentType: file.type, dataBase64: await fileToBase64(file), size: file.size };
+  }
+  const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+  if (!blob) throw new Error('Não consegui preparar a foto. Tente outra.');
+  const reduced = new File([blob], 'documento.jpg', { type: 'image/jpeg' });
+  return { contentType: 'image/jpeg', dataBase64: await fileToBase64(reduced), size: reduced.size };
 }
 
 export function fileToBase64(file: File): Promise<string> {

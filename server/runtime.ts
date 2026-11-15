@@ -6,7 +6,7 @@ import { createApp } from './app.ts';
 import { initFirebase, readWebConfig } from './firebase.ts';
 import { FirestoreStore } from './firestoreStore.ts';
 import { createMercadoPago } from './mercadoPago.ts';
-import { FrocService } from './services.ts';
+import { FrocService, parseAdminEmails } from './services.ts';
 import { createGridGeo, createH3Geo } from './geo.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
@@ -37,7 +37,7 @@ export function getService() {
       new FrocService(new FirestoreStore(fb.db, COLLECTION_PREFIX), {
         geo,
         files: fb.files,
-        adminEmails: (process.env.ADMIN_EMAILS || '').split(','),
+        adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
       }),
   );
@@ -67,7 +67,8 @@ export function configStatus() {
   return {
     firebaseServiceAccount: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY),
     firebaseWebConfig: Boolean(readWebConfig()),
-    adminEmails: Boolean(process.env.ADMIN_EMAILS),
+    adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS).length > 0,
+    adminEmailsCount: parseAdminEmails(process.env.ADMIN_EMAILS).length,
     mercadoPago: Boolean(process.env.MERCADO_PAGO_ACCESS_TOKEN),
     mercadoPagoWebhook: Boolean(process.env.MERCADO_PAGO_WEBHOOK_SECRET),
     publicSiteUrl: publicSiteUrl() || null,

@@ -17,6 +17,7 @@ export const SosButton: React.FC<Props> = ({ kind, refId, shareText }) => {
   const [open, setOpen] = useState(false);
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState('');
 
   const send = async () => {
     setBusy(true);
@@ -29,8 +30,10 @@ export const SosButton: React.FC<Props> = ({ kind, refId, shareText }) => {
         body: { kind, refId, lat: position?.coords.latitude, lng: position?.coords.longitude, message: 'Alerta de emergência pelo app' },
       });
       setSent(true);
-    } catch {
+      setFailed('');
+    } catch (e) {
       setSent(false);
+      setFailed((e instanceof Error ? e.message : 'Falha no envio.') + ' Ligue 190 se for urgente.');
     } finally {
       setBusy(false);
     }
@@ -75,6 +78,7 @@ export const SosButton: React.FC<Props> = ({ kind, refId, shareText }) => {
       >
         {sent ? 'Central Froc avisada ✔' : busy ? 'Enviando alerta...' : 'Avisar a central Froc (envia localização e dados da viagem)'}
       </button>
+      {failed && <div className="font-semibold text-red-700 dark:text-red-300">{failed}</div>}
       <button
         type="button"
         onClick={() => void share()}

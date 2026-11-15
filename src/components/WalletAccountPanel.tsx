@@ -168,7 +168,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · e-mail ainda não confirmado'}</div>
         {!profile.emailVerified && (
           <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 p-2.5 space-y-2 text-[11px] text-amber-800 dark:text-amber-200">
-            <div>Confirme seu e-mail para liberar saques{profile.isAdmin ? '' : ' e, se você for administrador, a aba Admin'}. Depois de clicar no link, esta tela atualiza sozinha em alguns segundos.</div>
+            <div>Confirme seu e-mail para proteger sua conta (e, se você for o administrador, liberar a aba Admin). Depois de clicar no link do e-mail, volte aqui: a tela atualiza sozinha em alguns segundos.</div>
             <button
               type="button"
               disabled={busy === 'verify'}

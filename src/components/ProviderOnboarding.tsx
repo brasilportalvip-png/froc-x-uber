@@ -30,7 +30,10 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
   const [phone, setPhone] = useState(profile.phone);
   const [truckType, setTruckType] = useState<TruckType>(profile.truckType);
   const [companyName, setCompanyName] = useState(profile.companyName);
-  const [sent, setSent] = useState<Record<string, boolean>>({});
+  // Documentos já enviados ficam marcados mesmo depois de recarregar a página.
+  const [sentLocal, setSent] = useState<Record<string, boolean>>({});
+  const fromServer = (kind === 'driver' ? profile.driverDocsSent : profile.truckerDocsSent) || [];
+  const sent: Record<string, boolean> = { ...Object.fromEntries(fromServer.map((d) => [d, true])), ...sentLocal };
   const [busy, setBusy] = useState<string | null>(null);
   const title = kind === 'driver' ? 'motorista (corridas, negociação e caronas)' : 'caminhoneiro (fretes e retorno vazio)';
 
@@ -59,6 +62,8 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
         setBusy('apply');
         try {
           await onApply(kind, { vehicle, plate, phone, truckType, companyName });
+        } catch {
+          /* a mensagem de erro já aparece na tela */
         } finally {
           setBusy(null);
         }
@@ -103,7 +108,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
         )}
       </div>
       <div className="space-y-2">
-        <div className="text-[11px] text-slate-500">Documentos (foto nítida ou PDF, até 3 MB cada)</div>
+        <div className="text-[11px] text-slate-500">Documentos (foto nítida pelo celular ou PDF até 3 MB; fotos grandes são reduzidas automaticamente)</div>
         {DOCS[kind].map((d) => (
           <label key={d.id} className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-3 cursor-pointer">
             <span className="flex items-center gap-2">
@@ -123,6 +128,8 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
                 try {
                   await onUpload(kind, d.id, file);
                   setSent((s) => ({ ...s, [d.id]: true }));
+                } catch {
+                  /* a mensagem de erro já aparece na tela */
                 } finally {
                   setBusy(null);
                 }

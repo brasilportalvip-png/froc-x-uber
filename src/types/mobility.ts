@@ -216,6 +216,11 @@ export interface UserProfile {
   companyName: string;
   points: number;
   pointsPerRedeem: number;
+  /** Comissão atual da plataforma (%), definida pelo Admin. */
+  commissionPercent: number;
+  /** Documentos já enviados (para não pedir de novo depois de recarregar a página). */
+  driverDocsSent: string[];
+  truckerDocsSent: string[];
   passengerRating: number;
   name: string;
   phone: string;
