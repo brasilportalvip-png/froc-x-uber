@@ -1,4 +1,4 @@
-export type AppModule = 'rides' | 'indrive' | 'carpool' | 'freight' | 'wallet';
+export type AppModule = 'rides' | 'indrive' | 'carpool' | 'freight' | 'wallet' | 'admin';
 export type UserRole = 'passenger' | 'driver' | 'trucker';
 
 export interface GeoPoint {
@@ -14,8 +14,18 @@ export interface GeoPoint {
 
 export type RideCategoryId = 'froc_x' | 'froc_99' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
 
+/** Formas de pagamento aceitas de verdade: carteira Froc (recarregada por Pix/cartão no Mercado Pago) ou dinheiro. */
+export type PaymentMethod = 'froc_pay' | 'cash';
+export type ApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
+/** Papel da pessoa logada em cada item: dona do pedido, motorista dele, ou nenhum (vitrine). */
+export type Involvement = 'owner' | 'provider' | null;
+
 export interface RideOrder {
   id: string;
+  passengerId?: string;
+  driverId?: string;
+  mine?: Involvement;
+  ratedByPassenger?: boolean;
   passengerName: string;
   origin: GeoPoint;
   destination: GeoPoint;
@@ -26,7 +36,8 @@ export interface RideOrder {
   durationMin: number;
   price: number;
   discountApplied: number;
-  paymentMethod: 'pix' | 'card' | 'cash' | 'froc_pay';
+  paymentMethod: PaymentMethod;
+  /** Só aparece para o passageiro; o motorista digita o PIN que o passageiro informa. */
   pinCode: string;
   status: 'searching' | 'accepted' | 'arriving' | 'in_progress' | 'completed' | 'cancelled';
   driverName?: string;
@@ -40,6 +51,7 @@ export interface RideOrder {
 
 export interface InDriveOffer {
   id: string;
+  driverId?: string;
   driverName: string;
   driverRating: number;
   tripsCount: number;
@@ -53,13 +65,16 @@ export interface InDriveOffer {
 
 export interface InDriveRequest {
   id: string;
+  passengerId?: string;
+  driverId?: string;
+  mine?: Involvement;
   passengerName: string;
   origin: GeoPoint;
   destination: GeoPoint;
   distanceKm: number;
   suggestedPrice: number;
   passengerOffer: number;
-  paymentMethod: 'pix' | 'cash' | 'card';
+  paymentMethod: PaymentMethod;
   notes: string;
   status: 'open' | 'matched' | 'completed' | 'cancelled';
   acceptedOfferId?: string;
@@ -69,6 +84,13 @@ export interface InDriveRequest {
 
 export interface CarpoolTrip {
   id: string;
+  driverId?: string;
+  mine?: Involvement;
+  status?: 'open' | 'completed' | 'cancelled';
+  /** Para o motorista: quem reservou. */
+  passengers?: { name: string; seats: number; phone?: string }[];
+  /** Telefone do motorista, visível só para quem reservou. */
+  driverPhone?: string;
   driverName: string;
   driverRating: number;
   verified: boolean;
@@ -99,6 +121,11 @@ export type TruckType = 'VUC / Utilitário' | '3/4 Baú' | 'Toco Aberto' | 'Truc
 
 export interface EmptyTruckRoute {
   id: string;
+  truckerId?: string;
+  reservedById?: string;
+  mine?: Involvement;
+  truckerPhone?: string;
+  reservedPhone?: string;
   truckerName: string;
   truckerRating: number;
   verified: boolean;
@@ -118,12 +145,13 @@ export interface EmptyTruckRoute {
   discountPercent: number;
   acceptsMoving: boolean;
   hasLiftgate: boolean;
-  status: 'available' | 'reserved';
+  status: 'available' | 'reserved' | 'completed' | 'cancelled';
   reservedBy?: string;
 }
 
 export interface FreightBid {
   id: string;
+  truckerId?: string;
   truckerName: string;
   truckerRating: number;
   truckType: TruckType;
@@ -135,6 +163,11 @@ export interface FreightBid {
 
 export interface FreightRequest {
   id: string;
+  clientId?: string;
+  acceptedTruckerId?: string;
+  mine?: Involvement;
+  clientPhone?: string;
+  truckerPhone?: string;
   clientName: string;
   kind: 'mudanca_residencial' | 'carreto_rapido' | 'carga_paletizada' | 'veiculo_moto';
   title: string;
@@ -148,7 +181,7 @@ export interface FreightRequest {
   needsPacking: boolean;
   proposedBudget: number;
   scheduledDate: string;
-  status: 'open_bids' | 'booked' | 'in_transit' | 'delivered';
+  status: 'open_bids' | 'booked' | 'in_transit' | 'delivered' | 'cancelled';
   acceptedBidId?: string;
   bids: FreightBid[];
   createdAt: string;
@@ -157,13 +190,22 @@ export interface FreightRequest {
 export interface WalletTransaction {
   id: string;
   title: string;
-  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista';
+  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa';
   amount: number;
   type: 'debit' | 'credit';
   date: string;
 }
 
 export interface UserProfile {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  isAdmin: boolean;
+  driverStatus: ApprovalStatus;
+  truckerStatus: ApprovalStatus;
+  rejectionReason?: string;
+  completedTrips: number;
+  companyName: string;
   name: string;
   phone: string;
   city: string;
@@ -185,4 +227,34 @@ export interface AppBootstrapState {
   emptyTrucks: EmptyTruckRoute[];
   freights: FreightRequest[];
   transactions: WalletTransaction[];
+}
+
+export interface DriverApplicationView {
+  uid: string;
+  name: string;
+  email: string;
+  phone: string;
+  kind: 'driver' | 'trucker';
+  vehicle: string;
+  plate: string;
+  truckType?: TruckType;
+  companyName?: string;
+  submittedAt: string;
+  documents: { type: string; url: string }[];
+}
+
+export interface WithdrawalView {
+  id: string;
+  uid: string;
+  name: string;
+  amount: number;
+  pixKey: string;
+  status: 'pending' | 'paid' | 'rejected';
+  createdAt: string;
+}
+
+export interface AdminOverview {
+  applications: DriverApplicationView[];
+  withdrawals: WithdrawalView[];
+  totals: { users: number; pendingApplications: number; pendingWithdrawals: number };
 }

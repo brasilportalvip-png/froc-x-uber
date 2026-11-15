@@ -1,30 +1,30 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { User } from 'firebase/auth';
 import { APIProvider } from '@vis.gl/react-google-maps';
-import { Car, HandCoins, Map as MapIcon, Moon, Sun, Truck, Users, Wallet } from 'lucide-react';
+import { Car, HandCoins, Map as MapIcon, Moon, Shield, Sun, Truck, Users, Wallet } from 'lucide-react';
+import { AdminPanel } from './components/AdminPanel.tsx';
+import { AuthScreen } from './components/AuthScreen.tsx';
 import { BlaBlaCarPanel } from './components/BlaBlaCarPanel.tsx';
 import { GoogleMapsView } from './components/GoogleMapsView.tsx';
 import { InDrivePanel } from './components/InDrivePanel.tsx';
 import { InteractiveMap } from './components/InteractiveMap.tsx';
+import { ProviderOnboarding } from './components/ProviderOnboarding.tsx';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton.tsx';
 import { TruckFreightPanel } from './components/TruckFreightPanel.tsx';
 import { Uber99Panel } from './components/Uber99Panel.tsx';
 import { WalletAccountPanel } from './components/WalletAccountPanel.tsx';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
-import type {
-  AppBootstrapState,
-  AppModule,
-  GeoPoint,
-  RideCategoryId,
-  TruckType,
-  UserProfile,
-  UserRole,
-} from './types/mobility.ts';
+import { api, fileToBase64, loadPublicConfig, logout, watchUser } from './lib/session.ts';
+import type { AppBootstrapState, AppModule, GeoPoint, UserProfile, UserRole } from './types/mobility.ts';
 
 export default function App() {
   const [state, setState] = useState<AppBootstrapState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
 
   const [mapsApiKey, setMapsApiKey] = useState<string>(
     (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined) || ''
@@ -40,10 +40,12 @@ export default function App() {
 
   const [origin, setOrigin] = useState<GeoPoint>(BRAZIL_LOCATIONS[0]);
   const [destination, setDestination] = useState<GeoPoint>(BRAZIL_LOCATIONS[4]);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3200);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 4200);
   };
 
   useEffect(() => {
@@ -52,32 +54,84 @@ export default function App() {
     else root.classList.remove('dark');
   }, [isDark]);
 
+  // 1) Configuração pública + acompanhamento do login
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    loadPublicConfig()
+      .then((cfg) => {
+        if (cfg.mapsApiKey && !mapsApiKey) setMapsApiKey(cfg.mapsApiKey);
+        setPaymentsEnabled(cfg.paymentsEnabled);
+        if (!cfg.firebase) {
+          setConfigError('O app ainda está sendo configurado (login indisponível). Volte em instantes.');
+          setUser(null);
+          return;
+        }
+        unsubscribe = watchUser((u) => {
+          setUser(u);
+          if (!u) {
+            setState(null);
+            setLoading(false);
+          }
+        });
+      })
+      .catch(() => {
+        setConfigError('Não foi possível conectar ao servidor. Verifique sua internet.');
+        setUser(null);
+      });
+    return () => unsubscribe?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadBootstrap = useCallback(async () => {
     try {
-      const [bootRes, mapsRes] = await Promise.all([
-        fetch('/api/bootstrap'),
-        fetch('/api/maps-config').catch(() => null),
-      ]);
-      if (!bootRes.ok) throw new Error('Falha ao carregar dados da plataforma.');
-      const data = (await bootRes.json()) as AppBootstrapState;
+      const data = await api<AppBootstrapState>('/api/bootstrap');
       setState(data);
-      if (mapsRes && mapsRes.ok) {
-        const cfg = (await mapsRes.json()) as { apiKey?: string };
-        if (cfg.apiKey && !mapsApiKey) {
-          setMapsApiKey(cfg.apiKey);
-        }
-      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro de conexão com o servidor.');
     } finally {
       setLoading(false);
     }
-  }, [mapsApiKey]);
+  }, []);
 
+  // 2) Dados da pessoa logada + atualização automática (motoristas, propostas, lances)
   useEffect(() => {
-    loadBootstrap();
-  }, [loadBootstrap]);
+    if (!user) return;
+    setLoading(true);
+    void loadBootstrap();
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine) void loadBootstrap();
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [user, loadBootstrap]);
+
+  // 3) Volta do Mercado Pago (?recarga=ID): confere e credita assim que aprovado
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const topupId = params.get('recarga');
+    if (!topupId) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    setActiveModule('wallet');
+    let tries = 0;
+    const check = async () => {
+      try {
+        const r = await api<{ status: string }>(`/api/wallet/topups/${encodeURIComponent(topupId)}/confirm`, { body: {} });
+        if (r.status === 'approved') {
+          showToast('Recarga aprovada e creditada na carteira!');
+          void loadBootstrap();
+          return;
+        }
+      } catch {
+        /* tenta de novo */
+      }
+      if (++tries < 20) setTimeout(check, 5000);
+      else showToast('Pagamento ainda não confirmado. Assim que o Mercado Pago aprovar, o saldo aparece.');
+    };
+    showToast('Conferindo seu pagamento no Mercado Pago...');
+    void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const handleSelectModule = (mod: AppModule) => {
     setActiveModule(mod);
@@ -88,300 +142,107 @@ export default function App() {
         setOrigin(sp);
         setDestination(rj);
       }
-      if (mod === 'freight' && role === 'driver') {
-        setRole('trucker');
-      }
+      if (mod === 'freight' && role === 'driver') setRole('trucker');
     } else if (mod === 'rides' || mod === 'indrive') {
-      const paulista = BRAZIL_LOCATIONS[0];
-      const cgh = BRAZIL_LOCATIONS[4];
       if (origin.zone === 'intercity' && destination.zone === 'intercity') {
-        setOrigin(paulista);
-        setDestination(cgh);
+        setOrigin(BRAZIL_LOCATIONS[0]);
+        setDestination(BRAZIL_LOCATIONS[4]);
       }
-      if (role === 'trucker') {
-        setRole('passenger');
-      }
+      if (role === 'trucker') setRole('passenger');
     }
   };
 
-  // API Handlers
-  const handleCreateRide = async (payload: {
-    originId: string;
-    destinationId: string;
-    originPoint: GeoPoint;
-    destinationPoint: GeoPoint;
-    categoryId: RideCategoryId;
-    paymentMethod: 'pix' | 'card' | 'cash' | 'froc_pay';
-    stops: string[];
-    promoCode: string;
-  }) => {
-    const res = await fetch('/api/rides', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    const ride = await res.json();
-    setState((prev) => (prev ? { ...prev, rides: [ride, ...prev.rides] } : prev));
-    showToast(`Motorista ${ride.driverName} confirmado (${ride.etaMin} min)!`);
+  /** Executa uma ação no servidor, mostra o resultado e atualiza a tela. */
+  const run = async (fn: () => Promise<unknown>, success?: string) => {
+    try {
+      await fn();
+      if (success) showToast(success);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Não foi possível concluir.');
+    } finally {
+      await loadBootstrap();
+    }
   };
 
-  const handleRideAction = async (rideId: string, action: string, extra?: Record<string, string>) => {
-    const res = await fetch(`/api/rides/${rideId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...extra }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) =>
-      prev
-        ? {
-            ...prev,
-            rides: prev.rides.map((r) => (r.id === rideId ? data.ride : r)),
-            profile: data.profile,
-            transactions: data.transactions,
-          }
-        : prev
+  const post = (path: string, body: unknown = {}) => api(path, { body });
+
+  const handleCreateRide = (payload: object) => run(() => post('/api/rides', payload), 'Corrida solicitada! Procurando motorista...');
+  const handleRideAction = (rideId: string, action: string, extra?: Record<string, string | number>) =>
+    run(
+      () => api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } }),
+      ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!' } as Record<string, string>)[action],
     );
-    if (action === 'complete') showToast('Viagem concluída e registrada na carteira!');
-    if (action === 'driver_accept') showToast('Corrida aceita com sucesso!');
+  const handleSetOnline = (online: boolean) =>
+    run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
+
+  const handleCreateInDrive = (payload: object) => run(() => post('/api/indrive', payload), 'Oferta publicada para os motoristas!');
+  const handleSendDriverOffer = (requestId: string, offeredPrice: number, etaMin: number, note: string) =>
+    run(() => post(`/api/indrive/${requestId}/offers`, { offeredPrice, etaMin, note }), 'Proposta enviada ao passageiro!');
+  const handleAcceptInDrive = (requestId: string, offerId: string) => run(() => post(`/api/indrive/${requestId}/accept`, { offerId }), 'Negociação fechada!');
+  const handleCompleteInDrive = (id: string) => run(() => post(`/api/indrive/${id}/complete`), 'Viagem finalizada!');
+  const handleCancelInDrive = (id: string) => run(() => post(`/api/indrive/${id}/cancel`), 'Pedido cancelado.');
+
+  const handleBookCarpool = (tripId: string, seats: number) => run(() => post(`/api/carpools/${tripId}/book`, { seats }), 'Vaga reservada!');
+  const handlePublishCarpool = (payload: object) => run(() => post('/api/carpools', payload), 'Carona publicada!');
+  const handleCarpoolAction = (tripId: string, action: 'cancel-booking' | 'complete' | 'cancel') =>
+    run(() => post(`/api/carpools/${tripId}/${action}`), action === 'complete' ? 'Carona concluída. Ganhos na carteira!' : 'Cancelado. Valores devolvidos.');
+
+  const handlePublishEmptyTruck = (payload: object) => run(() => post('/api/empty-trucks', payload), 'Rota publicada na vitrine!');
+  const handleReserveEmptyTruck = (id: string) => run(() => post(`/api/empty-trucks/${id}/reserve`), 'Caminhão reservado!');
+  const handleTruckAction = (id: string, action: 'complete' | 'cancel') =>
+    run(() => post(`/api/empty-trucks/${id}/${action}`), action === 'complete' ? 'Entrega confirmada. Ganhos na carteira!' : 'Cancelado.');
+  const handleCreateFreight = (payload: object) => run(() => post('/api/freights', payload), 'Pedido de frete publicado!');
+  const handleSendFreightBid = (freightId: string, price: number, helpersIncluded: number, note: string) =>
+    run(() => post(`/api/freights/${freightId}/bids`, { price, helpersIncluded, note }), 'Lance enviado ao cliente!');
+  const handleAcceptFreightBid = (freightId: string, bidId: string) => run(() => post(`/api/freights/${freightId}/accept`, { bidId }), 'Caminhoneiro contratado!');
+  const handleFreightAction = (id: string, action: 'deliver' | 'cancel') =>
+    run(() => post(`/api/freights/${id}/${action}`), action === 'deliver' ? 'Entrega confirmada. Ganhos na carteira!' : 'Frete cancelado.');
+
+  const handleTopUp = async (amount: number) => {
+    try {
+      const r = await post('/api/wallet/topup', { amount }) as { checkoutUrl: string };
+      window.location.href = r.checkoutUrl;
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Não foi possível iniciar a recarga.');
+    }
+  };
+  const handleWithdraw = (amount: number, pixKey: string) => run(() => post('/api/wallet/withdraw', { amount, pixKey }), 'Saque solicitado!');
+  const handleUpdateProfile = (patch: Partial<UserProfile>) => run(() => api('/api/profile', { method: 'PATCH', body: patch }), 'Dados salvos.');
+  const handleUploadDocument = async (kind: 'driver' | 'trucker', docType: string, file: File) => {
+    if (file.size > 3 * 1024 * 1024) {
+      showToast('O arquivo deve ter até 3 MB.');
+      throw new Error('arquivo grande');
+    }
+    try {
+      await post('/api/driver/documents', { kind, docType, contentType: file.type, dataBase64: await fileToBase64(file) });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Falha no envio.');
+      throw err;
+    }
+  };
+  const handleApply = (kind: 'driver' | 'trucker', data: Record<string, string>) =>
+    run(() => post('/api/driver/apply', { kind, ...data }), 'Cadastro enviado para análise!');
+  const handleLogout = async () => {
+    await logout();
+    setState(null);
   };
 
-  const handleCreateInDrive = async (payload: {
-    originId: string;
-    destinationId: string;
-    originPoint: GeoPoint;
-    destinationPoint: GeoPoint;
-    passengerOffer: number;
-    paymentMethod: 'pix' | 'cash' | 'card';
-    notes: string;
-  }) => {
-    const res = await fetch('/api/indrive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    const created = await res.json();
-    setState((prev) => (prev ? { ...prev, indriveRequests: [created, ...prev.indriveRequests] } : prev));
-    showToast('Oferta publicada! Motoristas já estão respondendo.');
-  };
+  const profile = state?.profile;
+  const roleApproved = !profile
+    ? false
+    : role === 'driver'
+      ? profile.driverStatus === 'approved'
+      : role === 'trucker'
+        ? profile.truckerStatus === 'approved'
+        : true;
 
-  const handleSendDriverOffer = async (requestId: string, offeredPrice: number, etaMin: number, note: string) => {
-    const res = await fetch(`/api/indrive/${requestId}/offers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offeredPrice, etaMin, note }),
-    });
-    if (!res.ok) return;
-    const updated = await res.json();
-    setState((prev) =>
-      prev
-        ? { ...prev, indriveRequests: prev.indriveRequests.map((r) => (r.id === requestId ? updated : r)) }
-        : prev
-    );
-    showToast('Contraproposta enviada ao passageiro!');
-  };
-
-  const handleAcceptInDrive = async (requestId: string, offerId: string) => {
-    const res = await fetch(`/api/indrive/${requestId}/accept`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offerId }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) =>
-      prev
-        ? {
-            ...prev,
-            indriveRequests: prev.indriveRequests.map((r) => (r.id === requestId ? data.request : r)),
-            transactions: data.transactions,
-          }
-        : prev
-    );
-    showToast('Negociação aceita! Motorista a caminho.');
-  };
-
-  const handleBookCarpool = async (tripId: string, seats: number) => {
-    const res = await fetch(`/api/carpools/${tripId}/book`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seats }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) =>
-      prev
-        ? {
-            ...prev,
-            carpools: prev.carpools.map((c) => (c.id === tripId ? data.trip : c)),
-            profile: data.profile,
-            transactions: data.transactions,
-          }
-        : prev
-    );
-    showToast(`${seats} vaga(s) reservada(s) na carona!`);
-  };
-
-  const handlePublishCarpool = async (payload: {
-    originId: string;
-    destinationId: string;
-    date: string;
-    departureTime: string;
-    pricePerSeat: number;
-    totalSeats: number;
-    pickupSpot: string;
-    dropoffSpot: string;
-    pets: boolean;
-    music: boolean;
-  }) => {
-    const res = await fetch('/api/carpools', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    const created = await res.json();
-    setState((prev) => (prev ? { ...prev, carpools: [created, ...prev.carpools] } : prev));
-    showToast('Carona publicada para passageiros na rota!');
-  };
-
-  const handlePublishEmptyTruck = async (payload: {
-    originId: string;
-    destinationId: string;
-    truckType: TruckType;
-    direction: 'indo_vazio' | 'voltando_vazio' | 'espaco_parcial';
-    availableTons: number;
-    availableCubicM: number;
-    emptyReturnPrice: number;
-    departureDate: string;
-    acceptsMoving: boolean;
-    hasLiftgate: boolean;
-  }) => {
-    const res = await fetch('/api/empty-trucks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    const created = await res.json();
-    setState((prev) => (prev ? { ...prev, emptyTrucks: [created, ...prev.emptyTrucks] } : prev));
-    showToast('Rota de retorno vazio publicada na vitrine!');
-  };
-
-  const handleReserveEmptyTruck = async (id: string) => {
-    const res = await fetch(`/api/empty-trucks/${id}/reserve`, { method: 'POST' });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) =>
-      prev
-        ? {
-            ...prev,
-            emptyTrucks: prev.emptyTrucks.map((t) => (t.id === id ? data.route : t)),
-            transactions: data.transactions,
-          }
-        : prev
-    );
-    showToast('Caminhão em retorno vazio reservado com desconto!');
-  };
-
-  const handleCreateFreight = async (payload: {
-    kind: 'mudanca_residencial' | 'carreto_rapido' | 'carga_paletizada' | 'veiculo_moto';
-    title: string;
-    originId: string;
-    destinationId: string;
-    truckTypeNeeded: TruckType;
-    estimatedWeightKg: number;
-    helpersNeeded: number;
-    hasElevator: boolean;
-    needsPacking: boolean;
-    proposedBudget: number;
-    scheduledDate: string;
-  }) => {
-    const res = await fetch('/api/freights', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    const created = await res.json();
-    setState((prev) => (prev ? { ...prev, freights: [created, ...prev.freights] } : prev));
-    showToast('Pedido de mudança/frete publicado! Lances disponíveis.');
-  };
-
-  const handleSendFreightBid = async (freightId: string, price: number, helpersIncluded: number, note: string) => {
-    const res = await fetch(`/api/freights/${freightId}/bids`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ price, helpersIncluded, note }),
-    });
-    if (!res.ok) return;
-    const updated = await res.json();
-    setState((prev) =>
-      prev ? { ...prev, freights: prev.freights.map((f) => (f.id === freightId ? updated : f)) } : prev
-    );
-    showToast('Lance de frete enviado ao cliente!');
-  };
-
-  const handleAcceptFreightBid = async (freightId: string, bidId: string) => {
-    const res = await fetch(`/api/freights/${freightId}/accept`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bidId }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) =>
-      prev
-        ? {
-            ...prev,
-            freights: prev.freights.map((f) => (f.id === freightId ? data.freight : f)),
-            transactions: data.transactions,
-          }
-        : prev
-    );
-    showToast('Caminhoneiro contratado com sucesso!');
-  };
-
-  const handleTopUpPix = async (amount: number) => {
-    const res = await fetch('/api/wallet/topup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState((prev) => (prev ? { ...prev, profile: data.profile, transactions: data.transactions } : prev));
-    showToast(`Recarga Pix de ${formatBRL(amount)} creditada!`);
-  };
-
-  const handleUpdateProfile = async (patch: Partial<UserProfile>) => {
-    const res = await fetch('/api/profile', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    if (!res.ok) return;
-    const profile = await res.json();
-    setState((prev) => (prev ? { ...prev, profile } : prev));
-    showToast('Perfil e veículos atualizados.');
-  };
-
-  const handleResetDemo = async () => {
-    const res = await fetch('/api/reset-demo', { method: 'POST' });
-    if (!res.ok) return;
-    const data = await res.json();
-    setState(data);
-    showToast('Dados iniciais restaurados.');
-  };
-
-  const activeRide = state?.rides.find((r) => r.status !== 'completed' && r.status !== 'cancelled');
+  const activeRide = state?.rides.find((r) => r.mine && r.status !== 'completed' && r.status !== 'cancelled');
   const activeStatusLabel = activeRide
     ? activeRide.status === 'in_progress'
       ? 'Em viagem'
-      : `Chega em ${activeRide.etaMin || 3} min`
+      : activeRide.status === 'searching'
+        ? 'Procurando motorista'
+        : `Chega em ${activeRide.etaMin ?? 3} min`
     : undefined;
 
   const useGoogleMaps = Boolean(mapsApiKey) && isOnline;
@@ -408,7 +269,8 @@ export default function App() {
               { id: 'indrive', label: 'Negociar' },
               { id: 'carpool', label: 'Caronas' },
               { id: 'freight', label: 'Caminhões' },
-              { id: 'wallet', label: 'Carteira' },
+              { id: 'wallet', label: 'Conta' },
+              ...(profile?.isAdmin ? [{ id: 'admin', label: 'Admin' }] : []),
             ] as { id: AppModule; label: string }[]
           ).map((item) => (
             <button
@@ -587,7 +449,18 @@ export default function App() {
               </div>
             ) : (
               <>
-                {activeModule === 'rides' && (
+                {role !== 'passenger' && !roleApproved && ['rides', 'indrive', 'carpool', 'freight'].includes(activeModule) && (
+                  <ProviderOnboarding
+                    kind={role === 'trucker' ? 'trucker' : 'driver'}
+                    profile={state.profile}
+                    onUpload={handleUploadDocument}
+                    onApply={handleApply}
+                  />
+                )}
+
+                {activeModule === 'admin' && state.profile.isAdmin && <AdminPanel onToast={showToast} />}
+
+                {(role === 'passenger' || roleApproved) && activeModule === 'rides' && (
                   <Uber99Panel
                     role={role}
                     profile={state.profile}
@@ -605,10 +478,11 @@ export default function App() {
                     }}
                     onCreateRide={handleCreateRide}
                     onRideAction={handleRideAction}
+                    onSetOnline={handleSetOnline}
                   />
                 )}
 
-                {activeModule === 'indrive' && (
+                {(role === 'passenger' || roleApproved) && activeModule === 'indrive' && (
                   <InDrivePanel
                     role={role}
                     profile={state.profile}
@@ -627,10 +501,12 @@ export default function App() {
                     onCreateRequest={handleCreateInDrive}
                     onSendDriverOffer={handleSendDriverOffer}
                     onAcceptOffer={handleAcceptInDrive}
+                    onCompleteRequest={handleCompleteInDrive}
+                    onCancelRequest={handleCancelInDrive}
                   />
                 )}
 
-                {activeModule === 'carpool' && (
+                {(role === 'passenger' || roleApproved) && activeModule === 'carpool' && (
                   <BlaBlaCarPanel
                     role={role}
                     carpools={state.carpools}
@@ -642,10 +518,12 @@ export default function App() {
                     }}
                     onBookCarpool={handleBookCarpool}
                     onPublishCarpool={handlePublishCarpool}
+                    onCarpoolAction={handleCarpoolAction}
+                    canPublish={state.profile.driverStatus === 'approved'}
                   />
                 )}
 
-                {activeModule === 'freight' && (
+                {(role === 'passenger' || roleApproved) && activeModule === 'freight' && (
                   <TruckFreightPanel
                     role={role}
                     profile={state.profile}
@@ -660,16 +538,24 @@ export default function App() {
                     onCreateFreight={handleCreateFreight}
                     onSendFreightBid={handleSendFreightBid}
                     onAcceptFreightBid={handleAcceptFreightBid}
+                    onTruckAction={handleTruckAction}
+                    onFreightAction={handleFreightAction}
+                    canPublishTruck={state.profile.truckerStatus === 'approved'}
                   />
                 )}
 
                 {activeModule === 'wallet' && (
                   <WalletAccountPanel
+                    key={state.profile.uid}
                     profile={state.profile}
                     transactions={state.transactions}
-                    onTopUpPix={handleTopUpPix}
+                    paymentsEnabled={paymentsEnabled}
+                    onTopUp={handleTopUp}
+                    onWithdraw={handleWithdraw}
                     onUpdateProfile={handleUpdateProfile}
-                    onResetDemo={handleResetDemo}
+                    onUploadDocument={handleUploadDocument}
+                    onApply={handleApply}
+                    onLogout={handleLogout}
                   />
                 )}
               </>
@@ -681,7 +567,7 @@ export default function App() {
       {/* Mobile App Fixed Bottom Tab Bar */}
       <nav
         aria-label="Navegação do aplicativo"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 pb-safe bg-white/95 dark:bg-[#101622]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center"
+        className={`md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 pb-safe bg-white/95 dark:bg-[#101622]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid ${profile?.isAdmin ? 'grid-cols-6' : 'grid-cols-5'} items-center`}
       >
         {(
           [
@@ -690,6 +576,7 @@ export default function App() {
             { id: 'carpool', label: 'Caronas', Icon: Users },
             { id: 'freight', label: 'Cargas', Icon: Truck },
             { id: 'wallet', label: 'Conta', Icon: Wallet },
+            ...(profile?.isAdmin ? [{ id: 'admin', label: 'Admin', Icon: Shield }] : []),
           ] as { id: AppModule; label: string; Icon: React.ComponentType<{ className?: string }> }[]
         ).map(({ id, label, Icon }) => {
           const active = activeModule === id;
@@ -721,6 +608,12 @@ export default function App() {
       <OfflineIndicator />
     </div>
   );
+
+  if (user === undefined)
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0B0F17] text-sm text-slate-500">Carregando Froc X Uber...</div>
+    );
+  if (user === null) return <AuthScreen configError={configError} />;
 
   if (useGoogleMaps) {
     return (

@@ -10,6 +10,9 @@ interface BlaBlaCarPanelProps {
   destination: GeoPoint;
   onSelectRouteOnMap: (origin: GeoPoint, destination: GeoPoint) => void;
   onBookCarpool: (tripId: string, seats: number) => Promise<void>;
+  /** Ações: cancelar a própria reserva (passageiro) ou concluir/cancelar a carona (motorista). */
+  onCarpoolAction: (tripId: string, action: 'cancel-booking' | 'complete' | 'cancel') => Promise<void>;
+  canPublish: boolean;
   onPublishCarpool: (payload: {
     originId: string;
     destinationId: string;
@@ -30,16 +33,18 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   onSelectRouteOnMap,
   onBookCarpool,
   onPublishCarpool,
+  onCarpoolAction,
+  canPublish,
 }) => {
   const intercity = useMemo(() => BRAZIL_LOCATIONS.filter((l) => l.zone === 'intercity' || l.kind === 'terminal'), []);
   const [searchText, setSearchText] = useState('');
   const [seatsWanted, setSeatsWanted] = useState(1);
-  const [showPublish, setShowPublish] = useState(role === 'driver');
+  const [showPublish, setShowPublish] = useState(role === 'driver' && canPublish);
 
   // Publish carpool form
   const [pubOrigin, setPubOrigin] = useState(intercity[0]?.id || 'sp-tiete');
   const [pubDest, setPubDest] = useState(intercity.find((l) => l.id === 'br-rio')?.id || intercity[1]?.id || 'br-rio');
-  const [pubDate, setPubDate] = useState('Amanhã');
+  const [pubDate, setPubDate] = useState(() => new Date(Date.now() + 864e5).toISOString().slice(0, 10));
   const [pubTime, setPubTime] = useState('08:00');
   const [pubPrice, setPubPrice] = useState('95');
   const [pubSeats, setPubSeats] = useState('3');
@@ -66,7 +71,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
       await onPublishCarpool({
         originId: pubOrigin,
         destinationId: pubDest,
-        date: pubDate,
+        date: pubDate ? pubDate.split('-').reverse().join('/') : '',
         departureTime: pubTime,
         pricePerSeat: Number(pubPrice) || 85,
         totalSeats: Number(pubSeats) || 3,
@@ -87,6 +92,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
         <div className="text-xs text-slate-600 dark:text-slate-300">
           <strong className="text-slate-900 dark:text-white">Caronas estilo BlaBlaCar:</strong> divida viagem entre cidades e estados.
         </div>
+        {role === 'driver' && canPublish && (
         <button
           type="button"
           onClick={() => setShowPublish((v) => !v)}
@@ -95,6 +101,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
           <Plus className="w-3.5 h-3.5" />
           <span>{showPublish ? 'Ver Caronas' : 'Oferecer Carona'}</span>
         </button>
+        )}
       </div>
 
       {showPublish ? (
@@ -138,7 +145,9 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
             <div>
               <label className="block text-[11px] text-slate-500 mb-1">Data</label>
               <input
-                type="text"
+                type="date"
+                required
+                min={new Date().toISOString().slice(0, 10)}
                 value={pubDate}
                 onChange={(e) => setPubDate(e.target.value)}
                 className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 text-xs font-semibold"
@@ -220,6 +229,11 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
           </div>
 
           <div className="space-y-3">
+            {filtered.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 p-6 text-center text-sm text-slate-500">
+                Nenhuma carona publicada ainda{searchText ? ' para essa busca' : ''}.
+              </div>
+            )}
             {filtered.map((trip) => (
               <div
                 key={trip.id}
@@ -255,12 +269,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
 
                 <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <img
-                      src="/src/assets/images/driver_avatar_pro_1794683389294.jpg"
-                      alt={trip.driverName}
-                      referrerPolicy="no-referrer"
-                      className="w-9 h-9 rounded-full object-cover shrink-0 bg-slate-200"
-                    />
+                    <div aria-hidden className="w-9 h-9 rounded-full  shrink-0 bg-slate-200 flex items-center justify-center font-bold text-white bg-emerald-600">{String(trip.driverName || "?").trim().charAt(0).toUpperCase()}</div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 dark:text-white">
                         <span className="truncate">{trip.driverName}</span>
@@ -285,6 +294,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
                         {trip.bookedByUserSeats} reservado(s)
                       </span>
                     )}
+                    {trip.mine !== 'provider' && trip.status === 'open' && (
                     <button
                       type="button"
                       disabled={trip.availableSeats < seatsWanted || busyId === trip.id}
@@ -303,10 +313,51 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
                         ? 'Lotado'
                         : busyId === trip.id
                           ? 'Reservando...'
-                          : `Reservar (${trip.availableSeats} liv.)`}
+                          : `Reservar ${seatsWanted} (${formatBRL(trip.pricePerSeat * seatsWanted)})`}
                     </button>
+                    )}
                   </div>
                 </div>
+                {trip.mine === 'provider' && (
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-900/60 p-3 space-y-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                    <div className="font-semibold text-slate-900 dark:text-white">
+                      Sua carona · {trip.totalSeats - trip.availableSeats} de {trip.totalSeats} vagas reservadas
+                    </div>
+                    {(trip.passengers || []).map((p, i) => (
+                      <div key={i} className="text-slate-600 dark:text-slate-300">
+                        {p.name} · {p.seats} vaga(s)
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onCarpoolAction(trip.id, 'complete')}
+                        className="flex-1 min-h-[38px] rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer"
+                      >
+                        Viagem realizada · receber
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onCarpoolAction(trip.id, 'cancel')}
+                        className="px-3 min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                      >
+                        Cancelar carona
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {trip.bookedByUserSeats > 0 && trip.status === 'open' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onCarpoolAction(trip.id, 'cancel-booking');
+                    }}
+                    className="w-full min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    Cancelar minha reserva (valor volta para a carteira)
+                  </button>
+                )}
               </div>
             ))}
           </div>
