@@ -2,7 +2,8 @@ import { isUnsetDestination } from '../lib/currentLocation.ts';
 import React, { useEffect, useRef, useState } from 'react';
 import { AdvancedMarker, Map as GoogleMap, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { LocateFixed, Navigation } from 'lucide-react';
-import type { AppModule, GeoPoint } from '../types/mobility.ts';
+import type { AppModule, GeoPoint, NearbyDriver } from '../types/mobility.ts';
+import { AnimatedVehicleMarker } from './VehicleMarker.tsx';
 
 interface GoogleMapsViewProps {
   activeModule: AppModule;
@@ -13,7 +14,11 @@ interface GoogleMapsViewProps {
   onRouteTelemetry?: (distanceKm: number, durationMin: number) => void;
   onSelectLocationFromMap?: (point: GeoPoint, target: 'origin' | 'destination') => void;
   /** Posição real do motorista da corrida em andamento. */
-  driverPoint?: { lat: number; lng: number } | null;
+  driverPoint?: { lat: number; lng: number; heading?: number } | null;
+  /** Moto ou carro do motorista da corrida (ícone). */
+  driverKind?: 'carro' | 'moto';
+  /** Motoristas online por perto (antes de pedir), como no Uber. */
+  nearbyDrivers?: NearbyDriver[];
 }
 
 const RouteLayer: React.FC<{
@@ -119,6 +124,8 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
   onRouteTelemetry,
   onSelectLocationFromMap,
   driverPoint,
+  driverKind = 'carro',
+  nearbyDrivers = [] as NearbyDriver[],
 }) => {
   const map = useMap();
   const [pickTarget, setPickTarget] = useState<'origin' | 'destination' | null>(null);
@@ -196,10 +203,27 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
           </AdvancedMarker>
         )}
 
+        {!driverPoint &&
+          nearbyDrivers.map((d) => (
+            <AnimatedVehicleMarker
+              key={d.id}
+              position={{ lat: d.lat, lng: d.lng }}
+              heading={d.heading}
+              kind={d.kind}
+              durationMs={6000}
+              title={d.kind === 'moto' ? 'Moto disponível por perto' : d.kind === 'carga' ? 'Veículo de carga por perto' : 'Motorista disponível por perto'}
+            />
+          ))}
+
         {driverPoint && (
-          <AdvancedMarker position={driverPoint} title="Seu motorista (ao vivo)">
-            <Pin background="#F59E0B" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="🚗" />
-          </AdvancedMarker>
+          <AnimatedVehicleMarker
+            position={{ lat: driverPoint.lat, lng: driverPoint.lng }}
+            heading={driverPoint.heading}
+            kind={driverKind}
+            highlight
+            durationMs={4500}
+            title="Seu motorista (ao vivo)"
+          />
         )}
 
         {userGPS && (

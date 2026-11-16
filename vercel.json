@@ -57,6 +57,22 @@
       "destination": "/api"
     },
     {
+      "source": "/como-funciona",
+      "destination": "/api"
+    },
+    {
+      "source": "/regras-e-requisitos",
+      "destination": "/api"
+    },
+    {
+      "source": "/perguntas-frequentes",
+      "destination": "/api"
+    },
+    {
+      "source": "/desenvolvedores",
+      "destination": "/api"
+    },
+    {
       "source": "/((?!api/|legal/|assets/|blog).*)",
       "destination": "/index.html"
     }
@@ -83,7 +99,7 @@
         },
         {
           "key": "Permissions-Policy",
-          "value": "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()"
+          "value": "geolocation=(self), camera=(self), microphone=(self), screen-wake-lock=(self), payment=(), usb=()"
         },
         {
           "key": "Cross-Origin-Opener-Policy",

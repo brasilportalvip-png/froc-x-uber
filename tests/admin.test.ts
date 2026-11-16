@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { FrocService, parseAdminEmails } from '../server/services.ts';
 import type { AuthUser } from '../server/services.ts';
 import { MemoryStore } from '../server/store.ts';
+const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleYear: 2022, vehicleType: 'carro', declarations: { ear: true, inss: true, seguroApp: true, veracidade: true, rntrc: true, ciotPiso: true, lei12009: true } };
 
 test('ADMIN_EMAILS aceita aspas, espaços, ponto e vírgula e maiúsculas', () => {
   assert.deepEqual(parseAdminEmails('"Dono@Froc.com"'), ['dono@froc.com']);

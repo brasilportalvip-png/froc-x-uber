@@ -8,6 +8,7 @@ import { MemoryStore } from '../server/store.ts';
 import { AppError, FrocService, freightFloor, negotiationFloor } from '../server/services.ts';
 import type { AuthUser, PaymentsGateway } from '../server/services.ts';
 import { createGridGeo } from '../server/geo.ts';
+const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleYear: 2022, vehicleType: 'carro', declarations: { ear: true, inss: true, seguroApp: true, veracidade: true, rntrc: true, ciotPiso: true, lei12009: true } };
 
 const ana: AuthUser = { uid: 'p1', email: 'ana@exemplo.com', emailVerified: true, name: 'Ana' };
 const bia: AuthUser = { uid: 'p2', email: 'bia@exemplo.com', emailVerified: true, name: 'Bia' };
@@ -49,8 +50,8 @@ async function topUp(u: AuthUser, reais: number) {
 }
 const balance = async (u: AuthUser) => (await svc.bootstrap(u)).profile.walletBalance;
 async function approve(u: AuthUser, kind: 'driver' | 'trucker') {
-  for (const d of kind === 'driver' ? ['cnh', 'crlv'] : ['cnh', 'crlv', 'antt']) await svc.uploadDocument(u, kind, d, 'image/png', 'eA==');
-  await svc.applyAsProvider(u, kind, { phone: '11988887777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
+  for (const d of kind === 'driver' ? ['cnh', 'crlv', 'antecedentes'] : ['cnh', 'crlv', 'antt', 'antecedentes']) await svc.uploadDocument(u, kind, d, 'image/png', 'eA==');
+  await svc.applyAsProvider(u, kind, { ...LEGAL, phone: '11988887777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
   await svc.reviewApplication(admin, u.uid, kind, 'approved', '');
 }
 const minutes = (n: number) => {

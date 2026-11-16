@@ -219,13 +219,13 @@ export const TOOLS: ToolDef[] = [
     parameters: obj(
       {
         uid: S('uid do usuário.'),
-        tipo: S('"driver" (motorista) ou "trucker" (transportador).'),
+        tipo: S('"driver" (motorista), "trucker" (transportador) ou "merchant" (loja do Froc Entregas).'),
         decisao: S('"approved" ou "rejected".'),
         motivo: S('Obrigatório na recusa: o que está errado.'),
       },
       ['uid', 'tipo', 'decisao'],
     ),
-    summarize: (a) => `${a.decisao === 'approved' ? 'Aprovar' : 'Recusar'} cadastro de ${a.tipo === 'trucker' ? 'transportador' : 'motorista'} (${a.uid})${a.motivo ? ` — ${a.motivo}` : ''}`,
+    summarize: (a) => `${a.decisao === 'approved' ? 'Aprovar' : 'Recusar'} cadastro de ${a.tipo === 'trucker' ? 'transportador' : a.tipo === 'merchant' ? 'loja' : 'motorista'} (${a.uid})${a.motivo ? ` — ${a.motivo}` : ''}`,
     execute: (s, admin, a) => s.reviewApplication(admin, a.uid, a.tipo, a.decisao, a.motivo ?? ''),
     run: async () => ({}),
   },

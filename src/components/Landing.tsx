@@ -192,6 +192,10 @@ export const Landing: React.FC<{ configError?: string | null }> = ({ configError
       <footer className="border-t border-white/10 py-8 px-4 text-center text-xs text-slate-500 space-y-2">
         <div className="flex flex-wrap justify-center gap-4">
           <a href="/blog" className="hover:text-white">Blog</a>
+          <a href="/como-funciona" className="hover:text-white">Como funciona</a>
+          <a href="/regras-e-requisitos" className="hover:text-white">Regras e leis</a>
+          <a href="/perguntas-frequentes" className="hover:text-white">Perguntas frequentes</a>
+          <a href="/desenvolvedores" className="hover:text-white">Para lojas</a>
           <a href="/legal/ajuda.html" className="hover:text-white">Ajuda</a>
           <a href="/legal/seguranca.html" className="hover:text-white">Segurança</a>
           <a href="/legal/termos.html" className="hover:text-white">Termos</a>

@@ -2,5 +2,6 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /acompanhar/
 
 Sitemap: https://froc-x-uber.vercel.app/sitemap.xml

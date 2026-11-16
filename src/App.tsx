@@ -16,10 +16,13 @@ import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButto
 import { TruckFreightPanel } from './components/TruckFreightPanel.tsx';
 import { Uber99Panel } from './components/Uber99Panel.tsx';
 import { WalletAccountPanel } from './components/WalletAccountPanel.tsx';
+import { MerchantPanel } from './components/MerchantPanel.tsx';
+import { HelpLinks } from './components/HelpLinks.tsx';
+import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
-import type { AppBootstrapState, AppModule, GeoPoint, UserProfile, UserRole } from './types/mobility.ts';
+import type { AppBootstrapState, AppModule, GeoPoint, NearbyDriver, UserProfile, UserRole } from './types/mobility.ts';
 
 export default function App() {
   const [state, setState] = useState<AppBootstrapState | null>(null);
@@ -206,12 +209,19 @@ export default function App() {
   const isOnlineProvider = Boolean(
     state?.profile.driverOnline && (state.profile.driverStatus === 'approved' || state.profile.truckerStatus === 'approved'),
   );
+  // Em viagem, manda a cada ~4 s (o passageiro vê o carro andando liso); parado, a cada ~10 s.
+  const providerOnTrip = Boolean(
+    state?.rides.some((r) => r.mine === 'provider' && ['accepted', 'arriving', 'in_progress'].includes(r.status)) ||
+      state?.indriveRequests.some((r) => r.mine === 'provider' && r.status === 'matched'),
+  );
+  const locationEveryMs = useRef(10_000);
+  locationEveryMs.current = providerOnTrip ? 4_000 : 10_000;
   useEffect(() => {
     if (!isOnlineProvider || !navigator.geolocation) return;
     let last = 0;
     const id = navigator.geolocation.watchPosition(
       (pos) => {
-        if (Date.now() - last < 10_000) return;
+        if (Date.now() - last < locationEveryMs.current) return;
         last = Date.now();
         void api('/api/driver/location', { body: { lat: pos.coords.latitude, lng: pos.coords.longitude } }).catch(() => undefined);
       },
@@ -308,7 +318,7 @@ export default function App() {
       throw err;
     }
   };
-  const handleApply = (kind: 'driver' | 'trucker', data: Record<string, string>) =>
+  const handleApply = (kind: 'driver' | 'trucker', data: Record<string, unknown>) =>
     run(() => post('/api/driver/apply', { kind, ...data }), 'Cadastro enviado para análise!');
   const handleLogout = async () => {
     await logout();
@@ -329,6 +339,8 @@ export default function App() {
   // Passageiro vê o carro do motorista andando (posição enviada pelo celular do motorista).
   const liveDriverPoint =
     (activeRide?.mine === 'owner' && activeRide.driverLocation) || matchedDeal?.driverLocation || null;
+  const liveDriverKind: 'carro' | 'moto' =
+    activeRide?.categoryId === 'froc_moto' || (activeRide?.categoryId === 'froc_delivery' && activeRide.delivery?.vehicle === 'moto') ? 'moto' : 'carro';
   const activeStatusLabel = activeRide
     ? activeRide.status === 'in_progress'
       ? 'Em viagem'
@@ -338,6 +350,32 @@ export default function App() {
     : undefined;
 
   const useGoogleMaps = Boolean(mapsApiKey) && isOnline;
+
+  // Carrinhos por perto (como no Uber): só para quem vai pedir, sem corrida em andamento.
+  const [nearbyDrivers, setNearbyDrivers] = useState<NearbyDriver[]>([]);
+  const wantsNearby =
+    Boolean(user) && useGoogleMaps && role === 'passenger' && (activeModule === 'rides' || activeModule === 'indrive') && !activeRide && !matchedDeal && origin.id !== 'locating';
+  useEffect(() => {
+    if (!wantsNearby) {
+      setNearbyDrivers([]);
+      return;
+    }
+    let alive = true;
+    const load = () => {
+      if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+      api<{ drivers: NearbyDriver[] }>(`/api/drivers/nearby?lat=${origin.lat.toFixed(5)}&lng=${origin.lng.toFixed(5)}`)
+        .then((r) => {
+          if (alive) setNearbyDrivers(r.drivers);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = setInterval(load, 6000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [wantsNearby, origin.lat, origin.lng]);
 
   const appShell = (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-transparent text-slate-900 dark:text-slate-100">
@@ -401,6 +439,8 @@ export default function App() {
               isDark={isDark}
               activeTripStatus={activeStatusLabel}
               driverPoint={liveDriverPoint}
+              driverKind={liveDriverKind}
+              nearbyDrivers={nearbyDrivers}
               onRouteTelemetry={(km) => setLiveDistanceKm(km)}
               onSelectLocationFromMap={(point, target) => {
                 if (target === 'origin') setOrigin(point);
@@ -644,6 +684,18 @@ export default function App() {
                 )}
 
                 {activeModule === 'wallet' && (
+                  <MerchantPanel
+                    profile={state.profile}
+                    deliveries={state.deliveries || []}
+                    mapsEnabled={useGoogleMaps}
+                    onChanged={loadBootstrap}
+                    onToast={showToast}
+                  />
+                )}
+
+                {activeModule === 'wallet' && <HelpLinks />}
+
+                {activeModule === 'wallet' && (
                   <WalletAccountPanel
                     key={state.profile.uid}
                     profile={state.profile}
@@ -706,6 +758,7 @@ export default function App() {
       )}
 
       {state && <SupportChat />}
+      {state && <RecordingsRecovery />}
       <OfflineIndicator />
     </div>
   );

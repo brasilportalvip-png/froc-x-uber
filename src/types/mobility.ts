@@ -29,7 +29,13 @@ export interface RideOrder {
   ratedByDriver?: boolean;
   passengerRating?: number;
   surgeMultiplier?: number;
-  driverLocation?: { lat: number; lng: number; at: string };
+  driverLocation?: { lat: number; lng: number; at: string; heading?: number };
+  /** Quem está gravando a viagem pelo próprio celular (aviso para a outra parte). */
+  recording?: TripRecordingState;
+  /** Preenchido nas entregas de lojas (Froc Entregas). */
+  delivery?: DeliveryInfo;
+  /** Código de entrega: só a loja vê; o entregador pede ao cliente para concluir. */
+  deliveryPin?: string;
   passengerName: string;
   origin: GeoPoint;
   destination: GeoPoint;
@@ -53,6 +59,83 @@ export interface RideOrder {
   messages: { sender: 'passenger' | 'driver'; text: string; time: string }[];
 }
 
+export interface TripRecordingState {
+  passenger?: { mode: 'audio' | 'video'; at: string } | null;
+  driver?: { mode: 'audio' | 'video'; at: string } | null;
+}
+
+export interface DeliveryInfo {
+  merchantName: string;
+  recipientName: string;
+  /** Só aparece para a loja e para o entregador depois do aceite. */
+  recipientPhone?: string;
+  note?: string;
+  orderRef?: string;
+  items?: string;
+  vehicle: 'moto' | 'carro' | 'qualquer';
+  source: 'painel' | 'api';
+}
+
+export type DeliveryStatus = 'procurando_entregador' | 'entregador_a_caminho' | 'entregador_na_loja' | 'saiu_para_entrega' | 'entregue' | 'cancelada';
+
+export interface DeliveryView {
+  id: string;
+  status: DeliveryStatus;
+  statusLabel: string;
+  price: number;
+  distanceKm: number;
+  deliveryCode: string;
+  trackingPath: string;
+  orderRef: string;
+  pickup: { name: string; lat: number; lng: number };
+  dropoff: { name: string; lat: number; lng: number };
+  recipient: { name: string; phone: string };
+  note: string;
+  vehicle: 'moto' | 'carro' | 'qualquer';
+  courier: { firstName: string; vehicle: string; plate: string; location: { lat: number; lng: number; at: string } | null } | null;
+  createdAt: string;
+  updatedAt: string;
+  source: 'painel' | 'api';
+}
+
+export interface MerchantProfileView {
+  companyName: string;
+  cnpj: string;
+  phone: string;
+  category: string;
+  pickup: GeoPoint | null;
+  pickupNote: string;
+  webhookUrl: string;
+  hasWebhookSecret: boolean;
+  submittedAt?: string;
+}
+
+/** Motorista online perto do passageiro (posição levemente deslocada, por privacidade). */
+export interface NearbyDriver {
+  id: string;
+  lat: number;
+  lng: number;
+  heading: number | null;
+  kind: 'carro' | 'moto' | 'carga';
+}
+
+/** O que a pessoa que recebeu o link de acompanhamento vê (sem telefones nem valores). */
+export interface TrackView {
+  kind: 'ride' | 'indrive' | 'delivery';
+  status: string;
+  statusLabel: string;
+  active: boolean;
+  categoryLabel: string;
+  origin: { name: string; lat: number; lng: number };
+  destination: { name: string; lat: number; lng: number };
+  passengerFirstName: string;
+  driver: { firstName: string; vehicle: string; plate: string; rating: number | null } | null;
+  location: { lat: number; lng: number; at: string; heading?: number } | null;
+  merchantName?: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
 export interface InDriveOffer {
   id: string;
   driverId?: string;
@@ -70,7 +153,8 @@ export interface InDriveOffer {
 export interface InDriveRequest {
   id: string;
   minimumPrice?: number;
-  driverLocation?: { lat: number; lng: number; at: string };
+  driverLocation?: { lat: number; lng: number; at: string; heading?: number };
+  recording?: TripRecordingState;
   passengerId?: string;
   driverId?: string;
   mine?: Involvement;
@@ -199,7 +283,7 @@ export interface FreightRequest {
 export interface WalletTransaction {
   id: string;
   title: string;
-  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa' | 'bonus';
+  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa' | 'bonus' | 'entrega';
   amount: number;
   type: 'debit' | 'credit';
   date: string;
@@ -222,6 +306,16 @@ export interface UserProfile {
   commissionPercent: number;
   /** Conta criada antes da inauguração (10/03/2027): selo de membro fundador. */
   founder?: boolean;
+  /** Carro ou moto (motorista de passageiros). */
+  driverVehicleType?: 'carro' | 'moto';
+  driverVehicleYear?: number;
+  driverCity?: string;
+  driverState?: string;
+  cnhExpiry?: string;
+  /** Idade máxima do veículo definida pelo Admin (padrão Froc). */
+  maxVehicleAgeYears?: number;
+  merchantStatus?: ApprovalStatus;
+  merchant?: MerchantProfileView | null;
   /** Documentos já enviados (para não pedir de novo depois de recarregar a página). */
   driverDocsSent: string[];
   truckerDocsSent: string[];
@@ -247,6 +341,8 @@ export interface AppBootstrapState {
   emptyTrucks: EmptyTruckRoute[];
   freights: FreightRequest[];
   transactions: WalletTransaction[];
+  /** Entregas da loja (só para contas de loja aprovadas). */
+  deliveries?: DeliveryView[];
 }
 
 export interface DriverApplicationView {
@@ -254,8 +350,20 @@ export interface DriverApplicationView {
   name: string;
   email: string;
   phone: string;
-  kind: 'driver' | 'trucker';
+  kind: 'driver' | 'trucker' | 'merchant';
   vehicle: string;
+  vehicleType?: 'carro' | 'moto';
+  vehicleYear?: number;
+  /** Ano mínimo aceito na cidade do motorista (para o Admin conferir). */
+  minVehicleYear?: number;
+  vehicleAgeRule?: string;
+  city?: string;
+  state?: string;
+  cnhExpiry?: string;
+  declarations?: Record<string, string>;
+  cnpj?: string;
+  category?: string;
+  pickupAddress?: string;
   plate: string;
   truckType?: TruckType;
   companyName?: string;
@@ -295,6 +403,7 @@ export interface PlatformSettingsView {
   indriveOpenTimeoutMin: number;
   pointsPerReal: number;
   pointsPerRedeem: number;
+  maxVehicleAgeYears: number;
 }
 
 export interface AdminOverview {
@@ -319,6 +428,9 @@ export interface AdminUserRow {
   truckerStatus: ApprovalStatus;
   blocked: boolean;
   blockedReason: string;
+  /** Controle de qualidade: motorista com nota baixa em revisão. */
+  qualityAlert?: string;
+  merchantStatus?: ApprovalStatus;
 }
 
 export interface AdminReport {

@@ -4,7 +4,19 @@ import { api } from '../lib/session.ts';
 import { AiTeamPanel, AuditPanel, BlogAdminPanel, ProposalsBox, SupportAdminPanel } from './AdminAiPanels.tsx';
 import type { AdminOverview, AdminReport, AdminUserRow, PlatformSettingsView } from '../types/mobility.ts';
 
-const DOC_LABEL: Record<string, string> = { cnh: 'CNH', crlv: 'CRLV', antt: 'ANTT' };
+const DOC_LABEL: Record<string, string> = { cnh: 'CNH', crlv: 'CRLV', antt: 'ANTT', antecedentes: 'antecedentes' };
+const DECL_LABEL: Record<string, string> = {
+  ear: 'EAR na CNH',
+  inss: 'INSS',
+  seguroApp: 'seguro APP',
+  lei12009: 'Lei 12.009 (moto)',
+  rntrc: 'RNTRC ativo',
+  ciotPiso: 'CIOT e piso ANTT',
+  responsavel: 'responsável pelos pedidos',
+  proibidos: 'itens proibidos',
+  veracidade: 'veracidade',
+};
+const KIND_NAME: Record<string, string> = { driver: 'Motorista', trucker: 'Transportador de carga', merchant: 'Loja (Froc Entregas)' };
 const KIND_LABEL: Record<string, string> = {
   corrida: 'Corridas (Uber/99)',
   indrive: 'Negociadas (inDrive)',
@@ -128,16 +140,50 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
             return (
               <div key={key} className={card}>
                 <div className="font-bold text-sm text-slate-900 dark:text-white">
-                  {app.name} · {app.kind === 'driver' ? 'Motorista' : 'Caminhoneiro'}
+                  {app.name} · {KIND_NAME[app.kind] || app.kind}
+                  {app.kind === 'driver' && app.vehicleType === 'moto' ? ' · MOTO' : ''}
                 </div>
                 <div className="text-slate-600 dark:text-slate-300">
                   {app.email} · {app.phone}
                 </div>
-                <div className="text-slate-600 dark:text-slate-300">
-                  {app.vehicle} · placa <strong className="font-mono-num">{app.plate}</strong>
-                  {app.truckType ? ` · ${app.truckType}` : ''}
-                  {app.companyName ? ` · ${app.companyName}` : ''}
-                </div>
+                {app.kind === 'merchant' ? (
+                  <div className="text-slate-600 dark:text-slate-300 space-y-0.5">
+                    <div>
+                      <strong>{app.companyName}</strong> · {app.category}
+                    </div>
+                    <div>
+                      CNPJ <strong className="font-mono-num">{app.cnpj}</strong> ·{' '}
+                      <a href="https://solucoes.receita.fazenda.gov.br/servicos/cnpjreva/cnpjreva_solicitacao.asp" target="_blank" rel="noreferrer" className="font-semibold text-emerald-700 dark:text-emerald-400 underline">
+                        conferir na Receita
+                      </a>
+                    </div>
+                    <div>Coleta: {app.pickupAddress}</div>
+                  </div>
+                ) : (
+                  <div className="text-slate-600 dark:text-slate-300 space-y-0.5">
+                    <div>
+                      {app.vehicle} · placa <strong className="font-mono-num">{app.plate}</strong>
+                      {app.vehicleYear ? ` · ano ${app.vehicleYear}` : ''}
+                      {app.truckType ? ` · ${app.truckType}` : ''}
+                      {app.companyName ? ` · ${app.companyName}` : ''}
+                    </div>
+                    {app.city && (
+                      <div>
+                        Trabalha em {app.city}/{app.state}
+                        {app.minVehicleYear ? (
+                          <span className={app.vehicleYear && app.vehicleYear < app.minVehicleYear ? 'text-red-600 font-bold' : ''}>
+                            {' '}
+                            · ano mínimo {app.minVehicleYear}
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
+                    {app.cnhExpiry && <div>CNH válida até {app.cnhExpiry.split('-').reverse().join('/')} · confira a observação EAR na foto da CNH</div>}
+                  </div>
+                )}
+                {app.declarations && Object.keys(app.declarations).length > 0 && (
+                  <div className="text-[11px] text-slate-500">Declarou: {Object.keys(app.declarations).map((k) => DECL_LABEL[k] || k).join(' · ')}</div>
+                )}
                 {app.kind === 'trucker' && (
                   <div className="text-slate-600 dark:text-slate-300">
                     RNTRC <strong className="font-mono-num">{app.rntrc || 'não informado'}</strong>
@@ -251,6 +297,8 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
             <div key={u.uid} className={card}>
               <div className="font-bold text-slate-900 dark:text-white">
                 {u.name} {u.blocked && <span className="text-red-600">· BLOQUEADO</span>}
+                {u.qualityAlert && <span className="text-amber-600"> · REVISAR QUALIDADE ({u.qualityAlert})</span>}
+                {u.merchantStatus === 'approved' && <span className="text-emerald-600"> · LOJA</span>}
               </div>
               <div className="text-slate-600 dark:text-slate-300">
                 {u.email} · {u.phone || 'sem telefone'} · desde {new Date(u.createdAt).toLocaleDateString('pt-BR')}
@@ -346,6 +394,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
               ['indriveOpenTimeoutMin', 'Expirar negociação sem resposta após (min)', 5, 240, 1],
               ['pointsPerReal', 'Pontos por R$ 1 gasto', 0, 10, 1],
               ['pointsPerRedeem', 'Pontos para R$ 5 de crédito', 20, 10000, 1],
+              ['maxVehicleAgeYears', 'Idade máxima do veículo (anos; a cidade mais rígida prevalece)', 3, 25, 1],
             ] as [keyof PlatformSettingsView, string, number, number, number][]
           ).map(([key, label, min, max, step]) => (
             <label key={key} className="flex items-center justify-between gap-3">

@@ -2,17 +2,43 @@ import { CARGO_VEHICLE_TYPES } from '../data/cargoVehicles.ts';
 import React, { useState } from 'react';
 import { CheckCircle2, Clock, FileUp, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { TruckType, UserProfile } from '../types/mobility.ts';
+import { DEFAULT_MAX_VEHICLE_AGE, minVehicleYear, vehicleAgeLimit } from '../data/legal.ts';
 
 const TRUCK_TYPES: TruckType[] = [...CARGO_VEHICLE_TYPES];
 const DOCS: Record<'driver' | 'trucker', { id: string; label: string }[]> = {
   driver: [
-    { id: 'cnh', label: 'CNH com EAR (foto ou PDF)' },
-    { id: 'crlv', label: 'CRLV do veículo' },
+    { id: 'cnh', label: 'CNH com a observação EAR (foto ou PDF)' },
+    { id: 'crlv', label: 'CRLV do veículo (licenciamento em dia)' },
+    { id: 'antecedentes', label: 'Certidão negativa de antecedentes criminais' },
   ],
   trucker: [
-    { id: 'cnh', label: 'CNH categoria C, D ou E' },
+    { id: 'cnh', label: 'CNH compatível com o veículo, com EAR' },
     { id: 'crlv', label: 'CRLV do veículo' },
-    { id: 'antt', label: 'Registro ANTT (RNTRC)' },
+    { id: 'antt', label: 'Certificado ANTT (RNTRC)' },
+    { id: 'antecedentes', label: 'Certidão negativa de antecedentes criminais' },
+  ],
+};
+
+/** Declarações exigidas por lei (o servidor confere as mesmas chaves). */
+const DECLARATIONS: Record<'driver' | 'moto' | 'trucker', { id: string; label: string }[]> = {
+  driver: [
+    { id: 'ear', label: 'Minha CNH tem a observação EAR (exerce atividade remunerada).' },
+    { id: 'inss', label: 'Sou (ou serei) inscrito no INSS como contribuinte individual ou MEI, como exige a lei.' },
+    { id: 'seguroApp', label: 'Tenho (ou vou contratar) o seguro de Acidentes Pessoais a Passageiros (APP) exigido pela prefeitura.' },
+    { id: 'veracidade', label: 'As informações e documentos são verdadeiros. Sei que dado falso gera bloqueio.' },
+  ],
+  moto: [
+    { id: 'ear', label: 'Minha CNH categoria A tem a observação EAR e tenho habilitação há pelo menos 2 anos.' },
+    { id: 'lei12009', label: 'Tenho 21 anos ou mais, fiz o curso de mototaxista/motofretista e uso colete e equipamentos obrigatórios (Lei 12.009/2009).' },
+    { id: 'inss', label: 'Sou (ou serei) inscrito no INSS como contribuinte individual ou MEI.' },
+    { id: 'seguroApp', label: 'Tenho (ou vou contratar) o seguro APP exigido pela prefeitura.' },
+    { id: 'veracidade', label: 'As informações e documentos são verdadeiros. Sei que dado falso gera bloqueio.' },
+  ],
+  trucker: [
+    { id: 'ear', label: 'Minha CNH é compatível com o veículo e tem a observação EAR.' },
+    { id: 'rntrc', label: 'Meu RNTRC está ativo na ANTT (obrigatório para frete pago de carga de terceiros).' },
+    { id: 'ciotPiso', label: 'Sei que cada frete precisa de CIOT e não pode ficar abaixo do piso mínimo da ANTT (Lei 15.485/2026).' },
+    { id: 'veracidade', label: 'As informações e documentos são verdadeiros. Sei que dado falso gera bloqueio.' },
   ],
 };
 
@@ -20,7 +46,7 @@ interface Props {
   kind: 'driver' | 'trucker';
   profile: UserProfile;
   onUpload: (kind: 'driver' | 'trucker', docType: string, file: File) => Promise<void>;
-  onApply: (kind: 'driver' | 'trucker', data: Record<string, string>) => Promise<void>;
+  onApply: (kind: 'driver' | 'trucker', data: Record<string, unknown>) => Promise<void>;
 }
 
 /** Cadastro de motorista/caminhoneiro: envio de documentos e acompanhamento da análise. */
@@ -32,6 +58,17 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
   const [truckType, setTruckType] = useState<TruckType>(profile.truckType);
   const [companyName, setCompanyName] = useState(profile.companyName);
   const [rntrc, setRntrc] = useState(profile.rntrc || '');
+  const [vehicleType, setVehicleType] = useState<'carro' | 'moto'>(profile.driverVehicleType || 'carro');
+  const [vehicleYear, setVehicleYear] = useState(profile.driverVehicleYear ? String(profile.driverVehicleYear) : '');
+  const [city, setCity] = useState(profile.driverCity || profile.city || '');
+  const [uf, setUf] = useState(profile.driverState || '');
+  const [cnhExpiry, setCnhExpiry] = useState(profile.cnhExpiry || '');
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const declarationSet = DECLARATIONS[kind === 'trucker' ? 'trucker' : vehicleType === 'moto' ? 'moto' : 'driver'];
+  const allChecked = declarationSet.every((d) => checks[d.id]);
+  const ageRule = vehicleAgeLimit(city, uf, profile.maxVehicleAgeYears || DEFAULT_MAX_VEHICLE_AGE);
+  const minYear = minVehicleYear(ageRule.maxYears);
+  const tooOld = kind === 'driver' && Number(vehicleYear) > 0 && Number(vehicleYear) < minYear;
   // Documentos já enviados ficam marcados mesmo depois de recarregar a página.
   const [sentLocal, setSent] = useState<Record<string, boolean>>({});
   const fromServer = (kind === 'driver' ? profile.driverDocsSent : profile.truckerDocsSent) || [];
@@ -63,7 +100,20 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
         e.preventDefault();
         setBusy('apply');
         try {
-          await onApply(kind, { vehicle, plate, phone, truckType, companyName, rntrc });
+          await onApply(kind, {
+            vehicle,
+            plate,
+            phone,
+            truckType,
+            companyName,
+            rntrc,
+            vehicleType,
+            vehicleYear: Number(vehicleYear),
+            city,
+            state: uf,
+            cnhExpiry,
+            declarations: Object.fromEntries(declarationSet.map((d) => [d.id, Boolean(checks[d.id])])),
+          });
         } catch {
           /* a mensagem de erro já aparece na tela */
         } finally {
@@ -79,9 +129,29 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
           <span>Cadastro recusado: {profile.rejectionReason || 'documentos não aprovados'}. Corrija e envie de novo.</span>
         </div>
       )}
+      <p className="text-[11px] text-slate-500">
+        A lei exige CNH com EAR, veículo dentro da idade permitida na sua cidade e documentos em dia.{' '}
+        <a href="/regras-e-requisitos" target="_blank" rel="noreferrer" className="font-semibold text-emerald-700 dark:text-emerald-400 underline">
+          Ver regras e leis
+        </a>
+      </p>
+      {kind === 'driver' && (
+        <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
+          {(['carro', 'moto'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setVehicleType(t)}
+              className={`min-h-[36px] rounded-lg text-xs font-semibold cursor-pointer ${vehicleType === t ? 'bg-white dark:bg-[#1B2436] shadow-xs text-slate-900 dark:text-white' : 'text-slate-500'}`}
+            >
+              {t === 'carro' ? 'Carro' : 'Moto (mototáxi e entregas)'}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <label className="block">
-          <span className="block text-[11px] text-slate-500 mb-1">{kind === 'driver' ? 'Carro (modelo e cor)' : 'Caminhão (modelo)'}</span>
+          <span className="block text-[11px] text-slate-500 mb-1">{kind === 'driver' ? (vehicleType === 'moto' ? 'Moto (modelo e cor)' : 'Carro (modelo e cor)') : 'Veículo de carga (modelo)'}</span>
           <input required value={vehicle} onChange={(e) => setVehicle(e.target.value)} className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
         </label>
         <label className="block">
@@ -92,6 +162,42 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
           <span className="block text-[11px] text-slate-500 mb-1">Celular com DDD</span>
           <input required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(11) 91234-5678" className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
         </label>
+        <label className="block">
+          <span className="block text-[11px] text-slate-500 mb-1">Ano de fabricação</span>
+          <input
+            required
+            inputMode="numeric"
+            maxLength={4}
+            value={vehicleYear}
+            onChange={(e) => setVehicleYear(e.target.value.replace(/\D/g, ''))}
+            placeholder={kind === 'driver' ? `${minYear} ou mais novo` : '2018'}
+            className={`w-full min-h-[40px] rounded-xl border bg-transparent px-3 font-mono-num ${tooOld ? 'border-red-400' : 'border-slate-200 dark:border-slate-700'}`}
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[11px] text-slate-500 mb-1">Validade da CNH</span>
+          <input required type="date" value={cnhExpiry} onChange={(e) => setCnhExpiry(e.target.value)} className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
+        </label>
+        <label className="block">
+          <span className="block text-[11px] text-slate-500 mb-1">Cidade onde vai trabalhar</span>
+          <input required value={city} onChange={(e) => setCity(e.target.value)} placeholder="Ex.: Campinas" className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
+        </label>
+        <label className="block">
+          <span className="block text-[11px] text-slate-500 mb-1">UF</span>
+          <input
+            required
+            maxLength={2}
+            value={uf}
+            onChange={(e) => setUf(e.target.value.replace(/[^a-zA-Z]/g, '').toUpperCase())}
+            placeholder="SP"
+            className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 uppercase"
+          />
+        </label>
+        {kind === 'driver' && (
+          <p className={`sm:col-span-2 text-[11px] ${tooOld ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
+            {tooOld ? 'Veículo mais antigo do que o permitido. ' : ''}Aceitamos fabricação a partir de {minYear} {city && uf ? `em ${city}/${uf}` : ''} · {ageRule.source}
+          </p>
+        )}
         {kind === 'trucker' && (
           <>
             <label className="block">
@@ -150,9 +256,23 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
           </label>
         ))}
       </div>
+      <div className="space-y-1.5">
+        <div className="text-[11px] text-slate-500">Declarações obrigatórias</div>
+        {declarationSet.map((d) => (
+          <label key={d.id} className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={Boolean(checks[d.id])}
+              onChange={(e) => setChecks((c) => ({ ...c, [d.id]: e.target.checked }))}
+              className="mt-0.5 w-4 h-4 shrink-0"
+            />
+            <span className="text-slate-700 dark:text-slate-300">{d.label}</span>
+          </label>
+        ))}
+      </div>
       <button
         type="submit"
-        disabled={busy !== null || DOCS[kind].some((d) => !sent[d.id])}
+        disabled={busy !== null || DOCS[kind].some((d) => !sent[d.id]) || !allChecked || tooOld}
         className="w-full min-h-[44px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-50 cursor-pointer"
       >
         {busy === 'apply' ? 'Enviando...' : 'Enviar cadastro para análise'}

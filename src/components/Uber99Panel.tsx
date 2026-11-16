@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { SosButton } from './SosButton.tsx';
+import { TripSafetyBar } from './TripSafetyBar.tsx';
 import { openReceipt } from '../lib/receipt.ts';
 import { api } from '../lib/session.ts';
 import {
@@ -180,9 +181,19 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-emerald-600">
-                  {myDriving.status === 'accepted' && 'Indo buscar o passageiro'}
-                  {myDriving.status === 'arriving' && 'Aguardando o passageiro no embarque'}
-                  {myDriving.status === 'in_progress' && 'Em viagem'}
+                  {myDriving.delivery ? (
+                    <>
+                      {myDriving.status === 'accepted' && 'Entrega · indo até a loja'}
+                      {myDriving.status === 'arriving' && 'Entrega · na loja, retire o pedido'}
+                      {myDriving.status === 'in_progress' && 'Entrega · levando ao cliente'}
+                    </>
+                  ) : (
+                    <>
+                      {myDriving.status === 'accepted' && 'Indo buscar o passageiro'}
+                      {myDriving.status === 'arriving' && 'Aguardando o passageiro no embarque'}
+                      {myDriving.status === 'in_progress' && 'Em viagem'}
+                    </>
+                  )}
                 </div>
                 <h5 className="text-sm font-bold text-slate-900 dark:text-white">
                   {myDriving.passengerName} <span className="text-xs text-amber-500">★ {myDriving.passengerRating ?? 5}</span>
@@ -193,6 +204,27 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <div className="text-xs text-slate-500">
                   Pagamento: {myDriving.paymentMethod === 'cash' ? 'dinheiro (receba do passageiro)' : 'carteira Froc (cai no seu saldo ao finalizar)'}
                 </div>
+                {myDriving.delivery && (
+                  <div className="mt-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-2 text-xs text-slate-700 dark:text-slate-200 space-y-0.5">
+                    <div>
+                      <strong>Coleta:</strong> {myDriving.delivery.merchantName} · {myDriving.origin.name}
+                    </div>
+                    <div>
+                      <strong>Entregar para:</strong> {myDriving.delivery.recipientName}
+                      {myDriving.delivery.recipientPhone && (
+                        <>
+                          {' · '}
+                          <a href={`tel:${myDriving.delivery.recipientPhone.replace(/[^\d+]/g, '')}`} className="underline font-semibold">
+                            {myDriving.delivery.recipientPhone}
+                          </a>
+                        </>
+                      )}
+                    </div>
+                    {myDriving.delivery.items && <div>Itens: {myDriving.delivery.items}</div>}
+                    {myDriving.delivery.note && <div>Obs.: {myDriving.delivery.note}</div>}
+                    {myDriving.delivery.orderRef && <div>Pedido: {myDriving.delivery.orderRef}</div>}
+                  </div>
+                )}
               </div>
               <div className="text-right shrink-0 text-base font-bold text-emerald-600 font-mono-num">{formatBRL(myDriving.price)}</div>
             </div>
@@ -235,6 +267,13 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               refId={myDriving.id}
               shareText={`Passageiro ${myDriving.passengerName}, de ${myDriving.origin.name} para ${myDriving.destination.name}. Meu carro: ${profile.driverVehicle} placa ${profile.driverPlate}.`}
             />
+            <TripSafetyBar
+              kind="ride"
+              tripId={myDriving.id}
+              me="driver"
+              recording={myDriving.recording}
+              shareText={`Estou dirigindo pela Froc: ${profile.driverVehicle} placa ${profile.driverPlate}, de ${myDriving.origin.name.split('·')[0]} para ${myDriving.destination.name.split('·')[0]}.`}
+            />
             <div className="flex flex-wrap gap-2">
               {myDriving.status === 'accepted' && (
                 <button
@@ -245,7 +284,36 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   Cheguei ao embarque
                 </button>
               )}
-              {(myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
+              {myDriving.delivery && (myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
+                <button
+                  type="button"
+                  onClick={() => onRideAction(myDriving.id, 'start')}
+                  className="flex-1 min-h-[44px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Retirei o pedido na loja
+                </button>
+              )}
+              {myDriving.delivery && myDriving.status === 'in_progress' && (
+                <div className="flex w-full gap-2">
+                  <input
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={pinInputs[myDriving.id] || ''}
+                    onChange={(e) => setPinInputs((p) => ({ ...p, [myDriving.id]: e.target.value.replace(/\D/g, '') }))}
+                    placeholder="Código do cliente"
+                    className="w-36 min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 text-sm font-mono-num tracking-widest text-slate-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    disabled={(pinInputs[myDriving.id] || '').length !== 4}
+                    onClick={() => onRideAction(myDriving.id, 'complete', { pin: pinInputs[myDriving.id] || '' })}
+                    className="flex-1 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  >
+                    Confirmar entrega
+                  </button>
+                </div>
+              )}
+              {!myDriving.delivery && (myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
                 <div className="flex w-full gap-2">
                   <input
                     inputMode="numeric"
@@ -265,7 +333,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   </button>
                 </div>
               )}
-              {myDriving.status === 'in_progress' && (
+              {!myDriving.delivery && myDriving.status === 'in_progress' && (
                 <button
                   type="button"
                   onClick={() => onRideAction(myDriving.id, 'complete')}
@@ -324,6 +392,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   <div>
                     <strong className="text-slate-900 dark:text-sky-400">Destino:</strong> {ride.destination.name}
                   </div>
+                  {ride.delivery && (
+                    <div className="text-amber-700 dark:text-amber-300 font-semibold">
+                      Entrega de loja: retire em {ride.delivery.merchantName} e entregue para {ride.delivery.recipientName} (o cliente informa o código).
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -438,6 +511,15 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               kind="ride"
               refId={activeRide.id}
               shareText={`Motorista ${activeRide.driverName || ''}, ${activeRide.vehicleModel || ''} placa ${activeRide.vehiclePlate || ''}, de ${activeRide.origin.name} para ${activeRide.destination.name}.`}
+            />
+          )}
+          {activeRide.status !== 'searching' && (
+            <TripSafetyBar
+              kind="ride"
+              tripId={activeRide.id}
+              me="passenger"
+              recording={activeRide.recording}
+              shareText={`Motorista ${(activeRide.driverName || '').split(' ')[0]}, ${activeRide.vehicleModel || ''} placa ${activeRide.vehiclePlate || ''}.`}
             />
           )}
           {activeRide.status !== 'in_progress' && (

@@ -14,6 +14,8 @@ export interface PlatformSettings {
   pointsPerReal: number;
   /** Quantos pontos valem R$ 5 de crédito. */
   pointsPerRedeem: number;
+  /** Idade máxima do veículo de passageiro (anos de fabricação); a regra da cidade vale se for mais rígida. */
+  maxVehicleAgeYears: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   indriveOpenTimeoutMin: 30,
   pointsPerReal: 1,
   pointsPerRedeem: 100,
+  maxVehicleAgeYears: 10,
 };
 
 export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 'boolean'> = {
@@ -34,6 +37,7 @@ export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 
   indriveOpenTimeoutMin: [5, 240],
   pointsPerReal: [0, 10],
   pointsPerRedeem: [20, 10000],
+  maxVehicleAgeYears: [3, 25],
 };
 
 export const REDEEM_VALUE_CENTS = 500;

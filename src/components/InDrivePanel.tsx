@@ -1,4 +1,5 @@
 import { SosButton } from './SosButton.tsx';
+import { TripSafetyBar } from './TripSafetyBar.tsx';
 import React, { useMemo, useState } from 'react';
 import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
@@ -332,6 +333,13 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                       kind="indrive"
                       refId={m.id}
                       shareText={`Viagem negociada de ${m.origin.name} para ${m.destination.name}${chosen ? `, motorista ${chosen.driverName}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}` : ''}.`}
+                    />
+                    <TripSafetyBar
+                      kind="indrive"
+                      tripId={m.id}
+                      me={role === 'driver' ? 'driver' : 'passenger'}
+                      recording={m.recording}
+                      shareText={chosen ? `Motorista ${chosen.driverName.split(' ')[0]}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}.` : 'Viagem negociada pela Froc.'}
                     />
                     {role === 'driver' ? (
                       <button

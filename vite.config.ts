@@ -58,7 +58,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/legal\//, /^\/blog/, /^\/sitemap/, /^\/rss\.xml/, /^\/robots\.txt/, /^\/(corridas-por-aplicativo|caronas-intermunicipais|fretes-e-mudancas|seja-motorista)/],
+          navigateFallbackDenylist: [/^\/api\//, /^\/legal\//, /^\/blog/, /^\/sitemap/, /^\/rss\.xml/, /^\/robots\.txt/, /^\/(corridas-por-aplicativo|caronas-intermunicipais|fretes-e-mudancas|seja-motorista|como-funciona|regras-e-requisitos|perguntas-frequentes|desenvolvedores)/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

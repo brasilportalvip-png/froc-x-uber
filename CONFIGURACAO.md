@@ -102,6 +102,7 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 | GEMINI_API_KEY_2 e GEMINI_API_KEY_3 | não (recomendado) | chaves reservas de OUTRO projeto do Google AI Studio: assumem se a principal estourar a cota |
 | GOOGLE_SITE_VERIFICATION | para o Google Search Console | só o código da metatag (item 7) |
 | BING_SITE_VERIFICATION | para o Bing Webmaster | só o código da metatag (item 7) |
+| GOOGLE_SERVER_MAPS_KEY | não | chave do Google **só com a Geocoding API** e sem restrição de site (item 10) |
 
 ## 7. Equipe IA, atendimento e blog
 
@@ -162,6 +163,38 @@ Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` 
   cabeçalhos, todos os sitemaps e páginas, SEO). Para testar também o login, crie uma conta de **teste** e
   coloque `E2E_EMAIL` e `E2E_PASSWORD` no arquivo `.env` da pasta.
 
+## 10. Regras legais, segurança na viagem e Froc Entregas (v4)
+
+**Regras e leis (fonte única):** `src/data/legal.ts` alimenta as páginas públicas `/como-funciona`,
+`/regras-e-requisitos`, `/perguntas-frequentes` e `/desenvolvedores` **e** o conhecimento dos 20 agentes de IA.
+Mudou uma regra? Altere só esse arquivo.
+
+**Cadastro de motorista:** CNH com EAR, CRLV, **certidão de antecedentes**, ano de fabricação, cidade/UF, validade da CNH
+e declarações (EAR, INSS, seguro APP; moto: Lei 12.009). O ano é conferido sozinho: padrão Froc **até 10 anos**
+(Admin → Configurações → "Idade máxima do veículo"); onde a cidade é mais rígida, vale a dela (São Paulo: 8 anos).
+CNH vencida = motorista não fica online. Moto só recebe Froc Moto e entregas; carro não recebe Froc Moto.
+Motorista com nota abaixo de 4,5 depois de 20 avaliações aparece em Admin → Usuários como **REVISAR QUALIDADE**.
+
+**Mapa:** antes de pedir, o passageiro vê os carros online por perto (posição deslocada ~100 m por privacidade);
+depois do aceite, o carro do motorista desliza e gira no mapa (o celular do motorista manda a posição a cada 4 s em viagem).
+
+**Gravar a viagem:** passageiro e motorista gravam áudio ou vídeo pelo próprio celular. O arquivo **não vai para a Froc**;
+fica no aparelho e a outra parte recebe um aviso. Limite do navegador: só grava com o app aberto na tela
+(o app mantém a tela acesa). Se o app fechar, a gravação é recuperada na próxima abertura.
+
+**Compartilhar a viagem:** botão "Compartilhar viagem ao vivo" gera um link `/acompanhar/...` (WhatsApp/SMS/copiar).
+Quem abre vê o carro ao vivo, sem login, sem telefones nem valores. O link expira 2 h depois do fim (máximo 24 h).
+
+**Froc Entregas (lojas):** Conta → "Tem loja, lanchonete ou restaurante?" → CNPJ (MEI aceito) e endereço de coleta →
+Admin aprova em Pendências (botão "conferir na Receita"). A loja chama entregas pelo painel ou pela API (`/api/v1`,
+documentação em `/desenvolvedores`), com chave `froc_live_...` (o banco guarda só o hash) e webhooks assinados.
+O entregador só conclui com o código que o cliente informa; aí o valor retido da loja vai para ele.
+Webhooks que falharem são reenviados pelo mesmo agendador do item 5 (`/api/cron/sweep`).
+
+**Atenção — fretes (Lei 15.485/2026):** plataformas que ofertam frete abaixo do piso mínimo da ANTT respondem junto,
+e cada viagem precisa de CIOT. O app já exige RNTRC e a declaração de CIOT/piso, mas **converse com um advogado**
+antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferência do piso por tabela da ANTT ainda são feitas fora do app.
+
 ## Como o dinheiro funciona
 
 | Situação | O que acontece |
@@ -173,7 +206,7 @@ Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` 
 | Saque | O valor sai do saldo; você faz o Pix e marca "Já paguei" no Admin |
 
 ## O que o Admin faz
-- **Pendências:** aprovar ou recusar motoristas e caminhoneiros (vendo os documentos) e pagar os saques.
+- **Pendências:** aprovar ou recusar motoristas, transportadores e lojas (vendo documentos, ano do veículo, cidade, validade da CNH e declarações) e pagar os saques.
 - **SOS:** alertas de emergência com telefone, viagem, placa e localização.
 - **Usuários:** buscar e bloquear contas, sempre com motivo.
 - **Relatórios:** serviços, volume e receita por modalidade.
@@ -181,7 +214,7 @@ Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` 
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 74 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 97 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`
