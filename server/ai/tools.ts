@@ -9,6 +9,7 @@ import type { AuthUser, FrocService } from '../services.ts';
 import type { SupportDesk } from '../support.ts';
 import type { BlogService } from '../blog.ts';
 import type { FunctionDeclaration } from './gemini.ts';
+import type { IdentityReviewer } from './identityCheck.ts';
 
 export type ToolLevel = 'ler' | 'agir' | 'confirmar';
 
@@ -21,6 +22,8 @@ export interface ToolContext {
   /** E-mail do administrador que está conversando (ou "agendador"). */
   requestedBy: string;
   configStatus?: () => Record<string, unknown>;
+  /** Leitura de documentos pela IA (conferência de CPF). */
+  identity?: IdentityReviewer;
   /** Grava uma ação para o administrador aprovar. */
   propose: (tool: string, args: Record<string, unknown>, summary: string) => Promise<{ proposalId: string }>;
 }
@@ -212,6 +215,49 @@ export const TOOLS: ToolDef[] = [
   },
 
   // ------------------------------------------------------------- confirmar
+  {
+    name: 'cpfs_para_conferir',
+    level: 'ler',
+    description: 'Lista contas com CPF só "cadastrado" (falta conferir) e contas com alerta de possível multiconta.',
+    run: async (ctx) => {
+      const store = ctx.service.store;
+      const [basic, all] = await Promise.all([store.query<Record<string, unknown>>('users', [['cpfStatus', '==', 'basic']], 100), store.query<Record<string, unknown>>('users', [], 500)]);
+      const view = (u: Record<string, unknown>) => ({
+        uid: u.uid,
+        nome: u.name,
+        cpf: u.cpfMasked,
+        motorista: u.driverStatus,
+        transportador: u.truckerStatus,
+        temDocumentoEnviado: Boolean(u.identityDocPath || (u.driverDocs as Record<string, string> | undefined)?.cnh || (u.truckerDocs as Record<string, string> | undefined)?.cnh),
+        ultimaConferenciaIA: u.aiDocCheck || null,
+      });
+      return { cpfParaConferir: basic.map(view), possivelMulticonta: all.filter((u) => u.multiAccountFlag).map((u) => ({ uid: u.uid, nome: u.name, alerta: u.multiAccountFlag, cpf: u.cpfMasked })) };
+    },
+  },
+  {
+    name: 'conferir_cpf_por_documento',
+    level: 'agir',
+    description: 'A IA lê a CNH (motorista) ou o documento com foto enviado pelo passageiro e compara CPF, nome e nascimento com o cadastro. Bateu: CPF verificado na hora. Não bateu: prepara "CPF não confere" para o dono.',
+    parameters: obj({ uid: S('uid da pessoa.') }, ['uid']),
+    run: async (ctx, a) => {
+      if (!ctx.identity) return { erro: 'Leitura de documentos indisponível agora.' };
+      const u = await ctx.service.store.get<Record<string, unknown>>('users', String(a.uid));
+      if (!u) return { erro: 'Usuário não encontrado.' };
+      const docs = { ...((u.truckerDocs as Record<string, string>) || {}), ...((u.driverDocs as Record<string, string>) || {}) };
+      const path = docs.cnh || String(u.identityDocPath || '');
+      if (!path) return { erro: 'Esta pessoa ainda não enviou documento com foto. Peça pelo atendimento: Conta > "Ganhe o selo de verificado".' };
+      return ctx.identity.review(String(a.uid), path, docs.cnh ? 'cnh' : 'documento');
+    },
+  },
+  {
+    name: 'marcar_cpf',
+    level: 'confirmar',
+    description: 'Marca o CPF como conferido ou como "não confere" (CPF de outra pessoa ou dados falsos: libera o CPF e pede novo cadastro). Só acontece quando o administrador aprovar.',
+    parameters: obj({ uid: S('uid da pessoa.'), decisao: S('"verified" (conferido) ou "rejected" (não confere).'), motivo: S('Obrigatório quando "rejected".') }, ['uid', 'decisao']),
+    summarize: (a) => `${a.decisao === 'verified' ? 'Marcar CPF como conferido' : 'CPF não confere'} (${a.uid})${a.motivo ? ` — ${a.motivo}` : ''}`,
+    execute: (s, admin, a) => s.adminSetCpfStatus(admin, a.uid, a.decisao, a.motivo ?? ''),
+    run: async () => ({}),
+  },
   {
     name: 'aprovar_ou_recusar_cadastro',
     level: 'confirmar',

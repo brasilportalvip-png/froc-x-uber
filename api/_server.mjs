@@ -222,7 +222,7 @@ var FAQ = [
   ["Posso pagar em dinheiro ou fazer Pix direto para o motorista?", "N\xE3o. Para acabar com golpes de troco, cobran\xE7a por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se algu\xE9m pedir pagamento por fora, n\xE3o pague e avise o Atendimento."],
   ["Como o motorista recebe e tira o dinheiro?", "O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no pr\xF3prio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. S\xF3 os ganhos podem ir para Pix; saldo de recarga \xE9 para usar no app."],
   ["E se o motorista n\xE3o aparecer?", "Se ningu\xE9m aceitar no tempo limite, o pedido \xE9 cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila."],
-  ["Por que preciso informar meu CPF?", "Para seguran\xE7a de todos: o motorista sabe que o passageiro \xE9 uma pessoa real e verificada, e voc\xEA sabe quem \xE9 o motorista. O CPF \xE9 conferido na Receita Federal junto com o nome e a data de nascimento. Os outros usu\xE1rios veem s\xF3 o selo de verificado, nunca o seu CPF."],
+  ["Por que preciso informar meu CPF?", "Para seguran\xE7a de todos: o motorista sabe que o passageiro \xE9 uma pessoa real e verificada, e voc\xEA sabe quem \xE9 o motorista. O CPF \xE9 conferido na Receita Federal junto com o nome e a data de nascimento. Os outros usu\xE1rios veem s\xF3 o selo de verificado, nunca o seu CPF. Para ganhar o selo verde, envie uma foto da CNH, RG ou CIN em Conta: a IA da Froc confere na hora."],
   ["Posso ter mais de uma conta?", "N\xE3o. Cada pessoa pode ter uma \xFAnica conta, ligada ao CPF. Trocar de celular ou de e-mail n\xE3o muda isso: entre na sua conta de sempre. Se perdeu o acesso, fale com o Atendimento."],
   ["Posso cancelar a corrida?", "Pode. Antes de algum motorista aceitar, e at\xE9 1 minuto depois do aceite, \xE9 gr\xE1tis. Entre 1 e 2 minutos, 50% do valor vai para o motorista. Depois de 2 minutos, ou com o motorista j\xE1 no embarque, ele recebe 100%. Se o motorista atrasar mais de 10 minutos al\xE9m do previsto, ou desistir, voc\xEA n\xE3o paga nada."],
   ["O motorista chegou e eu demorei. Pago a mais?", 'Quando o motorista chega, aparece um aviso na sua tela com um contador. O primeiro minuto \xE9 gr\xE1tis. Depois: +10% com 1 minuto, +30% com 2 minutos e +50% a partir de 3 minutos. Com 5 minutos, o motorista pode encerrar como "passageiro n\xE3o apareceu" e recebe 100%.'],
@@ -1185,6 +1185,7 @@ var FrocService = class {
       cpfMasked: user.cpfMasked || "",
       cpfSource: user.cpfSource || "",
       identityRequired: Boolean(this.deps.identity?.required),
+      identityDocCheck: user.aiDocCheck ? { status: String(user.aiDocCheck.status), reasons: user.aiDocCheck.reasons || [] } : null,
       merchantStatus: user.merchantStatus || "none",
       merchant: this.merchantView(user)
     };
@@ -1660,6 +1661,37 @@ var FrocService = class {
     await this.audit(auth, decision === "verified" ? "cpf_conferido" : "cpf_recusado", user.uid, { reason: why });
     return { ok: true };
   }
+  /** Passageiro envia foto de CNH, RG ou CIN para a IA conferir o CPF e ganhar o selo verde. */
+  async uploadIdentityDocument(auth, contentType, base64) {
+    const user = await this.ensureUser(auth);
+    if (!user.cpfKey) fail2(409, "cpf_required", "Cadastre o CPF primeiro.");
+    if (user.cpfStatus === "verified") fail2(409, "already_verified", "Seu CPF j\xE1 est\xE1 verificado.");
+    if (!ALLOWED_DOC_TYPES.has(String(contentType))) fail2(400, "invalid_file", "Envie foto (JPG, PNG, WEBP) ou PDF.");
+    if (!this.deps.files) fail2(503, "storage_not_configured", "Envio de documentos indispon\xEDvel agora.");
+    const bytes = Buffer.from(String(base64 || "").replace(/^data:[^,]*,/, ""), "base64");
+    if (!bytes.length || bytes.length > MAX_DOC_BYTES) fail2(400, "file_size", "O arquivo deve ter at\xE9 3 MB.");
+    const ext = String(contentType) === "application/pdf" ? "pdf" : String(contentType).split("/")[1];
+    const path = `froc-x-uber/identidade/${user.uid}/documento-${this.now().getTime()}.${ext}`;
+    await this.deps.files.save(path, String(contentType), new Uint8Array(bytes));
+    await this.store.update("users", user.uid, { identityDocPath: path });
+    return { path };
+  }
+  /**
+   * Resultado da leitura do documento pela IA. Bateu tudo (CPF, nome, nascimento): verificado
+   * na hora. Não bateu: fica registrado para a equipe (a IA prepara "CPF não confere").
+   */
+  async recordDocumentCheck(uid, result, source) {
+    const user = await this.store.get("users", uid) ?? fail2(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
+    const patch = { aiDocCheck: JSON.parse(JSON.stringify({ ...result, source })) };
+    const upgrade = result.ok && user.cpfStatus === "basic";
+    if (upgrade) Object.assign(patch, { cpfStatus: "verified", cpfSource: source === "cnh" ? "ia_cnh" : "ia_documento", cpfVerifiedAt: this.iso() });
+    await this.store.update("users", uid, patch);
+    await this.audit({ uid: "ia:cadastros", email: "ia+cadastros@froc", emailVerified: true, agent: "Analista de Cadastros" }, result.ok ? "cpf_conferido_ia" : `cpf_${result.status}_ia`, uid, {
+      fonte: source,
+      motivos: result.reasons
+    });
+    return { upgraded: upgrade };
+  }
   /** Dados do CPF para a equipe conferir (só admin). */
   async adminIdentity(auth, uid) {
     this.requireAdmin(auth);
@@ -1710,6 +1742,7 @@ var FrocService = class {
           cpf: identity ? String(identity.cpf) : "",
           legalName: identity ? String(identity.legalName) : "",
           cpfStatus: u.cpfStatus || "none",
+          aiDocCheck: u.aiDocCheck,
           truckType: kind === "trucker" ? u.truckType : void 0,
           companyName: kind === "trucker" ? u.companyName : void 0,
           rntrc: kind === "trucker" ? u.rntrc : void 0,
@@ -2761,6 +2794,7 @@ var FrocService = class {
       cpfMasked: u.cpfMasked || "",
       cpfSource: u.cpfSource || "",
       multiAccountFlag: u.multiAccountFlag || "",
+      aiDocCheck: u.aiDocCheck || null,
       merchantStatus: u.merchantStatus || "none"
     }));
   }
@@ -3562,7 +3596,7 @@ CADASTRO E CONTA
 - Transportador: CNH com EAR, CRLV, comprovante ANTT, certid\xE3o de antecedentes, n\xFAmero do RNTRC, tipo de ve\xEDculo e placa; declara conhecer o CIOT e o piso m\xEDnimo de frete da ANTT.
 - Loja (Froc Entregas): Conta > Froc para lojas; CNPJ (MEI aceito), telefone, categoria e endere\xE7o de coleta. Aprovada, chama entregas pelo painel ou pela API (/desenvolvedores).
 - CNH vencida: o motorista n\xE3o consegue ficar online at\xE9 enviar a nova pelo Atendimento.
-- CPF obrigat\xF3rio para TODOS (passageiro, motorista, loja): depois de criar a conta aparece "Confirme quem voc\xEA \xE9" (nome completo, CPF, nascimento). Conferido na Receita (Serpro) quando ligado: CPF + nascimento t\xEAm de existir, situa\xE7\xE3o Regular e nome batendo; sem isso, fica "cadastrado" e a equipe confere. Menor de 18 n\xE3o cria conta.
+- CPF obrigat\xF3rio para TODOS (passageiro, motorista, loja): depois de criar a conta aparece "Confirme quem voc\xEA \xE9" (nome completo, CPF, nascimento). Conferido na Receita (Serpro) quando ligado: CPF + nascimento t\xEAm de existir, situa\xE7\xE3o Regular e nome batendo; sem isso, fica "cadastrado" e a Equipe IA confere lendo o documento com foto (CNH do motorista automaticamente; passageiro envia CNH/RG/CIN em Conta > "Ganhe o selo de verificado"). Bateu tudo: verificado na hora; n\xE3o bateu: fica para o dono confirmar. Menor de 18 n\xE3o cria conta.
 - Uma pessoa, uma conta: o CPF s\xF3 pode estar em uma conta (trocar de celular/e-mail n\xE3o adianta). Se a pessoa diz que o CPF "j\xE1 tem conta", oriente entrar na conta antiga (o app mostra o e-mail mascarado) ou chamar a equipe. Conta bloqueada bloqueia o CPF. Nunca pe\xE7a nem repita o CPF completo no chat.
 - Selos: o motorista v\xEA "Passageiro verificado"; o passageiro v\xEA "Motorista (documentos conferidos)".
 - Fotos grandes s\xE3o reduzidas automaticamente; PDF at\xE9 3 MB.
@@ -4643,7 +4677,8 @@ function createApp(options) {
       const hourBr = ((/* @__PURE__ */ new Date()).getUTCHours() + 21) % 24;
       if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
       const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
-      return { sweep, daily, images };
+      const cpf = options.platform ? await ((await options.platform()).identity?.reviewPending(2) ?? Promise.resolve(null)).catch((e) => ({ erro: String(e?.message || e) })) : null;
+      return { sweep, daily, images, cpf };
     })
   );
   const site = () => (options.siteUrl?.() || "").replace(/\/+$/, "");
@@ -4777,6 +4812,18 @@ function createApp(options) {
     guard("cpf", 8, 864e5, "Muitas tentativas de CPF hoje. Tente amanh\xE3 ou fale com o Atendimento."),
     wrap(async (req) => (await service()).registerCpf(a(req), req.body || {}, req.headers["x-froc-device"]))
   );
+  api.post(
+    "/identity/document",
+    rateLimit(5, 6e4),
+    guard("iddoc", 6, 864e5, "Muitos envios de documento hoje. Tente amanh\xE3."),
+    wrap(async (req) => {
+      const svc = await service();
+      const { path } = await svc.uploadIdentityDocument(a(req), req.body?.contentType, req.body?.dataBase64);
+      const reviewer = options.platform ? (await options.platform()).identity : void 0;
+      const result = reviewer ? await reviewer.review(a(req).uid, path, "documento") : { ok: false, status: "ia_indisponivel", reasons: ["A confer\xEAncia autom\xE1tica est\xE1 desligada; a equipe vai conferir."] };
+      return { result, profile: svc.profileView(await svc.store.get("users", a(req).uid), a(req)) };
+    })
+  );
   api.post("/device", rateLimit(10, 6e4), wrap(async (req) => (await service()).recordDevice(a(req), req.headers["x-froc-device"])));
   api.post("/rides/quote", wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
   api.get("/drivers/nearby", rateLimit(40, 6e4), wrap(async (req) => (await service()).nearbyDrivers(a(req), req.query.lat, req.query.lng)));
@@ -4815,7 +4862,21 @@ function createApp(options) {
     guard("docs", 40, 864e5, "Muitos envios de documentos hoje. Tente amanh\xE3."),
     wrap(async (req) => (await service()).uploadDocument(a(req), req.body?.kind, req.body?.docType, req.body?.contentType, req.body?.dataBase64))
   );
-  api.post("/driver/apply", limited, guard("apply", 10, 864e5, "Muitas tentativas de cadastro hoje."), wrap(async (req) => (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {})));
+  api.post(
+    "/driver/apply",
+    limited,
+    guard("apply", 10, 864e5, "Muitas tentativas de cadastro hoje."),
+    wrap(async (req) => {
+      const profile = await (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {});
+      if (options.platform && req.body?.kind !== "merchant") {
+        const reviewer = (await options.platform()).identity;
+        const u = await (await service()).store.get("users", a(req).uid);
+        const cnh = (req.body?.kind === "trucker" ? u?.truckerDocs : u?.driverDocs)?.cnh;
+        if (reviewer && cnh) await reviewer.review(a(req).uid, cnh, "cnh").catch((e) => console.warn("Leitura da CNH falhou:", e));
+      }
+      return profile;
+    })
+  );
   api.post("/merchant/apply", limited, guard("apply", 10, 864e5, "Muitas tentativas de cadastro hoje."), wrap(async (req) => (await service()).applyAsMerchant(a(req), req.body || {})));
   const merchantStore = async (req) => {
     await (await service()).approvedMerchant(a(req).uid);
@@ -5231,6 +5292,7 @@ import { randomUUID as randomUUID4 } from "node:crypto";
 // server/ai/agents.ts
 var READ_ALL = [
   "painel_geral",
+  "cpfs_para_conferir",
   "relatorio_financeiro",
   "cadastros_pendentes",
   "saques_pendentes",
@@ -5310,8 +5372,8 @@ var AGENTS = [
     name: "Analista de Cadastros",
     emoji: "\u{1FAAA}",
     area: "Opera\xE7\xE3o",
-    mission: "Analisa cadastros pendentes: confere se todos os documentos foram enviados, placa no padr\xE3o, telefone, RNTRC para cargas e coer\xEAncia dos dados. Prepara aprova\xE7\xE3o ou recusa (com motivo claro) para o administrador confirmar. Voc\xEA n\xE3o v\xEA as fotos dos documentos: diga isso e pe\xE7a ao administrador para conferir as imagens antes de aprovar.",
-    tools: [...READ_ALL, ...COMMS, "aprovar_ou_recusar_cadastro"]
+    mission: 'Analisa cadastros pendentes e CONFERE CPFs: confere documentos enviados, placa, telefone, RNTRC e coer\xEAncia. Use "conferir_cpf_por_documento" para a IA ler a CNH (ou o documento que o passageiro enviou) e comparar CPF, nome e nascimento com o cadastro: se bater, o CPF fica verificado na hora; se n\xE3o bater, fica preparado "CPF n\xE3o confere" para o dono confirmar com 1 clique. A leitura tamb\xE9m mostra a validade da CNH e se tem EAR \u2014 use isso ao preparar a aprova\xE7\xE3o de motoristas. Use "cpfs_para_conferir" para ver quem falta e "possivel_multiconta" para casos suspeitos. Aprova\xE7\xE3o e recusa de cadastro continuam com 1 clique do dono.',
+    tools: [...READ_ALL, ...COMMS, "aprovar_ou_recusar_cadastro", "conferir_cpf_por_documento", "marcar_cpf"]
   },
   {
     id: "financeiro",
@@ -5327,7 +5389,7 @@ var AGENTS = [
     emoji: "\u{1F575}\uFE0F",
     area: "Seguran\xE7a",
     mission: "Procura sinais de fraude: contas com muitos cancelamentos, saques logo ap\xF3s recargas, avalia\xE7\xF5es muito baixas, dados repetidos. Explica a evid\xEAncia e prepara bloqueio para o administrador confirmar quando houver motivo concreto.",
-    tools: [...READ_ALL, ...COMMS, "bloquear_ou_desbloquear_usuario"]
+    tools: [...READ_ALL, ...COMMS, "bloquear_ou_desbloquear_usuario", "conferir_cpf_por_documento", "marcar_cpf"]
   },
   {
     id: "seguranca-sos",
@@ -5591,6 +5653,49 @@ var TOOLS = [
   },
   // ------------------------------------------------------------- confirmar
   {
+    name: "cpfs_para_conferir",
+    level: "ler",
+    description: 'Lista contas com CPF s\xF3 "cadastrado" (falta conferir) e contas com alerta de poss\xEDvel multiconta.',
+    run: async (ctx) => {
+      const store = ctx.service.store;
+      const [basic, all] = await Promise.all([store.query("users", [["cpfStatus", "==", "basic"]], 100), store.query("users", [], 500)]);
+      const view = (u) => ({
+        uid: u.uid,
+        nome: u.name,
+        cpf: u.cpfMasked,
+        motorista: u.driverStatus,
+        transportador: u.truckerStatus,
+        temDocumentoEnviado: Boolean(u.identityDocPath || u.driverDocs?.cnh || u.truckerDocs?.cnh),
+        ultimaConferenciaIA: u.aiDocCheck || null
+      });
+      return { cpfParaConferir: basic.map(view), possivelMulticonta: all.filter((u) => u.multiAccountFlag).map((u) => ({ uid: u.uid, nome: u.name, alerta: u.multiAccountFlag, cpf: u.cpfMasked })) };
+    }
+  },
+  {
+    name: "conferir_cpf_por_documento",
+    level: "agir",
+    description: 'A IA l\xEA a CNH (motorista) ou o documento com foto enviado pelo passageiro e compara CPF, nome e nascimento com o cadastro. Bateu: CPF verificado na hora. N\xE3o bateu: prepara "CPF n\xE3o confere" para o dono.',
+    parameters: obj({ uid: S("uid da pessoa.") }, ["uid"]),
+    run: async (ctx, a) => {
+      if (!ctx.identity) return { erro: "Leitura de documentos indispon\xEDvel agora." };
+      const u = await ctx.service.store.get("users", String(a.uid));
+      if (!u) return { erro: "Usu\xE1rio n\xE3o encontrado." };
+      const docs = { ...u.truckerDocs || {}, ...u.driverDocs || {} };
+      const path = docs.cnh || String(u.identityDocPath || "");
+      if (!path) return { erro: 'Esta pessoa ainda n\xE3o enviou documento com foto. Pe\xE7a pelo atendimento: Conta > "Ganhe o selo de verificado".' };
+      return ctx.identity.review(String(a.uid), path, docs.cnh ? "cnh" : "documento");
+    }
+  },
+  {
+    name: "marcar_cpf",
+    level: "confirmar",
+    description: 'Marca o CPF como conferido ou como "n\xE3o confere" (CPF de outra pessoa ou dados falsos: libera o CPF e pede novo cadastro). S\xF3 acontece quando o administrador aprovar.',
+    parameters: obj({ uid: S("uid da pessoa."), decisao: S('"verified" (conferido) ou "rejected" (n\xE3o confere).'), motivo: S('Obrigat\xF3rio quando "rejected".') }, ["uid", "decisao"]),
+    summarize: (a) => `${a.decisao === "verified" ? "Marcar CPF como conferido" : "CPF n\xE3o confere"} (${a.uid})${a.motivo ? ` \u2014 ${a.motivo}` : ""}`,
+    execute: (s, admin, a) => s.adminSetCpfStatus(admin, a.uid, a.decisao, a.motivo ?? ""),
+    run: async () => ({})
+  },
+  {
     name: "aprovar_ou_recusar_cadastro",
     level: "confirmar",
     description: "Prepara a aprova\xE7\xE3o ou recusa de um cadastro de motorista/transportador. S\xF3 acontece quando o administrador aprovar.",
@@ -5752,6 +5857,7 @@ ${platformKnowledge(cfg)}`;
       auth,
       requestedBy,
       configStatus: this.d.configStatus,
+      identity: this.d.identity,
       propose: async (tool, args, summary) => {
         const id = randomUUID4();
         await this.d.store.set("ai_proposals", id, {
@@ -6013,6 +6119,111 @@ function trimHistory(contents, max = MAX_HISTORY) {
   return contents.slice(start);
 }
 
+// server/ai/identityCheck.ts
+var PROMPT = `Voc\xEA confere documentos brasileiros para cadastro de um app de mobilidade.
+Leia SOMENTE o que est\xE1 escrito na imagem/PDF. N\xE3o invente, n\xE3o complete dados que n\xE3o aparecem.
+Responda apenas com JSON neste formato:
+{"legivel":true|false,"tipo":"CNH"|"RG"|"CIN"|"outro","nome":"","cpf":"s\xF3 n\xFAmeros","nascimento":"AAAA-MM-DD","validade":"AAAA-MM-DD ou vazio","ear":true|false|null,"pareceAdulterado":true|false,"observacoes":"curto"}
+- "ear": true se a CNH tiver a observa\xE7\xE3o "EAR" (exerce atividade remunerada) no campo de observa\xE7\xF5es; false se for CNH sem EAR; null se n\xE3o for CNH.
+- "pareceAdulterado": true s\xF3 se houver sinal claro (texto sobreposto, foto colada, montagem, print de tela de outro documento).
+- Se n\xE3o conseguir ler algum campo, deixe vazio e marque "legivel": false quando nome ou CPF n\xE3o forem lidos.`;
+var IdentityReviewer = class _IdentityReviewer {
+  constructor(deps) {
+    this.store = deps.store;
+    this.service = deps.service;
+    this.llm = deps.llm;
+    this.files = deps.files;
+  }
+  get available() {
+    return Boolean(this.llm.configured && this.files?.read);
+  }
+  /** A IA lê o documento. */
+  async extract(bytes, mimeType) {
+    const out = await this.llm.generate({
+      system: PROMPT,
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: Buffer.from(bytes).toString("base64") } }, { text: "Leia este documento." }] }],
+      json: true,
+      temperature: 0,
+      maxOutputTokens: 600,
+      deadlineMs: 4e4
+    });
+    const j = parseJsonLoose(out.text);
+    return {
+      legivel: j.legivel === true,
+      tipo: String(j.tipo || ""),
+      nome: String(j.nome || ""),
+      cpf: onlyDigits(j.cpf),
+      nascimento: String(j.nascimento || ""),
+      validade: String(j.validade || ""),
+      ear: typeof j.ear === "boolean" ? j.ear : null,
+      pareceAdulterado: j.pareceAdulterado === true,
+      observacoes: String(j.observacoes || "").slice(0, 200)
+    };
+  }
+  /** Compara o que a IA leu com o cadastro do CPF. A decisão é do código (comparação exata). */
+  static compare(x, identity) {
+    const base = { tipo: x.tipo, ear: x.ear, validade: x.validade };
+    if (!x.legivel || !x.cpf || !x.nome) return { ok: false, status: "ilegivel", reasons: ["N\xE3o deu para ler o documento. Envie uma foto n\xEDtida, sem reflexo, com o documento inteiro."], ...base };
+    const reasons = [];
+    if (x.cpf !== onlyDigits(identity.cpf)) reasons.push("O CPF do documento \xE9 diferente do CPF cadastrado.");
+    if (x.nascimento && x.nascimento !== identity.birthDate) reasons.push("A data de nascimento do documento \xE9 diferente da cadastrada.");
+    const nameOk = namesMatch(String(identity.legalName || identity.declaredName || ""), x.nome) || namesMatch(String(identity.declaredName || ""), x.nome);
+    if (!nameOk) reasons.push("O nome do documento n\xE3o bate com o nome cadastrado.");
+    if (x.pareceAdulterado) reasons.push("O documento parece ter sido alterado.");
+    if (!x.nascimento) reasons.push("N\xE3o deu para ler a data de nascimento.");
+    return reasons.length ? { ok: false, status: "nao_confere", reasons, ...base } : { ok: true, status: "verificado", reasons: [], ...base };
+  }
+  /** Confere um documento guardado no Storage contra o CPF da pessoa e aplica o resultado. */
+  async review(uid, path, source) {
+    const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const identity = await this.store.get("identities", uid);
+    if (!identity) return { ok: false, status: "sem_cpf", reasons: ["A pessoa ainda n\xE3o cadastrou o CPF."], checkedAt };
+    if (!this.available) return { ok: false, status: "ia_indisponivel", reasons: ["IA ou armazenamento indispon\xEDvel agora."], checkedAt };
+    const file = await this.files.read(path);
+    if (!file) return { ok: false, status: "sem_documento", reasons: ["Documento n\xE3o encontrado."], checkedAt };
+    let x;
+    try {
+      x = await this.extract(file.bytes, file.contentType);
+    } catch (e) {
+      return { ok: false, status: "ia_indisponivel", reasons: [`A IA n\xE3o conseguiu ler agora (${String(e?.message || e).slice(0, 120)}). Tenta de novo na pr\xF3xima rodada.`], checkedAt };
+    }
+    const result = { ..._IdentityReviewer.compare(x, identity), checkedAt };
+    await this.service.recordDocumentCheck(uid, result, source);
+    if (result.status === "nao_confere") {
+      const id = `cpf-${uid}-${checkedAt.slice(0, 10)}`;
+      await this.store.set("ai_proposals", id, {
+        id,
+        tool: "marcar_cpf",
+        args: { uid, decisao: "rejected", motivo: result.reasons.join(" ") },
+        summary: `CPF n\xE3o confere (${uid}) \u2014 ${result.reasons.join(" ")}`,
+        agentId: "cadastros",
+        agentName: "Analista de Cadastros",
+        requestedBy: "agendador",
+        status: "pending",
+        createdAt: checkedAt
+      });
+    }
+    return result;
+  }
+  /** Rotina do agendador: confere a CNH de motoristas/transportadores pendentes que a IA ainda não leu. */
+  async reviewPending(limit = 3) {
+    if (!this.available) return { conferidos: 0, motivo: "IA ou armazenamento indispon\xEDvel" };
+    const [drivers, truckers] = await Promise.all([
+      this.store.query("users", [["driverStatus", "==", "pending"]], 100),
+      this.store.query("users", [["truckerStatus", "==", "pending"]], 100)
+    ]);
+    const todo = [...drivers, ...truckers].filter((u) => !u.aiDocCheck?.checkedAt && u.cpfKey).slice(0, limit);
+    const out = [];
+    for (const u of todo) {
+      const docs = (u.driverStatus === "pending" ? u.driverDocs : u.truckerDocs) || {};
+      if (!docs.cnh) continue;
+      const r = await this.review(String(u.uid), docs.cnh, "cnh").catch((e) => ({ status: `erro: ${String(e?.message || e).slice(0, 80)}` }));
+      out.push({ uid: String(u.uid), status: r.status });
+    }
+    return { conferidos: out.length, resultados: out };
+  }
+};
+
 // server/geocode.ts
 function createGoogleGeocoder(apiKey, fetchImpl = fetch) {
   if (!apiKey) return void 0;
@@ -6068,8 +6279,9 @@ function getPlatform() {
     const support = new SupportDesk(store);
     const images = createGeminiImages({ apiKeys: geminiKeysFromEnv(process.env), model: process.env.GEMINI_IMAGE_MODEL || void 0 });
     const blog = new BlogService(store, { llm, images, files: sharedFiles, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
-    const team = new AiTeam({ store, service, support, blog, llm, configStatus });
-    return { store, service, support, blog, team };
+    const identity = new IdentityReviewer({ store, service, llm, files: sharedFiles });
+    const team = new AiTeam({ store, service, support, blog, llm, configStatus, identity });
+    return { store, service, support, blog, team, identity };
   });
   platformPromise.catch(() => {
     platformPromise = null;

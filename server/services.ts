@@ -248,6 +248,10 @@ interface UserDoc extends Doc {
   cpfVerifiedAt?: string;
   legalName?: string;
   multiAccountFlag?: string;
+  /** Documento com foto que o passageiro enviou para a IA conferir o CPF. */
+  identityDocPath?: string;
+  /** Última leitura de documento feita pela IA (resultado, EAR e validade da CNH). */
+  aiDocCheck?: Doc;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -505,6 +509,7 @@ export class FrocService {
       cpfMasked: user.cpfMasked || '',
       cpfSource: user.cpfSource || '',
       identityRequired: Boolean(this.deps.identity?.required),
+      identityDocCheck: user.aiDocCheck ? { status: String(user.aiDocCheck.status), reasons: (user.aiDocCheck.reasons as string[]) || [] } : null,
       merchantStatus: user.merchantStatus || 'none',
       merchant: this.merchantView(user),
     };
@@ -1029,6 +1034,39 @@ export class FrocService {
     return { ok: true };
   }
 
+  /** Passageiro envia foto de CNH, RG ou CIN para a IA conferir o CPF e ganhar o selo verde. */
+  async uploadIdentityDocument(auth: AuthUser, contentType: unknown, base64: unknown) {
+    const user = await this.ensureUser(auth);
+    if (!user.cpfKey) fail(409, 'cpf_required', 'Cadastre o CPF primeiro.');
+    if (user.cpfStatus === 'verified') fail(409, 'already_verified', 'Seu CPF já está verificado.');
+    if (!ALLOWED_DOC_TYPES.has(String(contentType))) fail(400, 'invalid_file', 'Envie foto (JPG, PNG, WEBP) ou PDF.');
+    if (!this.deps.files) fail(503, 'storage_not_configured', 'Envio de documentos indisponível agora.');
+    const bytes = Buffer.from(String(base64 || '').replace(/^data:[^,]*,/, ''), 'base64');
+    if (!bytes.length || bytes.length > MAX_DOC_BYTES) fail(400, 'file_size', 'O arquivo deve ter até 3 MB.');
+    const ext = String(contentType) === 'application/pdf' ? 'pdf' : String(contentType).split('/')[1];
+    const path = `froc-x-uber/identidade/${user.uid}/documento-${this.now().getTime()}.${ext}`;
+    await this.deps.files!.save(path, String(contentType), new Uint8Array(bytes));
+    await this.store.update('users', user.uid, { identityDocPath: path });
+    return { path };
+  }
+
+  /**
+   * Resultado da leitura do documento pela IA. Bateu tudo (CPF, nome, nascimento): verificado
+   * na hora. Não bateu: fica registrado para a equipe (a IA prepara "CPF não confere").
+   */
+  async recordDocumentCheck(uid: string, result: { ok: boolean; status: string; reasons: string[]; tipo?: string; ear?: boolean | null; validade?: string; checkedAt: string }, source: 'cnh' | 'documento') {
+    const user = (await this.store.get<UserDoc>('users', uid)) ?? fail(404, 'not_found', 'Usuário não encontrado.');
+    const patch: Doc = { aiDocCheck: JSON.parse(JSON.stringify({ ...result, source })) };
+    const upgrade = result.ok && user.cpfStatus === 'basic';
+    if (upgrade) Object.assign(patch, { cpfStatus: 'verified', cpfSource: source === 'cnh' ? 'ia_cnh' : 'ia_documento', cpfVerifiedAt: this.iso() });
+    await this.store.update('users', uid, patch);
+    await this.audit({ uid: 'ia:cadastros', email: 'ia+cadastros@froc', emailVerified: true, agent: 'Analista de Cadastros' }, result.ok ? 'cpf_conferido_ia' : `cpf_${result.status}_ia`, uid, {
+      fonte: source,
+      motivos: result.reasons,
+    });
+    return { upgraded: upgrade };
+  }
+
   /** Dados do CPF para a equipe conferir (só admin). */
   async adminIdentity(auth: AuthUser, uid: unknown) {
     this.requireAdmin(auth);
@@ -1082,6 +1120,7 @@ export class FrocService {
           cpf: identity ? String(identity.cpf) : '',
           legalName: identity ? String(identity.legalName) : '',
           cpfStatus: u.cpfStatus || 'none',
+          aiDocCheck: u.aiDocCheck as never,
           truckType: kind === 'trucker' ? u.truckType : undefined,
           companyName: kind === 'trucker' ? u.companyName : undefined,
           rntrc: kind === 'trucker' ? u.rntrc : undefined,
@@ -2210,6 +2249,7 @@ export class FrocService {
         cpfMasked: u.cpfMasked || '',
         cpfSource: u.cpfSource || '',
         multiAccountFlag: u.multiAccountFlag || '',
+        aiDocCheck: (u.aiDocCheck as never) || null,
         merchantStatus: u.merchantStatus || 'none',
       }));
   }

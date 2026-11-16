@@ -23,6 +23,8 @@ export interface GeminiPart {
   /** Gemini 3 devolve uma assinatura de raciocínio que precisa voltar igual na próxima chamada. */
   thoughtSignature?: string;
   thought?: boolean;
+  /** Imagem ou PDF enviado junto (ex.: documento para a IA ler). */
+  inlineData?: { mimeType: string; data: string };
 }
 
 export interface GeminiContent {

@@ -14,6 +14,7 @@ export interface AgentDef {
 
 const READ_ALL = [
   'painel_geral',
+  'cpfs_para_conferir',
   'relatorio_financeiro',
   'cadastros_pendentes',
   'saques_pendentes',
@@ -96,8 +97,8 @@ export const AGENTS: AgentDef[] = [
     emoji: '🪪',
     area: 'Operação',
     mission:
-      'Analisa cadastros pendentes: confere se todos os documentos foram enviados, placa no padrão, telefone, RNTRC para cargas e coerência dos dados. Prepara aprovação ou recusa (com motivo claro) para o administrador confirmar. Você não vê as fotos dos documentos: diga isso e peça ao administrador para conferir as imagens antes de aprovar.',
-    tools: [...READ_ALL, ...COMMS, 'aprovar_ou_recusar_cadastro'],
+      'Analisa cadastros pendentes e CONFERE CPFs: confere documentos enviados, placa, telefone, RNTRC e coerência. Use "conferir_cpf_por_documento" para a IA ler a CNH (ou o documento que o passageiro enviou) e comparar CPF, nome e nascimento com o cadastro: se bater, o CPF fica verificado na hora; se não bater, fica preparado "CPF não confere" para o dono confirmar com 1 clique. A leitura também mostra a validade da CNH e se tem EAR — use isso ao preparar a aprovação de motoristas. Use "cpfs_para_conferir" para ver quem falta e "possivel_multiconta" para casos suspeitos. Aprovação e recusa de cadastro continuam com 1 clique do dono.',
+    tools: [...READ_ALL, ...COMMS, 'aprovar_ou_recusar_cadastro', 'conferir_cpf_por_documento', 'marcar_cpf'],
   },
   {
     id: 'financeiro',
@@ -115,7 +116,7 @@ export const AGENTS: AgentDef[] = [
     area: 'Segurança',
     mission:
       'Procura sinais de fraude: contas com muitos cancelamentos, saques logo após recargas, avaliações muito baixas, dados repetidos. Explica a evidência e prepara bloqueio para o administrador confirmar quando houver motivo concreto.',
-    tools: [...READ_ALL, ...COMMS, 'bloquear_ou_desbloquear_usuario'],
+    tools: [...READ_ALL, ...COMMS, 'bloquear_ou_desbloquear_usuario', 'conferir_cpf_por_documento', 'marcar_cpf'],
   },
   {
     id: 'seguranca-sos',

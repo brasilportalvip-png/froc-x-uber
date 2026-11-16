@@ -19,7 +19,7 @@ import { WalletAccountPanel } from './components/WalletAccountPanel.tsx';
 import { MerchantPanel } from './components/MerchantPanel.tsx';
 import { HelpLinks } from './components/HelpLinks.tsx';
 import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
-import { IdentityGate } from './components/IdentityGate.tsx';
+import { IdentityDocUpload, IdentityGate } from './components/IdentityGate.tsx';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
@@ -704,6 +704,8 @@ export default function App() {
                     onToast={showToast}
                   />
                 )}
+
+                {activeModule === 'wallet' && <IdentityDocUpload profile={state.profile} onDone={loadBootstrap} onToast={showToast} />}
 
                 {activeModule === 'wallet' && <HelpLinks />}
 

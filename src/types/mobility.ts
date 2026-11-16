@@ -348,6 +348,8 @@ export interface UserProfile {
   cpfSource?: string;
   /** Quando true, sem CPF a pessoa não pede nem oferece serviços. */
   identityRequired?: boolean;
+  /** Resultado da última conferência do documento pela IA. */
+  identityDocCheck?: { status: string; reasons: string[] } | null;
   driverOnline: boolean;
   driverVehicle: string;
   driverPlate: string;
@@ -389,6 +391,8 @@ export interface DriverApplicationView {
   pickupAddress?: string;
   /** CPF completo (só para a equipe comparar com a CNH). */
   cpf?: string;
+  /** O que a IA leu na CNH: resultado, EAR e validade. */
+  aiDocCheck?: { ok: boolean; status: string; reasons: string[]; ear?: boolean | null; validade?: string; checkedAt: string } | null;
   legalName?: string;
   cpfStatus?: string;
   plate: string;
@@ -463,6 +467,7 @@ export interface AdminUserRow {
   cpfMasked?: string;
   cpfSource?: string;
   multiAccountFlag?: string;
+  aiDocCheck?: { ok: boolean; status: string; reasons: string[]; checkedAt: string } | null;
 }
 
 export interface AdminReport {
