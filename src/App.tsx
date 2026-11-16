@@ -6,6 +6,7 @@ import { AdminPanel } from './components/AdminPanel.tsx';
 import { Landing } from './components/Landing.tsx';
 import { SupportChat } from './components/SupportChat.tsx';
 import { takeIntent } from './lib/launch.ts';
+import { LOCATING_NAME, currentLocationPoint, isUnsetDestination, unsetDestination } from './lib/currentLocation.ts';
 import { BlaBlaCarPanel } from './components/BlaBlaCarPanel.tsx';
 import { GoogleMapsView } from './components/GoogleMapsView.tsx';
 import { InDrivePanel } from './components/InDrivePanel.tsx';
@@ -47,8 +48,11 @@ export default function App() {
   const [showMobileMap, setShowMobileMap] = useState<boolean>(true);
   const [toast, setToast] = useState<string | null>(null);
 
-  const [origin, setOrigin] = useState<GeoPoint>(BRAZIL_LOCATIONS[0]);
-  const [destination, setDestination] = useState<GeoPoint>(BRAZIL_LOCATIONS[4]);
+  // O ponto A começa como "Localizando você..." e vira o endereço real assim que o GPS responde.
+  const [origin, setOrigin] = useState<GeoPoint>(() => ({ ...BRAZIL_LOCATIONS[0], id: 'locating', name: LOCATING_NAME }));
+  const gpsPoint = useRef<GeoPoint | null>(null);
+  // B começa vazio (Para onde vamos?) até a pessoa escolher o destino.
+  const [destination, setDestination] = useState<GeoPoint>(() => unsetDestination(BRAZIL_LOCATIONS[0]));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (msg: string) => {
@@ -67,6 +71,40 @@ export default function App() {
       /* navegador sem armazenamento */
     }
   }, [isDark]);
+
+  // Ponto A = onde a pessoa está agora (GPS no celular; no computador, a localização da rede).
+  // Roda ao entrar e quando a pessoa toca em "Usar minha localização atual".
+  const locateMe = useCallback(
+    async (manual: boolean) => {
+      if (manual) setOrigin((prev) => ({ ...prev, id: 'locating', name: LOCATING_NAME }));
+      try {
+        const point = await currentLocationPoint();
+        gpsPoint.current = point;
+        // Só troca se a pessoa ainda não escolheu outro ponto de partida enquanto o GPS respondia.
+        setOrigin((prev) => (prev.id === 'locating' ? point : prev));
+        // Destino ainda vazio acompanha a partida (o mapa fica em volta da pessoa).
+        setDestination((prev) => (isUnsetDestination(prev) ? unsetDestination(point) : prev));
+        if (manual) showToast(`Partida: ${point.name}`);
+      } catch (e) {
+        setOrigin((prev) => (prev.id === 'locating' ? gpsPoint.current ?? BRAZIL_LOCATIONS[0] : prev));
+        showToast(
+          (e as Error).message === 'negado'
+            ? 'Para preencher sua partida automaticamente, permita a localização para este site no navegador.'
+            : 'Não consegui pegar sua localização agora. Escolha o ponto de partida (A).',
+        );
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  useEffect(() => {
+    if (user) void locateMe(false);
+  }, [user, locateMe]);
+  useEffect(() => {
+    const onUse = () => void locateMe(true);
+    window.addEventListener('froc:use-my-location', onUse);
+    return () => window.removeEventListener('froc:use-my-location', onUse);
+  }, [locateMe]);
 
   // Quem tocou em "Quero ser motorista" / "Cadastrar meu veículo de carga" na página inicial
   // já entra no app com o perfil certo aberto.
@@ -196,8 +234,8 @@ export default function App() {
       if (mod === 'freight' && role === 'driver') setRole('trucker');
     } else if (mod === 'rides' || mod === 'indrive') {
       if (origin.zone === 'intercity' && destination.zone === 'intercity') {
-        setOrigin(BRAZIL_LOCATIONS[0]);
-        setDestination(BRAZIL_LOCATIONS[4]);
+        setOrigin(gpsPoint.current ?? BRAZIL_LOCATIONS[0]);
+        setDestination(unsetDestination(gpsPoint.current ?? BRAZIL_LOCATIONS[0]));
       }
       if (role === 'trucker') setRole('passenger');
     }
@@ -680,7 +718,7 @@ export default function App() {
 
   if (useGoogleMaps) {
     return (
-      <APIProvider apiKey={mapsApiKey} language="pt-BR" region="BR" libraries={['routes', 'places']}>
+      <APIProvider apiKey={mapsApiKey} language="pt-BR" region="BR" libraries={['routes', 'places', 'geocoding']}>
         {appShell}
       </APIProvider>
     );

@@ -4,6 +4,7 @@ import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
 import type { GeoPoint, InDriveRequest, PaymentMethod, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
+import { LOCATING_NAME, isUnsetDestination } from '../lib/currentLocation.ts';
 
 interface InDrivePanelProps {
   role: UserRole;
@@ -49,7 +50,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
   onCancelRequest,
 }) => {
   const distanceKm = useMemo(
-    () => (liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
+    () => (isUnsetDestination(destination) ? 0 : liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
     [liveDistanceKm, origin, destination]
   );
   const suggested = useMemo(() => Math.round((5.5 + distanceKm * 2.15 + 4) * 100) / 100, [distanceKm]);
@@ -167,12 +168,18 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
 
             <button
               type="button"
-              disabled={submitting}
+              disabled={submitting || isUnsetDestination(destination) || origin.name === LOCATING_NAME}
               onClick={handlePublish}
               className="w-full min-h-[48px] rounded-2xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer"
             >
               <HandCoins className="w-4 h-4" />
-              <span>{submitting ? 'Enviando oferta...' : 'Publicar Minha Oferta aos Motoristas'}</span>
+              <span>
+                {submitting
+                  ? 'Enviando oferta...'
+                  : isUnsetDestination(destination)
+                    ? 'Escolha o destino (B) primeiro'
+                    : 'Publicar Minha Oferta aos Motoristas'}
+              </span>
             </button>
           </div>
         </div>
