@@ -178,7 +178,7 @@ describe('tempo de espera no embarque', () => {
       await svc.rideAction(caio, ride.id, { action: 'complete' });
       const extra = Math.round((cents(ride.price) * pct) / 100);
       assert.equal(cents(await balance(ana)), 10000 - cents(ride.price) - extra);
-      assert.equal(cents(await balance(caio)), cents(ride.price) + extra - cents(ride.pricing!.platformFee), 'acréscimo vai todo para o motorista');
+      assert.equal(cents(await balance(caio)), cents(ride.price) + extra - cents((await feeOf(ride))), 'acréscimo vai todo para o motorista');
       const done = (await svc.bootstrap(ana)).rides.find((r) => r.id === ride.id)!;
       assert.equal(done.waitingFeePercent ?? 0, pct);
     });
@@ -217,3 +217,8 @@ describe('negociação (inDrive)', () => {
     assert.equal(cents(await balance(caio)), 3000);
   });
 });
+
+/** Ganho da Froc (sigiloso: só existe no banco, nunca na resposta ao app). */
+async function feeOf(r: { id: string }) {
+  return Number((await store.get<Record<string, unknown>>('rides', r.id))!.platformFeeCents) / 100;
+}

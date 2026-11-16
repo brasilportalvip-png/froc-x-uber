@@ -82,7 +82,7 @@ describe('cliques simultâneos não duplicam dinheiro', () => {
     await svc.rideAction(caio, ride.id, { action: 'start', pin: ride.pinCode });
     const r = await Promise.allSettled([svc.rideAction(caio, ride.id, { action: 'complete' }), svc.rideAction(caio, ride.id, { action: 'complete' })]);
     assert.equal(r.filter((x) => x.status === 'fulfilled').length, 1);
-    assert.equal((await svc.bootstrap(caio)).profile.walletBalance, Math.round((ride.price - ride.pricing!.platformFee) * 100) / 100);
+    assert.equal((await svc.bootstrap(caio)).profile.walletBalance, Math.round((ride.price - (await feeOf(ride))) * 100) / 100);
   });
 
   test('cancelar e finalizar ao mesmo tempo: só um vale e o dinheiro fecha', async () => {
@@ -94,7 +94,7 @@ describe('cliques simultâneos não duplicam dinheiro', () => {
     await Promise.allSettled([svc.rideAction(caio, ride.id, { action: 'complete' }), svc.rideAction(ana, ride.id, { action: 'cancel' })]);
     const a = (await svc.bootstrap(ana)).profile.walletBalance;
     const c = (await svc.bootstrap(caio)).profile.walletBalance;
-    assert.equal(Math.round((a + c) * 100) + Math.round(ride.pricing!.platformFee * 100), 10000);
+    assert.equal(Math.round((a + c) * 100) + Math.round((await feeOf(ride)) * 100), 10000);
   });
 
   test('dois saques ao mesmo tempo não passam do que foi ganho', async () => {
@@ -173,3 +173,8 @@ describe('ninguém mexe no que é dos outros', () => {
     assert.equal(await codeOf(svc.checkAccess(bia)), 'blocked');
   });
 });
+
+/** Ganho da Froc (sigiloso: só existe no banco, nunca na resposta ao app). */
+async function feeOf(r: { id: string }) {
+  return Number((await store.get<Record<string, unknown>>('rides', r.id))!.platformFeeCents) / 100;
+}

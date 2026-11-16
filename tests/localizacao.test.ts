@@ -103,3 +103,23 @@ test('Agendador: /api/cron/sweep aceita POST (cron-job.org) e GET (Vercel Cron),
     server.close();
   }
 });
+
+test('SIGILO: o ganho da Froc não aparece em páginas públicas, termos, FAQ nem na IA de atendimento', async () => {
+  const { FEE_LEAK, PRICING_TEXT } = await import('../src/data/pricing.ts');
+  const { FAQ } = await import('../src/data/legal.ts').then((m) => ({ FAQ: JSON.stringify(m) }));
+  assert.ok(!FEE_LEAK.test(PRICING_TEXT.join(' ')), 'texto de preço');
+  assert.ok(!/R\$ ?2 a R\$ ?8|2 e R\$ 8/.test(FAQ), 'perguntas frequentes');
+  assert.ok(!/R\$ 2 e R\$ 8|R\$ 2 a R\$ 8|30% do valor/.test(read('public/legal/termos.html')), 'termos');
+  const { platformKnowledge } = await import('../server/ai/persona.ts');
+  const { DEFAULT_SETTINGS } = await import('../server/settings.ts');
+  const pub = platformKnowledge(DEFAULT_SETTINGS, 'publico');
+  assert.ok(!pub.includes(`R$ ${DEFAULT_SETTINGS.platformFeeMin} a R$ ${DEFAULT_SETTINGS.platformFeeMax}`), 'atendimento não sabe o valor');
+  assert.ok(pub.includes('CONFIDENCIAL'), 'atendimento recebe a regra de sigilo');
+  assert.ok(platformKnowledge(DEFAULT_SETTINGS, 'interno').includes(`R$ ${DEFAULT_SETTINGS.platformFeeMin} a R$ ${DEFAULT_SETTINGS.platformFeeMax}`), 'equipe interna sabe');
+  // O detector pega os jeitos comuns de escrever.
+  for (const t of ['a Froc cobra só de R$ 2 a R$ 8 por corrida', 'taxa da Froc', 'entre R$ 2 e R$ 8', 'comissão da Froc de 12%']) assert.ok(FEE_LEAK.test(t), t);
+  assert.ok(!FEE_LEAK.test('O motorista vê quanto vai receber antes de aceitar.'));
+  const { seoReview } = await import('../server/blog.ts');
+  const r = seoReview({ title: 'Quanto ganha um motorista de aplicativo', description: '', keyword: '', slug: 'x', intro: 'A Froc fica com R$ 3 por corrida.', sections: [], faq: [] } as never);
+  assert.ok(r.hard.some((h) => h.includes('sigilosa')));
+});

@@ -166,5 +166,15 @@ export const PRICING_TEXT = [
   'O preço segue o modelo da Uber: bandeirada + quilômetros + minutos da categoria, mostrado antes de pedir.',
   'Horários dinâmicos: madrugada +20%, pico da manhã (6h–9h30) +15%, almoço (11h30–14h) +10%, pico da noite (17h–20h30) +20%, noite +10%, sexta e sábado à noite +25%. Com muita procura na região o preço sobe mais, até o teto de 2x.',
   'Área de risco: acréscimo de 10% a 30% que vai inteiro para o motorista.',
-  'A Froc fica com um valor fixo de R$ 2 a R$ 8 por corrida (depende do horário, da procura, da área e da distância) e nunca mais que 30% da corrida. Todo o resto é do motorista. Na Uber, a taxa costuma ficar perto de 25% e pode chegar a cerca de 40%.',
+  'O motorista vê quanto vai receber antes de aceitar a corrida.',
 ];
+
+/**
+ * SIGILOSO: o ganho da Froc por corrida (valor, faixa ou porcentagem) é segredo do negócio.
+ * Não aparece em página pública, anúncio, blog, termos, app de passageiro/motorista nem na IA
+ * de atendimento. Só o painel do dono (Admin) e a Equipe IA interna conhecem os números.
+ */
+export const FEE_IS_CONFIDENTIAL = true;
+
+/** Texto que fala do ganho da Froc (para barrar no blog e em respostas públicas). */
+export const FEE_LEAK = /(R\$\s*2\s*(?:,00)?\s*(?:a|e|até)\s*R?\$?\s*8)|(\b2\s*a\s*8\s*reais)|(taxa\s+(?:fixa\s+)?(?:da\s+)?froc)|(froc\s+(?:fica|cobra|ganha)\s+(?:com\s+)?(?:só\s+|apenas\s+)?(?:R\$|\d))|(comiss[aã]o\s+(?:da\s+)?froc)/i;
