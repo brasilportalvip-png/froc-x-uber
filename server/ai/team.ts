@@ -373,6 +373,8 @@ ${platformKnowledge(cfg)}`;
       if (!(await this.d.blog.hasPostOn(day)) || force) {
         const { post, problems } = await this.d.blog.generate({ author: 'Froc IA · Marketing e SEO' });
         result.post = { slug: post.slug, publicado: post.published, problemas: problems };
+        // Capa com IA na hora (se falhar, o post já tem a capa da marca e o agendador tenta de novo).
+        if (post.published) result.capa = await this.d.blog.attachImage(post.slug).then(() => 'ok').catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
       }
     } catch (e) {
       result.postErro = e instanceof Error ? e.message : String(e);

@@ -176,11 +176,11 @@ export function createApp(options: AppOptions) {
     }),
   );
 
-  // Agendador externo (ex.: cron do Render) para os prazos automáticos.
-  app.post(
-    '/api/cron/sweep',
-    wrap(async (req) => {
-      const key = String(req.headers['x-cron-key'] || '');
+  // Agendador: cron-job.org (a cada 5 min, POST com o cabeçalho x-cron-key) ou o cron da Vercel
+  // (GET com "Authorization: Bearer CRON_SECRET"). Os dois rodam a mesma rotina.
+  const cronHandler = wrap(async (req) => {
+      const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const key = String(req.headers['x-cron-key'] || '') || bearer;
       if (!options.cronSecret || key !== options.cronSecret) throw new AppError(401, 'unauthorized', 'Chave inválida.');
       const sweep = await (await service()).sweep(true);
       // Rotina diária (post do blog + relatório da Equipe IA): roda 1x por dia, a partir das 7h de Brasília.
@@ -192,8 +192,9 @@ export function createApp(options: AppOptions) {
       // Equipe IA confere o CPF dos motoristas pendentes lendo a CNH (2 por rodada).
       const cpf = options.platform ? await ((await options.platform()).identity?.reviewPending(2) ?? Promise.resolve(null)).catch((e) => ({ erro: String(e?.message || e) })) : null;
       return { sweep, daily, images, cpf };
-    }),
-  );
+    });
+  app.post('/api/cron/sweep', cronHandler);
+  app.get('/api/cron/sweep', cronHandler);
 
   // ----- páginas públicas para o Google e o Bing (HTML pronto, sem depender de JavaScript)
   const site = () => (options.siteUrl?.() || '').replace(/\/+$/, '');
@@ -532,6 +533,13 @@ export function createApp(options: AppOptions) {
     const p = await admin(req);
     const r = await p.blog.attachImage(id(req));
     await (await service()).audit(a(req), 'capa_gerada', id(req), { modelo: r.model });
+    return r;
+  }));
+  api.post('/admin/blog/:id/delete', wrap(async (req) => {
+    const p = await admin(req);
+    const r = await p.blog.remove(id(req));
+    if (!r) throw new AppError(404, 'not_found', 'Post não encontrado.');
+    await (await service()).audit(a(req), 'post_apagado', r.slug, { titulo: r.title });
     return r;
   }));
   api.post('/admin/blog/:id/publish', wrap(async (req) => {

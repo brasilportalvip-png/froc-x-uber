@@ -255,6 +255,19 @@ export class BlogService {
     return { ok: true };
   }
 
+  /**
+   * Apaga o post de vez (some do blog, do sitemap e do RSS). Avisa o Google/Bing pelo IndexNow
+   * para tirarem a página do índice (ela passa a responder 404).
+   */
+  async remove(slugOrId: string) {
+    const post = (await this.get(slugOrId)) ?? (await this.store.get<BlogPost>('blog', slugOrId));
+    if (!post) return null;
+    await this.store.remove('blog', post.id);
+    if (post.image?.path && this.deps.files?.remove) await this.deps.files.remove(post.image.path).catch(() => undefined);
+    if (post.published) await this.ping([this.url(post.slug), `${this.deps.siteUrl()}/blog`]);
+    return { ok: true, slug: post.slug, title: post.title };
+  }
+
   url(slug: string) {
     return `${this.deps.siteUrl()}/blog/${slug}`;
   }

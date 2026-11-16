@@ -1,4 +1,4 @@
-import { isUnsetDestination } from '../lib/currentLocation.ts';
+import { isUnsetDestination, isOriginPending } from '../lib/currentLocation.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Compass, LocateFixed, Minus, Plus, Navigation } from 'lucide-react';
 import { BRAZIL_LOCATIONS } from '../data/locations.ts';
@@ -340,7 +340,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         ctx.fillText(sub, bx + 8, by + 15);
       };
 
-      drawPin(pA.x, pA.y, 'A', origin.zone === 'intercity' ? origin.city : origin.name.split('·')[0].trim(), '#10B981');
+      if (!isOriginPending(origin)) drawPin(pA.x, pA.y, 'A', origin.zone === 'intercity' ? origin.city : origin.name.split('·')[0].trim(), '#10B981');
       if (!isUnsetDestination(destination))
         drawPin(pB.x, pB.y, 'B', destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0].trim(), '#0F172A');
 
@@ -377,7 +377,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
   const handleLocateMe = () => {
     if (!navigator.geolocation) {
-      setGpsNotice('GPS indisponível neste dispositivo — centralizado em São Paulo.');
+      setGpsNotice('GPS indisponível neste dispositivo.');
       setCenter({ lat: origin.lat, lng: origin.lng });
       setTimeout(() => setGpsNotice(null), 3500);
       return;

@@ -19,6 +19,8 @@ export interface Store {
   get<T extends Doc>(collection: string, id: string): Promise<T | null>;
   set(collection: string, id: string, data: Doc): Promise<void>;
   update(collection: string, id: string, data: Doc): Promise<void>;
+  /** Apaga um documento (usado só para posts do blog). */
+  remove(collection: string, id: string): Promise<void>;
   /** Consulta só por igualdade (sem índices compostos); a ordenação é feita em memória. */
   query<T extends Doc>(collection: string, filters: Filter[], limit?: number): Promise<T[]>;
   count(collection: string, filters: Filter[]): Promise<number>;
@@ -52,6 +54,10 @@ export class MemoryStore implements Store {
     const current = this.col(collection).get(id);
     if (!current) throw new Error(`not_found:${collection}/${id}`);
     this.col(collection).set(id, { ...current, ...clone(data) });
+  }
+
+  async remove(collection: string, id: string) {
+    this.col(collection).delete(id);
   }
 
   async query<T extends Doc>(collection: string, filters: Filter[], limit = 200): Promise<T[]> {

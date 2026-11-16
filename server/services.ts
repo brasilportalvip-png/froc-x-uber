@@ -166,6 +166,8 @@ export interface FileStorage {
   signedUrl(path: string): Promise<string>;
   /** Lê um arquivo (usado para servir as imagens do blog). null se não existir. */
   read?(path: string): Promise<{ bytes: Uint8Array; contentType: string } | null>;
+  /** Apaga um arquivo (capa de post apagado). */
+  remove?(path: string): Promise<void>;
 }
 
 export interface ServiceDeps {

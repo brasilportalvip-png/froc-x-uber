@@ -7,6 +7,25 @@ import type { GeoPoint } from '../types/mobility.ts';
 
 export const LOCATING_NAME = 'Localizando você...';
 
+/**
+ * Sem localização (permissão negada ou GPS sem sinal): NUNCA mostra um endereço inventado.
+ * O ponto A fica pedindo a localização ou que a pessoa digite onde está.
+ */
+export const NEED_LOCATION_ID = 'need-location';
+export const NEED_LOCATION_NAME = 'Onde você está? Permita a localização ou digite o endereço';
+/** Centro do Brasil, só para o mapa ter onde ficar enquanto não há localização. */
+export const BRAZIL_CENTER = { lat: -14.235, lng: -51.925 };
+export function needLocationPoint(): GeoPoint {
+  return { id: NEED_LOCATION_ID, name: NEED_LOCATION_NAME, city: '', state: '', zone: 'urban', lat: BRAZIL_CENTER.lat, lng: BRAZIL_CENTER.lng, kind: 'avenue' };
+}
+export function locatingPoint(): GeoPoint {
+  return { ...needLocationPoint(), id: 'locating', name: LOCATING_NAME };
+}
+/** Partida ainda não é um lugar real (localizando ou sem localização). */
+export const isOriginPending = (p: { id: string }) => p.id === 'locating' || p.id === NEED_LOCATION_ID;
+/** Partida veio do GPS (acompanha a pessoa em tempo real até ela escolher outro ponto). */
+export const isGpsOrigin = (p: { id: string }) => p.id.startsWith('gps-');
+
 /** Destino ainda não escolhido (B vazio): mesmo ponto da partida, só para o mapa ter onde ficar. */
 export const UNSET_DEST_ID = 'choose-destination';
 export const UNSET_DEST_NAME = 'Para onde vamos? Escolha o destino (B)';
@@ -26,15 +45,46 @@ async function waitForGoogle(ms = 6000) {
   return false;
 }
 
-export function getCurrentCoords(timeoutMs = 15000): Promise<{ lat: number; lng: number; accuracy: number }> {
+function position(options: PositionOptions): Promise<{ lat: number; lng: number; accuracy: number }> {
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) return reject(new Error('sem_gps'));
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
       (err) => reject(new Error(err.code === err.PERMISSION_DENIED ? 'negado' : 'indisponivel')),
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 30000 },
+      options,
     );
   });
+}
+
+/**
+ * Localização em duas tentativas: primeiro a rápida (rede/Wi-Fi, funciona no computador e
+ * responde em 1–3 s); se não vier, a precisa (GPS do celular, até 20 s).
+ */
+export async function getCurrentCoords(): Promise<{ lat: number; lng: number; accuracy: number }> {
+  try {
+    return await position({ enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 });
+  } catch (e) {
+    if ((e as Error).message === 'negado' || (e as Error).message === 'sem_gps') throw e;
+    return position({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  }
+}
+
+/** Acompanha a pessoa em tempo real (GPS). Devolve a função para parar. */
+export function watchCoords(onMove: (c: { lat: number; lng: number; accuracy: number }) => void, onError?: (why: string) => void) {
+  if (!('geolocation' in navigator)) return () => undefined;
+  const id = navigator.geolocation.watchPosition(
+    (pos) => onMove({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+    (err) => onError?.(err.code === err.PERMISSION_DENIED ? 'negado' : 'indisponivel'),
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
+  );
+  return () => navigator.geolocation.clearWatch(id);
+}
+
+/** Distância aproximada em metros (para saber se a pessoa andou). */
+export function metersBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = (d: number) => (d * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
 }
 
 type AddressPart = { long_name?: string; short_name?: string; longText?: string | null; shortText?: string | null; types?: string[] };
@@ -96,8 +146,12 @@ export async function reverseGeocode(lat: number, lng: number): Promise<{ name: 
   return fallback;
 }
 
-export async function currentLocationPoint(): Promise<GeoPoint> {
-  const { lat, lng } = await getCurrentCoords();
+export async function pointAt(lat: number, lng: number): Promise<GeoPoint> {
   const addr = await reverseGeocode(lat, lng);
   return { id: `gps-${Date.now()}`, name: addr.name, city: addr.city, state: addr.state, zone: 'urban', lat, lng, kind: 'avenue' };
+}
+
+export async function currentLocationPoint(): Promise<GeoPoint> {
+  const { lat, lng } = await getCurrentCoords();
+  return pointAt(lat, lng);
 }

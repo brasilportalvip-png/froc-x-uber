@@ -4133,6 +4133,18 @@ var BlogService = class {
     if (published) await this.ping([this.url(slug)]);
     return { ok: true };
   }
+  /**
+   * Apaga o post de vez (some do blog, do sitemap e do RSS). Avisa o Google/Bing pelo IndexNow
+   * para tirarem a página do índice (ela passa a responder 404).
+   */
+  async remove(slugOrId) {
+    const post = await this.get(slugOrId) ?? await this.store.get("blog", slugOrId);
+    if (!post) return null;
+    await this.store.remove("blog", post.id);
+    if (post.image?.path && this.deps.files?.remove) await this.deps.files.remove(post.image.path).catch(() => void 0);
+    if (post.published) await this.ping([this.url(post.slug), `${this.deps.siteUrl()}/blog`]);
+    return { ok: true, slug: post.slug, title: post.title };
+  }
   url(slug) {
     return `${this.deps.siteUrl()}/blog/${slug}`;
   }
@@ -4964,20 +4976,20 @@ function createApp(options) {
       return (await service()).handlePaymentNotification(dataId);
     })
   );
-  app.post(
-    "/api/cron/sweep",
-    wrap(async (req) => {
-      const key = String(req.headers["x-cron-key"] || "");
-      if (!options.cronSecret || key !== options.cronSecret) throw new AppError(401, "unauthorized", "Chave inv\xE1lida.");
-      const sweep = await (await service()).sweep(true);
-      let daily = null;
-      const hourBr = ((/* @__PURE__ */ new Date()).getUTCHours() + 21) % 24;
-      if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
-      const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
-      const cpf = options.platform ? await ((await options.platform()).identity?.reviewPending(2) ?? Promise.resolve(null)).catch((e) => ({ erro: String(e?.message || e) })) : null;
-      return { sweep, daily, images, cpf };
-    })
-  );
+  const cronHandler = wrap(async (req) => {
+    const bearer = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+    const key = String(req.headers["x-cron-key"] || "") || bearer;
+    if (!options.cronSecret || key !== options.cronSecret) throw new AppError(401, "unauthorized", "Chave inv\xE1lida.");
+    const sweep = await (await service()).sweep(true);
+    let daily = null;
+    const hourBr = ((/* @__PURE__ */ new Date()).getUTCHours() + 21) % 24;
+    if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
+    const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
+    const cpf = options.platform ? await ((await options.platform()).identity?.reviewPending(2) ?? Promise.resolve(null)).catch((e) => ({ erro: String(e?.message || e) })) : null;
+    return { sweep, daily, images, cpf };
+  });
+  app.post("/api/cron/sweep", cronHandler);
+  app.get("/api/cron/sweep", cronHandler);
   const site = () => (options.siteUrl?.() || "").replace(/\/+$/, "");
   const platform = async () => {
     if (!options.platform) throw new AppError(503, "unavailable", "Recurso indispon\xEDvel.");
@@ -5280,6 +5292,13 @@ function createApp(options) {
     await (await service()).audit(a(req), "capa_gerada", id(req), { modelo: r.model });
     return r;
   }));
+  api.post("/admin/blog/:id/delete", wrap(async (req) => {
+    const p = await admin(req);
+    const r = await p.blog.remove(id(req));
+    if (!r) throw new AppError(404, "not_found", "Post n\xE3o encontrado.");
+    await (await service()).audit(a(req), "post_apagado", r.slug, { titulo: r.title });
+    return r;
+  }));
   api.post("/admin/blog/:id/publish", wrap(async (req) => {
     const p = await admin(req);
     const r = await p.blog.setPublished(id(req), req.body?.published === true);
@@ -5453,6 +5472,9 @@ function initFirebase() {
         const [[bytes], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
         return { bytes, contentType: String(meta.contentType || "application/octet-stream") };
       },
+      async remove(path) {
+        await getStorage(app).bucket().file(path).delete({ ignoreNotFound: true });
+      },
       async signedUrl(path) {
         const [url] = await getStorage(app).bucket().file(path).getSignedUrl({ action: "read", expires: Date.now() + 60 * 60 * 1e3 });
         return url;
@@ -5498,6 +5520,9 @@ var FirestoreStore = class {
   }
   async update(collection, id, data) {
     await this.col(collection).doc(id).update(strip(data));
+  }
+  async remove(collection, id) {
+    await this.col(collection).doc(id).delete();
   }
   async query(collection, filters, limit = 200) {
     let q = this.col(collection);
@@ -6413,6 +6438,7 @@ ${platformKnowledge(cfg)}`;
       if (!await this.d.blog.hasPostOn(day) || force) {
         const { post, problems } = await this.d.blog.generate({ author: "Froc IA \xB7 Marketing e SEO" });
         result.post = { slug: post.slug, publicado: post.published, problemas: problems };
+        if (post.published) result.capa = await this.d.blog.attachImage(post.slug).then(() => "ok").catch((e) => e instanceof Error ? e.message : String(e));
       }
     } catch (e) {
       result.postErro = e instanceof Error ? e.message : String(e);

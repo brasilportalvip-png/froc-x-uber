@@ -36,6 +36,10 @@ export class FirestoreStore implements Store {
     await this.col(collection).doc(id).update(strip(data));
   }
 
+  async remove(collection: string, id: string) {
+    await this.col(collection).doc(id).delete();
+  }
+
   async query<T extends Doc>(collection: string, filters: Filter[], limit = 200): Promise<T[]> {
     let q = this.col(collection);
     for (const [field, op, value] of filters) q = q.where(field, op, value);
