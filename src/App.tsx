@@ -20,6 +20,7 @@ import { MerchantPanel } from './components/MerchantPanel.tsx';
 import { HelpLinks } from './components/HelpLinks.tsx';
 import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
 import { IdentityDocUpload, IdentityGate } from './components/IdentityGate.tsx';
+import { alertUser, askNotificationPermission } from './lib/alerts.ts';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
@@ -278,8 +279,11 @@ export default function App() {
       () => api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } }),
       ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!', arriving: 'Passageiro avisado na tela: a espera começou a contar.', no_show: 'Corrida encerrada: passageiro não apareceu. O valor caiu no seu saldo.' } as Record<string, string>)[action],
     );
-  const handleSetOnline = (online: boolean) =>
-    run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
+  const handleSetOnline = (online: boolean) => {
+    // Ao ficar online: libera som e notificação para avisar de novas corridas com o app minimizado.
+    if (online) askNotificationPermission();
+    return run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
+  };
 
   const handleCreateInDrive = (payload: object) => run(() => post('/api/indrive', payload), 'Oferta publicada para os motoristas!');
   const handleSendDriverOffer = (requestId: string, offeredPrice: number, etaMin: number, note: string) =>
@@ -347,6 +351,30 @@ export default function App() {
   // Passageiro vê o carro do motorista andando (posição enviada pelo celular do motorista).
   const liveDriverPoint =
     (activeRide?.mine === 'owner' && activeRide.driverLocation) || matchedDeal?.driverLocation || null;
+  // Avisos com som/vibração: nova corrida para o motorista, motorista aceitou, nova mensagem.
+  const lastSeen = useRef<{ queue: Set<string>; status: Record<string, string>; msgs: Record<string, number> } | null>(null);
+  useEffect(() => {
+    if (!state) return;
+    const queue = new Set(
+      [...state.rides.filter((r) => r.mine === null && r.status === 'searching'), ...state.indriveRequests.filter((r) => r.mine === null && r.status === 'open')].map((r) => r.id),
+    );
+    const status: Record<string, string> = {};
+    const msgs: Record<string, number> = {};
+    for (const r of state.rides.filter((x) => x.mine)) {
+      status[r.id] = r.status;
+      msgs[r.id] = r.messages.filter((m) => m.sender !== (r.mine === 'owner' ? 'passenger' : 'driver')).length;
+    }
+    const prev = lastSeen.current;
+    lastSeen.current = { queue, status, msgs };
+    if (!prev) return;
+    if (state.profile.driverOnline && [...queue].some((id) => !prev.queue.has(id))) alertUser('Nova corrida perto de você', 'Abra a Froc para aceitar.', { beeps: 3 });
+    for (const r of state.rides.filter((x) => x.mine === 'owner')) {
+      if (prev.status[r.id] === 'searching' && r.status === 'accepted') alertUser('Motorista a caminho!', `${r.driverName || 'Seu motorista'} aceitou a corrida.`);
+      if (prev.status[r.id] && prev.status[r.id] !== 'arriving' && r.status === 'arriving') alertUser('Seu motorista chegou', 'O 1º minuto de espera é grátis.', { vibrate: [500, 150, 500, 150, 500], beeps: 3 });
+    }
+    for (const id of Object.keys(msgs)) if (prev.msgs[id] !== undefined && msgs[id] > prev.msgs[id]) alertUser('Nova mensagem na corrida', 'Abra a Froc para ler.', { beeps: 1, vibrate: [150] });
+  }, [state]);
+
   const liveDriverKind: 'carro' | 'moto' =
     activeRide?.categoryId === 'froc_moto' || (activeRide?.categoryId === 'froc_delivery' && activeRide.delivery?.vehicle === 'moto') ? 'moto' : 'carro';
   const activeStatusLabel = activeRide

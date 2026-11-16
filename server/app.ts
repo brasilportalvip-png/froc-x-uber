@@ -118,9 +118,17 @@ export function createApp(options: AppOptions) {
   const id = (req: Request) => String(req.params.id || '').slice(0, 80);
 
   // ----- públicas
+  // Público: só o essencial (sim/não). Detalhes completos só para a administração (/api/admin/health).
   app.get('/api/health', async (_req, res) => {
-    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : undefined;
-    res.json({ ok: true, service: 'froc-x-uber', config: options.configStatus?.(), firebase });
+    const fb = options.diagnostics ? await options.diagnostics().catch((e) => ({ adminInit: String(e?.message || e).slice(0, 80) })) : undefined;
+    const c = (options.configStatus?.() || {}) as Record<string, unknown>;
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      service: 'froc-x-uber',
+      config: { firebaseWebConfig: Boolean(c.firebaseWebConfig), ai: Boolean(c.ai), googleMaps: Boolean(c.googleMaps), mercadoPago: Boolean(c.mercadoPago), cron: Boolean(c.cron) },
+      firebase: fb ? { adminInit: (fb as Record<string, unknown>).adminInit === 'ok' ? 'ok' : 'erro', sameProject: Boolean((fb as Record<string, unknown>).sameProject) } : undefined,
+    });
   });
   app.get('/api/public-config', (_req, res) => res.json(options.publicConfig()));
   app.get('/api/maps-config', (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || '' }));
@@ -130,6 +138,8 @@ export function createApp(options: AppOptions) {
     try {
       if (options.platform) {
         const { store } = await options.platform();
+        // Teto diário para ninguém lotar o banco com erros falsos.
+        await consumeQuota(store, 'client-error:global', 3000, 864e5, 'limite');
         const b = (req.body || {}) as Record<string, unknown>;
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await store.set('client_errors', id, {
@@ -439,6 +449,11 @@ export function createApp(options: AppOptions) {
   api.get('/merchant/deliveries', wrap(async (req) => (await service()).listDeliveries(a(req).uid)));
   api.post('/merchant/deliveries/:id/cancel', wrap(async (req) => (await service()).cancelDelivery(a(req).uid, id(req))));
 
+  api.get('/admin/health', wrap(async (req) => {
+    if (!(await service()).isAdmin(a(req))) throw new AppError(403, 'forbidden', 'Acesso restrito à administração.');
+    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : undefined;
+    return { ok: true, config: options.configStatus?.(), firebase };
+  }));
   api.get('/admin/overview', wrap(async (req) => (await service()).adminOverview(a(req))));
   api.post(
     '/admin/applications/:id',

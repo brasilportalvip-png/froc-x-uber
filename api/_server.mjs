@@ -2988,8 +2988,8 @@ var FrocService = class {
       deals++;
     }
     const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
-    const saques = await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) }));
-    const lojas = await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) }));
+    const saques = force ? await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) })) : null;
+    const lojas = force ? await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) })) : null;
     return { ridesCancelled: rides, requestsExpired: deals, webhooks, saques, lojas };
   }
   // ------------------------------------------------------------- SOS e pontos
@@ -4914,8 +4914,15 @@ function createApp(options) {
   const a = (req) => req.auth;
   const id = (req) => String(req.params.id || "").slice(0, 80);
   app.get("/api/health", async (_req, res) => {
-    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : void 0;
-    res.json({ ok: true, service: "froc-x-uber", config: options.configStatus?.(), firebase });
+    const fb = options.diagnostics ? await options.diagnostics().catch((e) => ({ adminInit: String(e?.message || e).slice(0, 80) })) : void 0;
+    const c = options.configStatus?.() || {};
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      service: "froc-x-uber",
+      config: { firebaseWebConfig: Boolean(c.firebaseWebConfig), ai: Boolean(c.ai), googleMaps: Boolean(c.googleMaps), mercadoPago: Boolean(c.mercadoPago), cron: Boolean(c.cron) },
+      firebase: fb ? { adminInit: fb.adminInit === "ok" ? "ok" : "erro", sameProject: Boolean(fb.sameProject) } : void 0
+    });
   });
   app.get("/api/public-config", (_req, res) => res.json(options.publicConfig()));
   app.get("/api/maps-config", (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || "" }));
@@ -4923,6 +4930,7 @@ function createApp(options) {
     try {
       if (options.platform) {
         const { store } = await options.platform();
+        await consumeQuota(store, "client-error:global", 3e3, 864e5, "limite");
         const b = req.body || {};
         const id2 = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await store.set("client_errors", id2, {
@@ -5192,6 +5200,11 @@ function createApp(options) {
   api.post("/merchant/deliveries", limited, wrap(async (req) => (await service()).createDelivery(a(req).uid, req.body || {}, "painel")));
   api.get("/merchant/deliveries", wrap(async (req) => (await service()).listDeliveries(a(req).uid)));
   api.post("/merchant/deliveries/:id/cancel", wrap(async (req) => (await service()).cancelDelivery(a(req).uid, id(req))));
+  api.get("/admin/health", wrap(async (req) => {
+    if (!(await service()).isAdmin(a(req))) throw new AppError(403, "forbidden", "Acesso restrito \xE0 administra\xE7\xE3o.");
+    const firebase = options.diagnostics ? await options.diagnostics().catch((e) => ({ error: String(e?.message || e) })) : void 0;
+    return { ok: true, config: options.configStatus?.(), firebase };
+  }));
   api.get("/admin/overview", wrap(async (req) => (await service()).adminOverview(a(req))));
   api.post(
     "/admin/applications/:id",

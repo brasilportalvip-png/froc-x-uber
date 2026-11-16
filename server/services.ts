@@ -2341,8 +2341,9 @@ export class FrocService {
     }
     const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
     // Equipe IA no comando: saques dentro das regras e lojas com CNPJ ativo, sem esperar o dono.
-    const saques = await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) }));
-    const lojas = await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) }));
+    // Só no agendador (força=true): não deixa a tela de ninguém esperando consultas externas.
+    const saques = force ? await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) })) : null;
+    const lojas = force ? await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) })) : null;
     return { ridesCancelled: rides, requestsExpired: deals, webhooks, saques, lojas };
   }
 
