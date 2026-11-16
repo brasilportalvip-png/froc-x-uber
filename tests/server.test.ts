@@ -6,7 +6,7 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { MemoryStore } from '../server/store.ts';
-import { AppError, FrocService } from '../server/services.ts';
+import { AppError, FrocService, pixKeyKind } from '../server/services.ts';
 import type { AuthUser, PaymentsGateway } from '../server/services.ts';
 import { verifyMercadoPagoSignature } from '../server/mercadoPago.ts';
 const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleYear: 2022, vehicleType: 'carro', declarations: { ear: true, inss: true, seguroApp: true, veracidade: true, rntrc: true, ciotPiso: true, lei12009: true } };
@@ -164,16 +164,38 @@ describe('carteira e Mercado Pago', () => {
     await expectError(s.createTopup(passenger, 50), 'payments_not_configured');
   });
 
-  test('saque: só motorista aprovado, debita e admin pode recusar devolvendo', async () => {
-    await expectError(svc.requestWithdrawal(passenger, 30, 'ana@pix.com'), 'not_approved');
+  test('Pix: só os ganhos saem; recarga fica no app; admin pode recusar devolvendo', async () => {
+    await topUp(passenger, 100);
+    await expectError(svc.requestWithdrawal(passenger, 30, 'ana@pix.com'), 'nothing_to_withdraw');
     await approve(driver, 'driver');
     await topUp(driver, 100);
-    const { id } = await svc.requestWithdrawal(driver, 40, 'caio@pix.com');
-    assert.equal(await balance(driver), 60);
-    await expectError(svc.requestWithdrawal(driver, 70, 'caio@pix.com'), 'insufficient_balance');
+    await expectError(svc.requestWithdrawal(driver, 40, 'caio@pix.com'), 'nothing_to_withdraw');
+    // Motorista ganha uma corrida de verdade.
+    await svc.updateProfile(driver, { driverOnline: true });
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_comfort' });
+    await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
+    await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
+    await svc.rideAction(driver, ride.id, { action: 'complete' });
+    const earned = Math.round(Math.round(ride.price * 100) * 0.88) / 100;
+    assert.equal((await svc.bootstrap(driver)).profile.withdrawableBalance, earned);
+    await expectError(svc.requestWithdrawal(driver, earned + 1, 'caio@pix.com'), 'over_withdrawable');
+    await expectError(svc.requestWithdrawal(driver, 20, 'isso não é chave'), 'invalid_pix_key');
+    const { id } = await svc.requestWithdrawal(driver, 20, '123.456.789-09');
+    assert.equal(await balance(driver), Math.round((100 + earned - 20) * 100) / 100);
+    assert.equal((await svc.bootstrap(driver)).profile.withdrawableBalance, Math.round((earned - 20) * 100) / 100);
     await svc.resolveWithdrawal(admin, id, 'rejected');
-    assert.equal(await balance(driver), 100);
+    assert.equal((await svc.bootstrap(driver)).profile.withdrawableBalance, earned, 'recusado: volta para o que pode sacar');
     await expectError(svc.resolveWithdrawal(admin, id, 'paid'), 'not_pending');
+  });
+
+  test('tipo da chave Pix é reconhecido', () => {
+    assert.equal(pixKeyKind('123.456.789-09'), 'cpf');
+    assert.equal(pixKeyKind('11.222.333/0001-81'), 'cnpj');
+    assert.equal(pixKeyKind('caio@pix.com'), 'email');
+    assert.equal(pixKeyKind('(11) 98888-7777'), 'telefone');
+    assert.equal(pixKeyKind('+55 11 98888-7777'), 'telefone');
+    assert.equal(pixKeyKind('123e4567-e89b-12d3-a456-426614174000'), 'aleatoria');
+    assert.equal(pixKeyKind('abc'), '');
   });
 });
 
@@ -204,20 +226,43 @@ describe('1) corrida estilo Uber/99', () => {
     await expectError(svc.rideAction(passenger, ride.id, { action: 'rate', stars: 5 }), 'invalid_state');
   });
 
-  test('sem saldo não pede corrida pela carteira; dinheiro funciona', async () => {
+  test('sem saldo não pede corrida; dinheiro na mão não existe mais', async () => {
     await expectError(svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' }), 'insufficient_balance');
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
-    assert.equal(ride.paymentMethod, 'cash');
-    await expectError(svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' }), 'ride_in_progress');
+    await expectError(svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' }), 'cash_disabled');
+    await expectError(svc.createInDrive(passenger, { ...SP, passengerOffer: 30, paymentMethod: 'cash' }), 'cash_disabled');
+    await topUp(passenger, 100);
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x' });
+    assert.equal(ride.paymentMethod, 'froc_pay', 'sem escolher, é a carteira');
+    await expectError(svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' }), 'ride_in_progress');
   });
 
-  test('dinheiro: taxa de 12% sai da carteira do motorista', async () => {
+  test('passageiro com R$ 100 pede corrida: sai do saldo na hora e cai no motorista ao finalizar', async () => {
     await approve(driver, 'driver');
     await svc.updateProfile(driver, { driverOnline: true });
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    await topUp(passenger, 100);
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x' });
+    assert.equal(await balance(passenger), Math.round((100 - ride.price) * 100) / 100, 'descontado no pedido');
+    assert.equal(await balance(driver), 0, 'motorista ainda não recebe: a Froc guarda até finalizar');
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(driver, ride.id, { action: 'complete' });
+    const cut = Math.round(Math.round(ride.price * 100) * 0.88) / 100;
+    assert.equal(await balance(driver), cut);
+    const prof = (await svc.bootstrap(driver)).profile;
+    assert.equal(prof.withdrawableBalance, cut, 'ganho pode ir para Pix');
+  });
+
+  test('corrida antiga em dinheiro (criada antes da mudança) ainda finaliza: taxa sai da carteira do motorista', async () => {
+    await approve(driver, 'driver');
+    await svc.updateProfile(driver, { driverOnline: true });
+    await topUp(passenger, 100);
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x' });
+    await svc.rideAction(passenger, ride.id, { action: 'cancel' });
+    // Simula um pedido antigo, gravado em dinheiro antes da atualização.
+    await store.set('rides', 'antiga', { ...(await store.get<Record<string, unknown>>('rides', ride.id)), id: 'antiga', status: 'searching', paymentMethod: 'cash', escrowCents: 0, priceCents: Math.round(ride.price * 100) });
+    await svc.rideAction(driver, 'antiga', { action: 'driver_accept' });
+    await svc.rideAction(driver, 'antiga', { action: 'start', pin: ride.pinCode });
+    await svc.rideAction(driver, 'antiga', { action: 'complete' });
     const fee = Math.round(ride.price * 100) - Math.round(Math.round(ride.price * 100) * 0.88);
     assert.equal(await balance(driver), -fee / 100);
   });
@@ -237,7 +282,8 @@ describe('1) corrida estilo Uber/99', () => {
   test('só um motorista aceita; motorista offline ou dono não aceitam', async () => {
     await approve(driver, 'driver');
     await approve(other, 'driver');
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    await topUp(passenger, 100);
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await expectError(svc.rideAction(driver, ride.id, { action: 'driver_accept' }), 'offline');
     await svc.updateProfile(driver, { driverOnline: true });
     await svc.updateProfile(other, { driverOnline: true });
@@ -252,7 +298,8 @@ describe('1) corrida estilo Uber/99', () => {
   });
 
   test('chat só entre passageiro e motorista da corrida', async () => {
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    await topUp(passenger, 100);
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     const r = await svc.rideAction(passenger, ride.id, { action: 'message', message: 'Estou de azul' });
     assert.equal(r.messages.length, 1);
     await expectError(svc.rideAction(other, ride.id, { action: 'message', message: 'oi' }), 'forbidden');

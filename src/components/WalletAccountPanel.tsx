@@ -10,7 +10,7 @@ interface WalletAccountPanelProps {
   transactions: WalletTransaction[];
   paymentsEnabled: boolean;
   onTopUp: (amount: number) => Promise<void>;
-  onWithdraw: (amount: number, pixKey: string) => Promise<void>;
+  onWithdraw: (amount: number, pixKey: string, pixKeyType: string) => Promise<void>;
   onUpdateProfile: (patch: Partial<UserProfile>) => Promise<void>;
   onUploadDocument: (kind: 'driver' | 'trucker', docType: string, file: File) => Promise<void>;
   onApply: (kind: 'driver' | 'trucker', data: Record<string, unknown>) => Promise<void>;
@@ -33,6 +33,8 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   const [topupAmount, setTopupAmount] = useState('50');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [pixKey, setPixKey] = useState('');
+  const [pixKeyType, setPixKeyType] = useState('cpf');
+  const withdrawable = profile.withdrawableBalance ?? 0;
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone);
   const [city, setCity] = useState(profile.city);
@@ -60,9 +62,18 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
           <span className="text-xs font-mono-num text-emerald-400">Nota ★ {profile.rating}</span>
         </div>
         <div>
-          <div className="text-xs text-slate-400">Saldo para corridas, caronas e fretes</div>
+          <div className="text-xs text-slate-400">Saldo na minha conta Froc</div>
           <div className="text-3xl font-extrabold font-mono-num tracking-tight mt-1">{formatBRL(profile.walletBalance)}</div>
+          {withdrawable > 0 && (
+            <div className="text-[11px] text-emerald-300 mt-1">
+              Ganhos disponíveis para Pix: <strong className="font-mono-num">{formatBRL(withdrawable)}</strong>
+            </div>
+          )}
         </div>
+        <p className="text-[11px] text-slate-300">
+          Na Froc tudo é pago pela carteira: o valor sai do seu saldo quando você pede e vai sozinho para a conta do motorista quando o serviço termina.
+          Não existe pagamento em dinheiro na mão.
+        </p>
         {paymentsEnabled ? (
           <div className="flex gap-2">
             <input
@@ -108,12 +119,12 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         </button>
       </div>
 
-      {isProvider && (
+      {(isProvider || withdrawable > 0) && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
             void run('withdraw', async () => {
-              await onWithdraw(Number(withdrawAmount), pixKey);
+              await onWithdraw(Number(withdrawAmount), pixKey, pixKeyType);
               setWithdrawAmount('');
             });
           }}
@@ -121,16 +132,44 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         >
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
             <Banknote className="w-4 h-4 text-emerald-600" />
-            <span>Sacar ganhos por Pix</span>
+            <span>Transferir meus ganhos por Pix</span>
+          </div>
+          <div className="text-slate-500">
+            Disponível: <strong className="font-mono-num text-slate-900 dark:text-white">{formatBRL(withdrawable)}</strong> · para qualquer conta, sua ou de outra pessoa.
           </div>
           <div className="flex gap-2">
-            <input required type="number" min={20} step="0.01" placeholder="Valor (mín. R$ 20)" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} className="w-36 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-mono-num" />
-            <input required placeholder="Sua chave Pix" value={pixKey} onChange={(e) => setPixKey(e.target.value)} className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
+            <input
+              required
+              type="number"
+              min={20}
+              max={withdrawable || undefined}
+              step="0.01"
+              placeholder="Valor (mín. R$ 20)"
+              value={withdrawAmount}
+              onChange={(e) => setWithdrawAmount(e.target.value)}
+              className="w-36 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-mono-num"
+            />
+            <button type="button" onClick={() => setWithdrawAmount(withdrawable.toFixed(2))} className="px-3 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 font-semibold cursor-pointer">
+              Tudo
+            </button>
           </div>
-          <button type="submit" disabled={busy === 'withdraw'} className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-60 cursor-pointer">
-            {busy === 'withdraw' ? 'Solicitando...' : 'Solicitar saque'}
+          <div className="flex gap-2">
+            <select value={pixKeyType} onChange={(e) => setPixKeyType(e.target.value)} className="w-32 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2">
+              <option value="cpf">CPF</option>
+              <option value="cnpj">CNPJ</option>
+              <option value="telefone">Celular</option>
+              <option value="email">E-mail</option>
+              <option value="aleatoria">Aleatória</option>
+            </select>
+            <input required placeholder="Chave Pix de destino" value={pixKey} onChange={(e) => setPixKey(e.target.value)} className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
+          </div>
+          <button type="submit" disabled={busy === 'withdraw' || withdrawable < 20} className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-60 cursor-pointer">
+            {busy === 'withdraw' ? 'Solicitando...' : 'Transferir por Pix'}
           </button>
-          <p className="text-[11px] text-slate-500">O valor sai do saldo na hora e é transferido pela equipe Froc em até 2 dias úteis.</p>
+          <p className="text-[11px] text-slate-500">
+            Só os ganhos (corridas, entregas, fretes e caronas) podem ir para Pix; saldo de recarga fica para usar no app. Isso impede o golpe de recarregar com cartão roubado e sacar.
+            O valor sai do saldo na hora e a equipe Froc confirma o Pix.
+          </p>
         </form>
       )}
 

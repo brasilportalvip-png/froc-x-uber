@@ -13,7 +13,7 @@ const SERVICES = [
 
 const FAQ = [
   ['O Froc X Uber funciona em que cidades?', 'Em todo o Brasil. Corridas e negociação funcionam em qualquer endereço; caronas e fretes ligam qualquer cidade do país.'],
-  ['Como funciona o pagamento?', 'Você paga em dinheiro ou com saldo da carteira, recarregado pelo Mercado Pago (Pix ou cartão). O valor da viagem fica guardado e só é liberado ao motorista quando a viagem termina.'],
+  ['Como funciona o pagamento?', 'Tudo pela carteira Froc: você recarrega por Pix ou cartão (Mercado Pago) e paga com o saldo. Não existe dinheiro na mão, o que acaba com golpes de troco e de cobrança por fora. O valor fica guardado pela Froc e vai para o motorista quando a viagem termina.'],
   ['Como faço para ser motorista ou cadastrar meu veículo de carga?', 'Crie sua conta, escolha Motorista ou Caminhoneiro, envie CNH, documento do veículo (e RNTRC para frete) e aguarde a aprovação da equipe.'],
   ['É seguro?', 'Todo motorista passa por análise de documentos, o embarque usa PIN, há botão SOS com localização, avaliação dos dois lados e atendimento pela equipe Froc.'],
   ['Quando é a inauguração?', `A grande inauguração é em ${LAUNCH_LABEL}. Quem se cadastra antes ganha o selo de membro fundador.`],

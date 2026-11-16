@@ -14,7 +14,10 @@ export interface GeoPoint {
 
 export type RideCategoryId = 'froc_x' | 'froc_99' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
 
-/** Formas de pagamento aceitas de verdade: carteira Froc (recarregada por Pix/cartão no Mercado Pago) ou dinheiro. */
+/**
+ * Todo pagamento é pela carteira Froc (recarregada por Pix/cartão no Mercado Pago).
+ * 'cash' só aparece em corridas antigas, de antes do fim do dinheiro em mãos.
+ */
 export type PaymentMethod = 'froc_pay' | 'cash';
 export type ApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
 /** Papel da pessoa logada em cada item: dona do pedido, motorista dele, ou nenhum (vitrine). */
@@ -325,6 +328,8 @@ export interface UserProfile {
   city: string;
   rating: number;
   walletBalance: number;
+  /** Parte do saldo que pode ser sacada por Pix (ganhos). */
+  withdrawableBalance?: number;
   driverOnline: boolean;
   driverVehicle: string;
   driverPlate: string;
@@ -378,6 +383,7 @@ export interface WithdrawalView {
   name: string;
   amount: number;
   pixKey: string;
+  pixKeyType?: string;
   status: 'pending' | 'paid' | 'rejected';
   createdAt: string;
 }

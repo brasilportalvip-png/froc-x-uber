@@ -306,7 +306,8 @@ export default function App() {
     }
   };
   const handleRedeem = () => run(() => post('/api/wallet/redeem'), 'Pontos trocados por R$ 5,00 de crédito!');
-  const handleWithdraw = (amount: number, pixKey: string) => run(() => post('/api/wallet/withdraw', { amount, pixKey }), 'Saque solicitado!');
+  const handleWithdraw = (amount: number, pixKey: string, pixKeyType: string) =>
+    run(() => post('/api/wallet/withdraw', { amount, pixKey, pixKeyType }), 'Pix solicitado! O valor já saiu do seu saldo.');
   const handleUpdateProfile = (patch: Partial<UserProfile>) => run(() => api('/api/profile', { method: 'PATCH', body: patch }), 'Dados salvos.');
   const handleUploadDocument = async (kind: 'driver' | 'trucker', docType: string, file: File) => {
     try {
@@ -618,6 +619,10 @@ export default function App() {
                     onCreateRide={handleCreateRide}
                     onRideAction={handleRideAction}
                     onSetOnline={handleSetOnline}
+                    onNeedTopUp={() => {
+                      setActiveModule('wallet');
+                      showToast('Recarregue por Pix ou cartão e volte para pedir a corrida.');
+                    }}
                   />
                 )}
 

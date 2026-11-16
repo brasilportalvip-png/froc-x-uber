@@ -55,10 +55,13 @@ ${vehicles}
 - Frete/mudança: o cliente descreve a carga (tem calculadora de cubagem que sugere o veículo), endereço de coleta e entrega e orçamento (há piso mínimo pela distância); transportadores dão lances; o cliente aceita um. Valor retido até a entrega confirmada.
 
 CARTEIRA E PAGAMENTOS
-- Recarga pelo Mercado Pago (Pix ou cartão), de R$ 10 a R$ 5.000. Também é possível pagar corridas em dinheiro direto ao motorista.
+- TODO pagamento é pela carteira Froc. NÃO existe pagamento em dinheiro na mão nem Pix direto para o motorista (protege contra golpes de troco, cobrança por fora e corrida fantasma). Se alguém relatar cobrança por fora, oriente não pagar e registre como possível fraude.
+- Recarga pelo Mercado Pago (Pix ou cartão), de R$ 10 a R$ 5.000. Sem saldo suficiente, o app não deixa pedir e mostra o botão Recarregar.
+- Fluxo: o preço sai da carteira do cliente no pedido (ex.: tinha R$ 100, corrida de R$ 20, fica com R$ 80); a Froc guarda; ao finalizar, cai sozinho na carteira do motorista (menos a comissão). Cancelou antes de terminar: volta inteiro para o cliente.
 - Todo valor pago com a carteira fica guardado (custódia) e só vai para o prestador quando o serviço termina; cancelamento devolve.
-- Comissão atual da plataforma: ${cfg.commissionPercent}% (o prestador recebe ${100 - cfg.commissionPercent}%). Em corridas em dinheiro, a comissão é descontada da carteira do motorista.
-- Saque (só prestadores): mínimo R$ 20, por chave Pix; a administração confere e paga manualmente.
+- Comissão atual da plataforma: ${cfg.commissionPercent}% (o prestador recebe ${100 - cfg.commissionPercent}%).
+- Saldo pode ser usado no próprio app (corridas, caronas, fretes, entregas) por qualquer pessoa, inclusive motoristas.
+- Transferir por Pix: só os GANHOS (corridas, entregas, fretes, caronas), mínimo R$ 20, para qualquer chave Pix (CPF, CNPJ, celular, e-mail ou aleatória), da própria pessoa ou de outra. Saldo de recarga não vira Pix (bloqueia o golpe "cartão roubado → recarga → saque"). O valor sai do saldo na hora e a equipe confirma o Pix no Admin.
 - Pontos de fidelidade: ${cfg.pointsPerReal} ponto(s) por R$ 1 em serviços concluídos; ${cfg.pointsPerRedeem} pontos viram R$ ${(REDEEM_VALUE_CENTS / 100).toFixed(2)} de crédito.
 
 CADASTRO E CONTA

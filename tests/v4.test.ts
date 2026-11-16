@@ -119,6 +119,8 @@ beforeEach(async () => {
     webhooks: createWebhookDispatcher(store, fakeFetch, () => new Date(clock)),
   });
   for (const u of [ana, bia, caio, moto, ricardo, admin]) await svc.ensureUser(u);
+  // Todo pagamento é pela carteira: passageiros começam com saldo.
+  for (const u of [ana, bia]) await topUp(u, 500);
 });
 
 describe('regras legais no cadastro', () => {
@@ -179,8 +181,8 @@ describe('regras legais no cadastro', () => {
   test('moto só pega Froc Moto e entregas; carro não pega Froc Moto', async () => {
     await approveDriver(caio);
     await approveDriver(moto, { vehicleType: 'moto', vehicle: 'CG 160 Vermelha', plate: 'MOT1A23' });
-    const carRide = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
-    const motoRide = await svc.createRide(bia, { ...SP, categoryId: 'froc_moto', paymentMethod: 'cash' });
+    const carRide = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
+    const motoRide = await svc.createRide(bia, { ...SP, categoryId: 'froc_moto', paymentMethod: 'froc_pay' });
     const motoView = (await svc.bootstrap(moto)).rides.map((r) => r.id);
     assert.ok(motoView.includes(motoRide.id) && !motoView.includes(carRide.id));
     const carView = (await svc.bootstrap(caio)).rides.map((r) => r.id);
@@ -192,7 +194,7 @@ describe('regras legais no cadastro', () => {
   test('qualidade: nota baixa com 20+ avaliações marca revisão', async () => {
     await approveDriver(caio);
     await store.update('users', caio.uid, { rating: 4.4, ratingCount: 19 });
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await svc.rideAction(caio, ride.id, { action: 'start', pin: (await svc.bootstrap(ana)).rides[0].pinCode });
     await svc.rideAction(caio, ride.id, { action: 'complete' });
@@ -230,7 +232,7 @@ describe('mapa: carros por perto', () => {
 
   test('corrida em andamento recebe a direção do carro', async () => {
     await approveDriver(caio);
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
     await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng + 0.002);
@@ -243,7 +245,7 @@ describe('compartilhar a viagem por link', () => {
   test('link mostra só o necessário e para de mostrar a posição no fim', async () => {
     await approveDriver(caio);
     await store.update('users', caio.uid, { phone: '11911112222' });
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await expectError(svc.shareTrip(bia, 'ride', ride.id), 'forbidden');
     const share = await svc.shareTrip(ana, 'ride', ride.id);
     assert.match(share.path, /^\/acompanhar\/[A-Za-z0-9_-]{24}$/);
@@ -270,7 +272,7 @@ describe('compartilhar a viagem por link', () => {
   });
 
   test('viagem já encerrada não gera link', async () => {
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(ana, ride.id, { action: 'cancel' });
     await expectError(svc.shareTrip(ana, 'ride', ride.id), 'trip_ended');
   });
@@ -279,7 +281,7 @@ describe('compartilhar a viagem por link', () => {
 describe('gravação da viagem', () => {
   test('quem grava avisa a outra parte; quem não participa não mexe', async () => {
     await approveDriver(caio);
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await expectError(svc.recordingNotice(ana, 'ride', ride.id, 'audio'), 'invalid_state');
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await svc.recordingNotice(ana, 'ride', ride.id, 'video');

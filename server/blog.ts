@@ -574,13 +574,13 @@ export const SERVICE_PAGES: ServicePage[] = [
   {
     slug: 'corridas-por-aplicativo',
     title: 'Corrida por aplicativo em todo o Brasil | Froc X Uber',
-    description: 'Peça corrida de carro ou moto com preço antes de embarcar, PIN de segurança, SOS e pagamento por Pix, cartão ou dinheiro. Crie sua conta grátis.',
+    description: 'Peça corrida de carro ou moto com preço antes de embarcar, PIN de segurança, SOS e pagamento seguro pela carteira (Pix ou cartão). Crie sua conta grátis.',
     h1: 'Corrida por aplicativo com preço justo e segurança',
     intro: 'No Froc X Uber você pede uma corrida por aplicativo em qualquer cidade do Brasil e vê o preço antes de confirmar. São cinco categorias — do carro econômico ao conforto, além de moto e entregas — com embarque protegido por PIN.',
     points: [
       ['Preço antes de pedir', 'O valor aparece antes de você confirmar, calculado pela distância e pelo tempo do trajeto.'],
       ['PIN no embarque', 'O motorista só inicia a viagem com o PIN de 4 dígitos que você informa. Nada de entrar no carro errado.'],
-      ['Pague como preferir', 'Saldo da carteira (Pix ou cartão pelo Mercado Pago) ou dinheiro direto ao motorista.'],
+      ['Pagamento sem golpe', 'Tudo pela carteira Froc, recarregada por Pix ou cartão pelo Mercado Pago. Sem dinheiro na mão, sem troco e sem cobrança por fora.'],
       ['SOS e avaliação', 'Botão SOS com localização para a equipe e avaliação dos dois lados em toda corrida.'],
     ],
     faq: [

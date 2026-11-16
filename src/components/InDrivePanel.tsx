@@ -62,7 +62,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
   }, [distanceKm]);
 
   const [offerPrice, setOfferPrice] = useState<string>(String(Math.ceil(Math.max(minimum, suggested * 0.85))));
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('froc_pay');
+  const paymentMethod: PaymentMethod = 'froc_pay';
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -148,16 +148,14 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                className="min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 text-xs font-semibold text-slate-900 dark:text-white cursor-pointer"
+              <div
+                className={`min-h-[42px] rounded-xl border px-3 flex items-center text-xs font-semibold ${
+                  profile.walletBalance < (Number(offerPrice) || 0) ? 'border-amber-400 text-amber-700 dark:text-amber-300' : 'border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white'
+                }`}
               >
-                <option value="froc_pay" className="bg-white dark:bg-slate-900">
-                  Carteira Froc ({formatBRL(profile.walletBalance)})
-                </option>
-                <option value="cash" className="bg-white dark:bg-slate-900">Dinheiro em mãos</option>
-              </select>
+                Carteira Froc · saldo {formatBRL(profile.walletBalance)}
+                {profile.walletBalance < (Number(offerPrice) || 0) ? ' · recarregue na aba Conta' : ''}
+              </div>
               <input
                 type="text"
                 value={notes}
@@ -202,7 +200,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {req.passengerName} · {req.distanceKm} km · {req.paymentMethod === 'cash' ? 'dinheiro' : 'carteira Froc'}
+                  {req.passengerName} · {req.distanceKm} km · pago pela carteira Froc
                 </div>
                 <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
                   {req.origin.name.split('·')[0]} → {req.destination.name.split('·')[0]}
@@ -327,7 +325,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                       {role === 'driver' ? `Passageiro: ${m.passengerName}` : `Fechado com ${chosen?.driverName} (${chosen?.vehicleModel} · ${chosen?.vehiclePlate})`}
                     </div>
                     <div className="text-slate-600 dark:text-slate-400">
-                      {m.origin.name.split('·')[0]} → {m.destination.name.split('·')[0]} · {m.paymentMethod === 'cash' ? 'dinheiro' : 'carteira Froc'}
+                      {m.origin.name.split('·')[0]} → {m.destination.name.split('·')[0]} · {m.paymentMethod === 'cash' ? 'dinheiro (pedido antigo)' : 'pago pela carteira Froc'}
                     </div>
                     <SosButton
                       kind="indrive"
