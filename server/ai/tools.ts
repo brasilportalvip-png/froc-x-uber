@@ -106,6 +106,17 @@ export const TOOLS: ToolDef[] = [
     run: async (c) => c.configStatus?.() ?? {},
   },
   {
+    name: 'erros_do_site',
+    level: 'ler',
+    description: 'Últimos erros que aconteceram no navegador das pessoas (mensagem, arquivo/linha, tela e aparelho), para diagnosticar falhas do site.',
+    parameters: obj({ quantidade: N('Quantos (até 100). Padrão 30.') }),
+    run: async (c, a) => {
+      const store = (c.support as unknown as { store: import('../store.ts').Store }).store;
+      const list = await store.query<{ createdAt: string }>('client_errors', [], 500);
+      return list.sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt))).slice(0, Math.min(100, Number(a.quantidade) || 30));
+    },
+  },
+  {
     name: 'atendimentos_abertos',
     level: 'ler',
     description: 'Conversas de atendimento abertas; as que pediram ajuda humana aparecem primeiro.',

@@ -2832,6 +2832,27 @@ function createApp(options) {
   });
   app.get("/api/public-config", (_req, res) => res.json(options.publicConfig()));
   app.get("/api/maps-config", (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || "" }));
+  app.post("/api/client-error", rateLimit(10, 6e4), async (req, res) => {
+    try {
+      if (options.platform) {
+        const { store } = await options.platform();
+        const b = req.body || {};
+        const id2 = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await store.set("client_errors", id2, {
+          id: id2,
+          message: String(b.message || "").slice(0, 500),
+          stack: String(b.stack || "").slice(0, 3e3),
+          extra: String(b.extra || "").slice(0, 1500),
+          url: String(b.url || "").slice(0, 200),
+          ua: String(b.ua || "").slice(0, 200),
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+    } catch (error) {
+      console.warn("N\xE3o foi poss\xEDvel salvar o erro do navegador:", error);
+    }
+    res.status(204).end();
+  });
   app.post(
     "/api/webhooks/mercadopago",
     wrap(async (req) => {
@@ -3335,6 +3356,7 @@ var READ_ALL = [
   "ficha_do_usuario",
   "movimento_recente",
   "saude_do_site",
+  "erros_do_site",
   "atendimentos_abertos",
   "ver_atendimento",
   "posts_do_blog",
@@ -3582,6 +3604,17 @@ var TOOLS = [
     level: "ler",
     description: "Diagn\xF3stico t\xE9cnico: o que est\xE1 configurado (Firebase, Mercado Pago, Maps, cron, IA), sem mostrar segredos.",
     run: async (c) => c.configStatus?.() ?? {}
+  },
+  {
+    name: "erros_do_site",
+    level: "ler",
+    description: "\xDAltimos erros que aconteceram no navegador das pessoas (mensagem, arquivo/linha, tela e aparelho), para diagnosticar falhas do site.",
+    parameters: obj({ quantidade: N("Quantos (at\xE9 100). Padr\xE3o 30.") }),
+    run: async (c, a) => {
+      const store = c.support.store;
+      const list = await store.query("client_errors", [], 500);
+      return list.sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt))).slice(0, Math.min(100, Number(a.quantidade) || 30));
+    }
   },
   {
     name: "atendimentos_abertos",

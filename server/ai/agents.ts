@@ -22,6 +22,7 @@ const READ_ALL = [
   'ficha_do_usuario',
   'movimento_recente',
   'saude_do_site',
+  'erros_do_site',
   'atendimentos_abertos',
   'ver_atendimento',
   'posts_do_blog',

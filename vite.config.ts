@@ -96,6 +96,8 @@ export default defineConfig(() => {
         },
       }),
     ],
+    // Mapa do código no site publicado: o console mostra o nome real do arquivo e da linha do erro.
+    build: { sourcemap: true },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
