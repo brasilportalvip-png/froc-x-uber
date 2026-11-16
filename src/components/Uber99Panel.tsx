@@ -44,6 +44,8 @@ interface Uber99PanelProps {
   }) => Promise<void>;
   onRideAction: (rideId: string, action: string, extra?: Record<string, string | number>) => Promise<void>;
   onSetOnline: (online: boolean) => Promise<void>;
+  /** Leva para a carteira (recarga) quando falta saldo. */
+  onNeedTopUp?: () => void;
 }
 
 // Importadas pelo Vite: o caminho /src/... não existe no site publicado.
@@ -69,9 +71,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   onCreateRide,
   onRideAction,
   onSetOnline,
+  onNeedTopUp,
 }) => {
   const [selectedCat, setSelectedCat] = useState<RideCategoryId>('froc_x');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('froc_pay');
+  const paymentMethod: PaymentMethod = 'froc_pay';
   const [pinInputs, setPinInputs] = useState<Record<string, string>>({});
   const [driverChat, setDriverChat] = useState('');
   const [stopInput, setStopInput] = useState('');
@@ -107,6 +110,14 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
     () => (isUnsetDestination(destination) ? 0 : liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
     [liveDistanceKm, origin, destination]
   );
+
+  // Preço da categoria escolhida (o mesmo mostrado na lista) para conferir o saldo antes de pedir.
+  const selectedPrice = (() => {
+    const cat = RIDE_CATEGORIES.find((c) => c.id === selectedCat)!;
+    const dur = estimateDurationMin(distanceKm, cat.id === 'froc_moto' ? 'moto' : 'urban');
+    return quote?.prices.find((p) => p.categoryId === cat.id)?.price ?? Math.max(7.5, cat.baseFare + distanceKm * cat.perKm + dur * cat.perMin);
+  })();
+  const lowBalance = !needsDestination && !locating && profile.walletBalance < selectedPrice;
 
   const isActive = (r: RideOrder) => r.status !== 'completed' && r.status !== 'cancelled';
   const activeRide = rides.find((r) => r.mine === 'owner' && isActive(r));
@@ -202,7 +213,9 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   {myDriving.origin.name} → {myDriving.destination.name}
                 </div>
                 <div className="text-xs text-slate-500">
-                  Pagamento: {myDriving.paymentMethod === 'cash' ? 'dinheiro (receba do passageiro)' : 'carteira Froc (cai no seu saldo ao finalizar)'}
+                  {myDriving.paymentMethod === 'cash'
+                    ? 'Corrida antiga em dinheiro: receba do passageiro.'
+                    : 'Já pago pelo passageiro pela carteira Froc: cai sozinho no seu saldo ao finalizar.'}
                 </div>
                 {myDriving.delivery && (
                   <div className="mt-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-2 text-xs text-slate-700 dark:text-slate-200 space-y-0.5">
@@ -373,7 +386,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {ride.categoryLabel} · {ride.distanceKm} km · {ride.durationMin} min · {ride.paymentMethod === 'cash' ? 'dinheiro' : 'carteira'}
+                      {ride.categoryLabel} · {ride.distanceKm} km · {ride.durationMin} min · pago pela carteira
                     </div>
                     <h5 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
                       {ride.passengerName} <span className="text-xs text-amber-500">★ {ride.passengerRating ?? 5}</span>
@@ -529,7 +542,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   <>Motorista a {calculateDistanceKm(activeRide.driverLocation, activeRide.origin)} km do embarque (ao vivo no mapa). </>
                 )}
                 Informe o PIN ao motorista só quando entrar no carro.
-                {activeRide.paymentMethod === 'froc_pay' ? ' O valor está retido na carteira e só vai para o motorista no fim da viagem.' : ' Pagamento em dinheiro direto ao motorista.'}
+                {' O valor já saiu da sua carteira e fica guardado pela Froc; vai para o motorista no fim da viagem. Cancelou antes? Volta para você.'}
               </p>
               <button
                 type="button"
@@ -661,24 +674,27 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             </div>
           </div>
 
-          {/* Pagamento */}
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111013] px-3 min-h-[44px]">
+          {/* Pagamento: só pela carteira Froc */}
+          <div
+            className={`flex items-center gap-2 rounded-xl border px-3 min-h-[44px] text-xs ${
+              lowBalance ? 'border-amber-400 bg-amber-50 dark:bg-amber-950/30' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111013]'
+            }`}
+          >
             <CreditCard className="w-4 h-4 text-slate-500 shrink-0" />
-            <select
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-              className="w-full bg-transparent text-xs font-semibold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
-            >
-              <option value="froc_pay" className="bg-white dark:bg-slate-900">
-                Carteira Froc ({formatBRL(profile.walletBalance)}) · recarga por Pix ou cartão
-              </option>
-              <option value="cash" className="bg-white dark:bg-slate-900">Dinheiro direto ao motorista</option>
-            </select>
+            <span className="flex-1 font-semibold text-slate-900 dark:text-white">
+              Carteira Froc · saldo {formatBRL(profile.walletBalance)}
+              {lowBalance && <span className="block font-normal text-amber-700 dark:text-amber-300">Falta {formatBRL(selectedPrice - profile.walletBalance)} para esta corrida.</span>}
+            </span>
+            {lowBalance && onNeedTopUp && (
+              <button type="button" onClick={onNeedTopUp} className="px-3 min-h-[34px] rounded-lg bg-emerald-600 text-white font-bold whitespace-nowrap cursor-pointer">
+                Recarregar
+              </button>
+            )}
           </div>
 
           <button
             type="button"
-            disabled={submitting || needsDestination || locating}
+            disabled={submitting || needsDestination || locating || lowBalance}
             onClick={handleBook}
             className="w-full min-h-[48px] rounded-2xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 text-white text-sm font-bold transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 cursor-pointer"
           >
@@ -690,6 +706,8 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   ? 'Localizando você...'
                   : needsDestination
                     ? 'Escolha o destino (B) para pedir'
+                    : lowBalance
+                      ? 'Recarregue a carteira para pedir'
                     : `Confirmar ${RIDE_CATEGORIES.find((c) => c.id === selectedCat)?.label}`}
             </span>
           </button>
@@ -736,7 +754,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                         vehicle: r.vehicleModel ? `${r.vehicleModel} · ${r.vehiclePlate}` : undefined,
                         distanceKm: r.distanceKm,
                         amount: r.price,
-                        paymentMethod: r.paymentMethod === 'cash' ? 'Dinheiro' : 'Carteira Froc',
+                        paymentMethod: r.paymentMethod === 'cash' ? 'Dinheiro (corrida antiga)' : 'Carteira Froc',
                         customer: profile.name,
                       })
                     }

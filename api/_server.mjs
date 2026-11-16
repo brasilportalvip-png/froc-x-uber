@@ -152,7 +152,8 @@ var QUALITY_CONTROL = [
   "PIN de embarque: a viagem s\xF3 come\xE7a com o c\xF3digo que o passageiro informa no carro certo.",
   "Bot\xE3o SOS com localiza\xE7\xE3o para a central, liga\xE7\xE3o para o 190 e compartilhamento da viagem.",
   "Grava\xE7\xE3o de \xE1udio e v\xEDdeo pelo pr\xF3prio celular, com aviso \xE0 outra parte.",
-  "Valores pagos pela carteira ficam retidos at\xE9 o servi\xE7o terminar; cancelamento devolve.",
+  "Todo pagamento passa pela carteira Froc (sem dinheiro na m\xE3o): o valor fica retido at\xE9 o servi\xE7o terminar e cancelamento devolve.",
+  "S\xF3 ganhos podem ser transferidos por Pix: recarga feita com cart\xE3o n\xE3o vira saque (bloqueia golpe com cart\xE3o roubado).",
   "Registro de auditoria de toda a\xE7\xE3o da equipe e dos agentes de IA."
 ];
 var HOW_IT_WORKS = [
@@ -161,7 +162,7 @@ var HOW_IT_WORKS = [
     steps: [
       "Abra o app: a partida j\xE1 vem com o seu endere\xE7o atual.",
       "Digite o destino, escolha a categoria e veja o pre\xE7o antes de pedir.",
-      "Pague com a carteira Froc (Pix ou cart\xE3o) ou em dinheiro.",
+      "Pague com o saldo da carteira Froc (recarga por Pix ou cart\xE3o). N\xE3o existe dinheiro na m\xE3o.",
       "Acompanhe o carro chegando no mapa, confira placa e modelo e informe o PIN ao motorista.",
       "Durante a viagem: chat, SOS, grava\xE7\xE3o e link para a fam\xEDlia acompanhar.",
       "No fim, avalie o motorista. O valor s\xF3 \xE9 liberado para ele quando a corrida termina."
@@ -213,7 +214,9 @@ var FAQ = [
   ["O mapa mostra os carros andando?", "Sim. Antes de pedir, voc\xEA v\xEA os motoristas online perto de voc\xEA (posi\xE7\xE3o aproximada, por privacidade). Depois do aceite, v\xEA o carro do seu motorista se movendo at\xE9 voc\xEA e durante a viagem."],
   ["Minha loja pode usar a entrega da Froc?", "Pode. Crie a conta, envie o CNPJ na aba Conta > Froc para lojas e, depois de aprovado, chame entregas pelo painel ou integre seu sistema pela API (veja /desenvolvedores)."],
   ["Quanto a Froc cobra?", "A comiss\xE3o aparece no app e \xE9 definida pela administra\xE7\xE3o. O prestador v\xEA exatamente quanto vai receber antes de aceitar."],
-  ["Como funciona o pagamento?", "Pela carteira Froc (recarga por Pix ou cart\xE3o via Mercado Pago) ou em dinheiro nas corridas. Pela carteira, o valor fica retido e s\xF3 \xE9 liberado quando o servi\xE7o termina."],
+  ["Como funciona o pagamento?", "Tudo pela carteira Froc. Voc\xEA recarrega por Pix ou cart\xE3o (Mercado Pago). Ao pedir, o valor sai do seu saldo (tinha R$ 100, corrida de R$ 20, fica com R$ 80) e a Froc guarda. Quando a corrida termina, vai sozinho para a conta do motorista. Cancelou antes? Volta para voc\xEA."],
+  ["Posso pagar em dinheiro ou fazer Pix direto para o motorista?", "N\xE3o. Para acabar com golpes de troco, cobran\xE7a por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se algu\xE9m pedir pagamento por fora, n\xE3o pague e avise o Atendimento."],
+  ["Como o motorista recebe e tira o dinheiro?", "O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no pr\xF3prio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. S\xF3 os ganhos podem ir para Pix; saldo de recarga \xE9 para usar no app."],
   ["E se o motorista n\xE3o aparecer?", "Se ningu\xE9m aceitar no tempo limite, o pedido \xE9 cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila."],
   ["Como funciona o controle de qualidade?", "Documentos conferidos por pessoas, CNH e ve\xEDculo dentro da validade e da idade permitida, avalia\xE7\xE3o dos dois lados e revis\xE3o de quem fica com nota baixa."],
   ["Em emerg\xEAncia, o que fa\xE7o?", "Ligue 190 (Pol\xEDcia) ou 192 (SAMU). No app, toque em SOS: a central Froc recebe sua localiza\xE7\xE3o e os dados da viagem."]
@@ -806,6 +809,18 @@ function straightKm(a, b) {
   const h = Math.sin(toRad(b.lat - a.lat) / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(toRad(b.lng - a.lng) / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
+function pixKeyKind(key) {
+  const k = key.trim();
+  const digits = k.replace(/\D/g, "");
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(k)) return "email";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return "aleatoria";
+  if (/^\+?55/.test(k.replace(/[\s()-]/g, "")) && (digits.length === 12 || digits.length === 13)) return "telefone";
+  if (digits.length === 14 && /^[\d./-]+$/.test(k)) return "cnpj";
+  if (digits.length === 11 && /^[\d.-]+$/.test(k)) return "cpf";
+  if ((digits.length === 10 || digits.length === 11) && /^[\d\s()+-]+$/.test(k)) return "telefone";
+  return "";
+}
+var maskPix = (key) => key.length <= 6 ? key : `${key.slice(0, 3)}\u2026${key.slice(-3)}`;
 function parseDay(value) {
   const v = String(value ?? "").trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v + "T00:00:00Z")) ? v : "";
@@ -842,8 +857,9 @@ function num(value, min, max, field) {
   return n;
 }
 function paymentMethod(value) {
-  if (value === "froc_pay" || value === "cash") return value;
-  return fail2(400, "invalid_payment", "Escolha Carteira Froc (Pix/cart\xE3o) ou dinheiro.");
+  if (value === "cash")
+    fail2(400, "cash_disabled", "Pagamento em dinheiro n\xE3o existe mais: tudo \xE9 pago pela carteira Froc (recarga por Pix ou cart\xE3o). Atualize a p\xE1gina.");
+  return "froc_pay";
 }
 function resolvePoint(point, fallbackId) {
   if (point && typeof point === "object") {
@@ -963,6 +979,7 @@ var FrocService = class {
       rating: 5,
       ratingCount: 0,
       balanceCents: 0,
+      earnedCents: 0,
       completedTrips: 0,
       driverOnline: false,
       driverVehicle: "",
@@ -1016,6 +1033,7 @@ var FrocService = class {
       driverState: user.driverState || "",
       cnhExpiry: user.cnhExpiry || "",
       maxVehicleAgeYears: this.cfg.maxVehicleAgeYears,
+      withdrawableBalance: toReais(this.withdrawable(user)),
       merchantStatus: user.merchantStatus || "none",
       merchant: this.merchantView(user)
     };
@@ -1114,11 +1132,18 @@ var FrocService = class {
     client.points = (client.points || 0) + pts;
     tx.update("users", client.uid, { points: client.points });
   }
+  /** Credita um GANHO do prestador: entra no saldo e no que pode ser transferido por Pix. */
+  creditEarning(tx, provider, cents, title) {
+    const before = provider.earnedCents ?? this.withdrawable(provider);
+    this.credit(tx, provider, cents, title, "ganho_motorista");
+    provider.earnedCents = before + cents;
+    tx.update("users", provider.uid, { earnedCents: provider.earnedCents });
+  }
   /** Paga o prestador (100% menos a comissão) e registra o serviço concluído para os dois lados. */
   payProvider(tx, provider, client, escrowCents, method, title, kind = "corrida") {
     const pct = this.cfg.commissionPercent;
     if (method === "froc_pay" && escrowCents > 0) {
-      this.credit(tx, provider, this.providerCut(escrowCents), `Ganho \xB7 ${title} (${100 - pct}% l\xEDquido)`, "ganho_motorista");
+      this.creditEarning(tx, provider, this.providerCut(escrowCents), `Ganho \xB7 ${title} (${100 - pct}% l\xEDquido)`);
     } else if (method === "cash" && escrowCents > 0 && pct > 0) {
       this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa Froc ${pct}% \xB7 ${title} (pago em dinheiro)`, "taxa", true);
     }
@@ -1184,6 +1209,7 @@ var FrocService = class {
       if (current.status === "approved") return;
       const user = await this.mustGet(tx, "users", String(current.uid), "Usu\xE1rio");
       tx.update("topups", topupId, { status: "approved", paymentId: payment.paymentId, approvedAt: this.iso() });
+      if (user.earnedCents === void 0) tx.update("users", user.uid, { earnedCents: this.withdrawable(user) });
       this.credit(tx, user, Number(current.amountCents), "Recarga via Mercado Pago (Pix/cart\xE3o)", "recarga_pix");
     });
     return { status: "approved" };
@@ -1197,16 +1223,35 @@ var FrocService = class {
     await this.confirmTopup(payment.reference);
     return { handled: true };
   }
-  async requestWithdrawal(auth, amountReais, pixKey) {
-    await this.anyProvider(auth);
+  /** Quanto a pessoa pode sacar agora: o que ganhou (corridas, entregas, fretes), até o saldo atual. */
+  withdrawable(user) {
+    return Math.max(0, Math.min(user.balanceCents, user.earnedCents ?? (user.driverStatus === "approved" || user.truckerStatus === "approved" ? user.balanceCents : 0)));
+  }
+  /**
+   * Saque por Pix para qualquer conta (do próprio prestador ou outra que ele quiser).
+   * Só sai o que foi GANHO na Froc: dinheiro de recarga fica para usar no app.
+   */
+  async requestWithdrawal(auth, amountReais, pixKey, pixKeyType) {
+    await this.ensureUser(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 5e4, "saque"));
     const key = text(pixKey, 120);
-    if (key.length < 5) fail2(400, "invalid_pix_key", "Informe a chave Pix para receber o saque.");
+    const detected = pixKeyKind(key);
+    if (!detected) fail2(400, "invalid_pix_key", "Chave Pix inv\xE1lida. Use CPF, CNPJ, e-mail, celular com DDD ou chave aleat\xF3ria.");
+    const chosen = String(pixKeyType || "");
+    const ambiguous = key.replace(/\D/g, "").length === 11 && ["cpf", "telefone"].includes(chosen);
+    if (chosen && chosen !== detected && !ambiguous) fail2(400, "pix_type_mismatch", "O tipo escolhido n\xE3o combina com a chave Pix digitada. Confira.");
+    const type = ambiguous ? chosen : detected;
     const id = randomUUID2();
     await this.store.transaction(async (tx) => {
       const user = await this.mustGet(tx, "users", auth.uid, "Usu\xE1rio");
-      this.debit(tx, user, amountCents, `Saque solicitado \xB7 Pix ${key}`, "saque");
-      tx.set("withdrawals", id, { id, uid: user.uid, name: user.name, amountCents, pixKey: key, status: "pending", createdAt: this.iso() });
+      const available = this.withdrawable(user);
+      if (available <= 0) fail2(403, "nothing_to_withdraw", "Saque \xE9 para o que voc\xEA ganhou na Froc. Saldo de recarga fica para usar nas corridas, caronas, fretes e entregas.");
+      if (amountCents > available) fail2(402, "over_withdrawable", `Voc\xEA pode sacar at\xE9 ${brl(available / 100)} (seus ganhos dispon\xEDveis).`);
+      const earnedBefore = user.earnedCents ?? available;
+      this.debit(tx, user, amountCents, `Saque por Pix \xB7 ${type} ${maskPix(key)}`, "saque");
+      user.earnedCents = Math.max(0, earnedBefore - amountCents);
+      tx.update("users", user.uid, { earnedCents: user.earnedCents });
+      tx.set("withdrawals", id, { id, uid: user.uid, name: user.name, amountCents, pixKey: key, pixKeyType: type, status: "pending", createdAt: this.iso() });
     });
     return { id };
   }
@@ -1428,6 +1473,7 @@ var FrocService = class {
         name: String(w.name),
         amount: toReais(Number(w.amountCents)),
         pixKey: String(w.pixKey),
+        pixKeyType: String(w.pixKeyType || ""),
         status: w.status,
         createdAt: String(w.createdAt)
       })),
@@ -1462,7 +1508,10 @@ var FrocService = class {
       if (w.status !== "pending") fail2(409, "not_pending", "Este saque j\xE1 foi resolvido.");
       const user = await this.mustGet(tx, "users", String(w.uid), "Usu\xE1rio");
       tx.update("withdrawals", String(id), { status: decision, resolvedBy: auth.email, resolvedAt: this.iso() });
-      if (decision === "rejected") this.credit(tx, user, Number(w.amountCents), "Saque recusado \xB7 valor devolvido", "estorno");
+      if (decision === "rejected") {
+        this.credit(tx, user, Number(w.amountCents), "Saque recusado \xB7 valor devolvido", "estorno");
+        tx.update("users", user.uid, { earnedCents: (user.earnedCents ?? 0) + Number(w.amountCents) });
+      }
     });
     await this.audit(auth, decision === "paid" ? "saque_pago" : "saque_recusado", String(id));
     return { ok: true };
@@ -1698,7 +1747,7 @@ var FrocService = class {
       fail2(400, "below_floor", `A oferta m\xEDnima para ${distanceKm} km \xE9 ${brl(minimum)} (cobre combust\xEDvel e tempo do motorista).`);
     const user = await this.ensureUser(auth);
     if (method === "froc_pay" && user.balanceCents < toCents(offer))
-      fail2(402, "insufficient_balance", "Saldo insuficiente para essa oferta. Recarregue a carteira ou escolha dinheiro.");
+      fail2(402, "insufficient_balance", `Saldo insuficiente: sua carteira tem ${brl(user.balanceCents / 100)}. Recarregue por Pix ou cart\xE3o.`);
     const open = await this.store.query("indrive", [["passengerId", "==", auth.uid]], 200);
     if (open.some((r) => r.status === "open" || r.status === "matched"))
       fail2(409, "request_in_progress", "Voc\xEA j\xE1 tem um pedido de negocia\xE7\xE3o em andamento.");
@@ -1941,7 +1990,7 @@ var FrocService = class {
         const total = paid.reduce((acc, b) => acc + Number(b.amountCents), 0);
         for (const b of paid) tx.update("carpoolBookings", String(b.id), { status: "released" });
         if (total > 0) {
-          this.credit(tx, driver, this.providerCut(total), `Ganho \xB7 carona ${route} (${100 - this.cfg.commissionPercent}% l\xEDquido)`, "ganho_motorista");
+          this.creditEarning(tx, driver, this.providerCut(total), `Ganho \xB7 carona ${route} (${100 - this.cfg.commissionPercent}% l\xEDquido)`);
           this.platformRevenue(tx, "carona", total, total - this.providerCut(total));
           for (const b of paid) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
         }
@@ -3141,10 +3190,13 @@ ${vehicles}
 - Frete/mudan\xE7a: o cliente descreve a carga (tem calculadora de cubagem que sugere o ve\xEDculo), endere\xE7o de coleta e entrega e or\xE7amento (h\xE1 piso m\xEDnimo pela dist\xE2ncia); transportadores d\xE3o lances; o cliente aceita um. Valor retido at\xE9 a entrega confirmada.
 
 CARTEIRA E PAGAMENTOS
-- Recarga pelo Mercado Pago (Pix ou cart\xE3o), de R$ 10 a R$ 5.000. Tamb\xE9m \xE9 poss\xEDvel pagar corridas em dinheiro direto ao motorista.
+- TODO pagamento \xE9 pela carteira Froc. N\xC3O existe pagamento em dinheiro na m\xE3o nem Pix direto para o motorista (protege contra golpes de troco, cobran\xE7a por fora e corrida fantasma). Se algu\xE9m relatar cobran\xE7a por fora, oriente n\xE3o pagar e registre como poss\xEDvel fraude.
+- Recarga pelo Mercado Pago (Pix ou cart\xE3o), de R$ 10 a R$ 5.000. Sem saldo suficiente, o app n\xE3o deixa pedir e mostra o bot\xE3o Recarregar.
+- Fluxo: o pre\xE7o sai da carteira do cliente no pedido (ex.: tinha R$ 100, corrida de R$ 20, fica com R$ 80); a Froc guarda; ao finalizar, cai sozinho na carteira do motorista (menos a comiss\xE3o). Cancelou antes de terminar: volta inteiro para o cliente.
 - Todo valor pago com a carteira fica guardado (cust\xF3dia) e s\xF3 vai para o prestador quando o servi\xE7o termina; cancelamento devolve.
-- Comiss\xE3o atual da plataforma: ${cfg.commissionPercent}% (o prestador recebe ${100 - cfg.commissionPercent}%). Em corridas em dinheiro, a comiss\xE3o \xE9 descontada da carteira do motorista.
-- Saque (s\xF3 prestadores): m\xEDnimo R$ 20, por chave Pix; a administra\xE7\xE3o confere e paga manualmente.
+- Comiss\xE3o atual da plataforma: ${cfg.commissionPercent}% (o prestador recebe ${100 - cfg.commissionPercent}%).
+- Saldo pode ser usado no pr\xF3prio app (corridas, caronas, fretes, entregas) por qualquer pessoa, inclusive motoristas.
+- Transferir por Pix: s\xF3 os GANHOS (corridas, entregas, fretes, caronas), m\xEDnimo R$ 20, para qualquer chave Pix (CPF, CNPJ, celular, e-mail ou aleat\xF3ria), da pr\xF3pria pessoa ou de outra. Saldo de recarga n\xE3o vira Pix (bloqueia o golpe "cart\xE3o roubado \u2192 recarga \u2192 saque"). O valor sai do saldo na hora e a equipe confirma o Pix no Admin.
 - Pontos de fidelidade: ${cfg.pointsPerReal} ponto(s) por R$ 1 em servi\xE7os conclu\xEDdos; ${cfg.pointsPerRedeem} pontos viram R$ ${(REDEEM_VALUE_CENTS / 100).toFixed(2)} de cr\xE9dito.
 
 CADASTRO E CONTA
@@ -3677,13 +3729,13 @@ var SERVICE_PAGES = [
   {
     slug: "corridas-por-aplicativo",
     title: "Corrida por aplicativo em todo o Brasil | Froc X Uber",
-    description: "Pe\xE7a corrida de carro ou moto com pre\xE7o antes de embarcar, PIN de seguran\xE7a, SOS e pagamento por Pix, cart\xE3o ou dinheiro. Crie sua conta gr\xE1tis.",
+    description: "Pe\xE7a corrida de carro ou moto com pre\xE7o antes de embarcar, PIN de seguran\xE7a, SOS e pagamento seguro pela carteira (Pix ou cart\xE3o). Crie sua conta gr\xE1tis.",
     h1: "Corrida por aplicativo com pre\xE7o justo e seguran\xE7a",
     intro: "No Froc X Uber voc\xEA pede uma corrida por aplicativo em qualquer cidade do Brasil e v\xEA o pre\xE7o antes de confirmar. S\xE3o cinco categorias \u2014 do carro econ\xF4mico ao conforto, al\xE9m de moto e entregas \u2014 com embarque protegido por PIN.",
     points: [
       ["Pre\xE7o antes de pedir", "O valor aparece antes de voc\xEA confirmar, calculado pela dist\xE2ncia e pelo tempo do trajeto."],
       ["PIN no embarque", "O motorista s\xF3 inicia a viagem com o PIN de 4 d\xEDgitos que voc\xEA informa. Nada de entrar no carro errado."],
-      ["Pague como preferir", "Saldo da carteira (Pix ou cart\xE3o pelo Mercado Pago) ou dinheiro direto ao motorista."],
+      ["Pagamento sem golpe", "Tudo pela carteira Froc, recarregada por Pix ou cart\xE3o pelo Mercado Pago. Sem dinheiro na m\xE3o, sem troco e sem cobran\xE7a por fora."],
       ["SOS e avalia\xE7\xE3o", "Bot\xE3o SOS com localiza\xE7\xE3o para a equipe e avalia\xE7\xE3o dos dois lados em toda corrida."]
     ],
     faq: [
@@ -4383,7 +4435,7 @@ function createApp(options) {
   api.post("/freights/:id/cancel", wrap(async (req) => ({ freight: await (await service()).finishFreight(a(req), id(req), "cancel") })));
   api.post("/wallet/topup", limited, guard("topup", 15, 36e5, "Muitas recargas em uma hora. Tente mais tarde."), wrap(async (req) => (await service()).createTopup(a(req), req.body?.amount)));
   api.post("/wallet/topups/:id/confirm", wrap(async (req) => (await service()).confirmTopup(id(req), a(req).uid)));
-  api.post("/wallet/withdraw", limited, guard("withdraw", 5, 864e5, "Limite de 5 pedidos de saque por dia."), wrap(async (req) => (await service()).requestWithdrawal(a(req), req.body?.amount, req.body?.pixKey)));
+  api.post("/wallet/withdraw", limited, guard("withdraw", 5, 864e5, "Limite de 5 pedidos de saque por dia."), wrap(async (req) => (await service()).requestWithdrawal(a(req), req.body?.amount, req.body?.pixKey, req.body?.pixKeyType)));
   api.post(
     "/driver/documents",
     rateLimit(15, 6e4),

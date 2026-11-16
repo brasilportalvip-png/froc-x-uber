@@ -229,7 +229,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                 {w.name} · {formatBRL(w.amount)}
               </div>
               <div>
-                Chave Pix: <strong className="font-mono-num select-all">{w.pixKey}</strong>
+                Chave Pix{w.pixKeyType ? ` (${w.pixKeyType})` : ''}: <strong className="font-mono-num select-all">{w.pixKey}</strong>
               </div>
               <div className="text-slate-500">Faça o Pix pelo banco e depois marque como pago.</div>
               <div className="flex gap-2">

@@ -199,11 +199,15 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 
 | Situação | O que acontece |
 |---|---|
-| Passageiro paga pela carteira | O valor sai do saldo e fica **retido** até o serviço terminar |
+| Forma de pagamento | **Só a carteira Froc** (recarga por Pix ou cartão no Mercado Pago). Não existe dinheiro na mão nem Pix direto ao motorista |
+| Passageiro pede (ex.: tem R$ 100, corrida de R$ 20) | Os R$ 20 saem do saldo na hora (fica R$ 80) e ficam **retidos** pela Froc. Sem saldo, o app mostra "Recarregar" e não deixa pedir |
 | Serviço concluído | O prestador recebe o valor menos a comissão (12% por padrão, ajustável no Admin) |
 | Cancelamento antes do fim | O valor retido **volta inteiro** para quem pagou |
-| Corrida paga em dinheiro | O motorista recebe em mãos e a comissão sai da carteira dele |
-| Saque | O valor sai do saldo; você faz o Pix e marca "Já paguei" no Admin |
+| Motorista finaliza | O valor cai **sozinho** na carteira dele (menos a comissão) e vira "ganho disponível para Pix" |
+| Motorista usa o saldo | Pode pagar corridas, caronas, fretes e entregas no próprio app |
+| Transferir por Pix | Só os **ganhos** (mín. R$ 20), para qualquer chave Pix. O valor sai do saldo na hora; você faz o Pix e marca "Já paguei" no Admin |
+| Recarga de cartão | Fica para usar no app e **não vira Pix** (bloqueia o golpe cartão roubado → recarga → saque) |
+| Corridas antigas em dinheiro | As poucas criadas antes da mudança ainda finalizam normalmente |
 
 ## O que o Admin faz
 - **Pendências:** aprovar ou recusar motoristas, transportadores e lojas (vendo documentos, ano do veículo, cidade, validade da CNH e declarações) e pagar os saques.
@@ -214,7 +218,7 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 97 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 99 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

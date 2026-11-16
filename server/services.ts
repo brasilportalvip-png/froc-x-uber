@@ -3,9 +3,12 @@
  *
  * Princípios:
  * - Cada pessoa só vê e mexe no que é dela; motorista/caminhoneiro só atua depois de aprovado.
- * - Dinheiro em centavos inteiros. Pagamento pela carteira fica RETIDO (custódia) quando o
- *   pedido é confirmado e só vai para o motorista (88%) quando o serviço é concluído.
- *   Cancelamento devolve o valor retido.
+ * - TODO pagamento passa pela carteira Froc (não existe mais dinheiro em mãos): a pessoa
+ *   recarrega por Pix/cartão, o valor sai da carteira dela no pedido e fica RETIDO (custódia);
+ *   no fim do serviço vai sozinho para a carteira do motorista (menos a comissão).
+ *   Cancelamento devolve o valor retido. O motorista saca por Pix para qualquer conta.
+ * - Só o que o prestador GANHOU pode ser sacado (recarga de cartão não vira Pix: evita golpe
+ *   de cartão roubado → recarga → saque).
  * - Toda mudança de dinheiro acontece dentro de uma transação (lê tudo, depois grava).
  * - Nada é simulado: sem motorista inventado, sem saldo inventado, sem pagamento sem cobrança.
  */
@@ -99,6 +102,22 @@ function straightKm(a: { lat: number; lng: number }, b: { lat: number; lng: numb
   const h = Math.sin(toRad(b.lat - a.lat) / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(toRad(b.lng - a.lng) / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
+
+/** Descobre o tipo da chave Pix (ou '' se não parece uma chave válida). */
+export function pixKeyKind(key: string): string {
+  const k = key.trim();
+  const digits = k.replace(/\D/g, '');
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(k)) return 'email';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return 'aleatoria';
+  if (/^\+?55/.test(k.replace(/[\s()-]/g, '')) && (digits.length === 12 || digits.length === 13)) return 'telefone';
+  if (digits.length === 14 && /^[\d./-]+$/.test(k)) return 'cnpj';
+  if (digits.length === 11 && /^[\d.-]+$/.test(k)) return 'cpf';
+  if ((digits.length === 10 || digits.length === 11) && /^[\d\s()+-]+$/.test(k)) return 'telefone';
+  return '';
+}
+
+/** Mostra só o começo e o fim da chave Pix no extrato. */
+const maskPix = (key: string) => (key.length <= 6 ? key : `${key.slice(0, 3)}…${key.slice(-3)}`);
 
 /** Dia (AAAA-MM-DD) válido? */
 function parseDay(value: unknown) {
@@ -209,6 +228,8 @@ interface UserDoc extends Doc {
   merchant?: Doc;
   merchantSubmittedAt?: string;
   merchantCnpj?: string;
+  /** Quanto do saldo veio de ganhos (só isso pode ser sacado). Ausente = conta antiga (usa o saldo). */
+  earnedCents?: number;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -254,9 +275,11 @@ function num(value: unknown, min: number, max: number, field: string): number {
   return n;
 }
 
+/** Só existe a carteira Froc. Pedido "em dinheiro" (app antigo no celular) é recusado com explicação. */
 function paymentMethod(value: unknown): PaymentMethod {
-  if (value === 'froc_pay' || value === 'cash') return value;
-  return fail(400, 'invalid_payment', 'Escolha Carteira Froc (Pix/cartão) ou dinheiro.');
+  if (value === 'cash')
+    fail(400, 'cash_disabled', 'Pagamento em dinheiro não existe mais: tudo é pago pela carteira Froc (recarga por Pix ou cartão). Atualize a página.');
+  return 'froc_pay';
 }
 
 /** Aceita um ponto do mapa (lat/lng reais do Google) ou um local da lista. */
@@ -404,6 +427,7 @@ export class FrocService {
       rating: 5,
       ratingCount: 0,
       balanceCents: 0,
+      earnedCents: 0,
       completedTrips: 0,
       driverOnline: false,
       driverVehicle: '',
@@ -458,6 +482,7 @@ export class FrocService {
       driverState: user.driverState || '',
       cnhExpiry: user.cnhExpiry || '',
       maxVehicleAgeYears: this.cfg.maxVehicleAgeYears,
+      withdrawableBalance: toReais(this.withdrawable(user)),
       merchantStatus: user.merchantStatus || 'none',
       merchant: this.merchantView(user),
     };
@@ -572,13 +597,22 @@ export class FrocService {
     tx.update('users', client.uid, { points: client.points });
   }
 
+  /** Credita um GANHO do prestador: entra no saldo e no que pode ser transferido por Pix. */
+  private creditEarning(tx: Tx, provider: UserDoc, cents: number, title: string) {
+    // Conta antiga sem o campo: o saldo anterior conta como ganho (era tudo de serviços).
+    const before = provider.earnedCents ?? this.withdrawable(provider);
+    this.credit(tx, provider, cents, title, 'ganho_motorista');
+    provider.earnedCents = before + cents;
+    tx.update('users', provider.uid, { earnedCents: provider.earnedCents });
+  }
+
   /** Paga o prestador (100% menos a comissão) e registra o serviço concluído para os dois lados. */
   private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida') {
     const pct = this.cfg.commissionPercent;
     if (method === 'froc_pay' && escrowCents > 0) {
-      this.credit(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`, 'ganho_motorista');
+      this.creditEarning(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`);
     } else if (method === 'cash' && escrowCents > 0 && pct > 0) {
-      // Recebeu em dinheiro: a comissão da plataforma é descontada da carteira.
+      // Só corridas antigas (criadas antes do fim do dinheiro em mãos): a comissão sai da carteira.
       this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa Froc ${pct}% · ${title} (pago em dinheiro)`, 'taxa', true);
     }
     if (escrowCents > 0) this.platformRevenue(tx, kind, escrowCents, escrowCents - this.providerCut(escrowCents));
@@ -646,6 +680,8 @@ export class FrocService {
       if (current.status === 'approved') return;
       const user = await this.mustGet<UserDoc>(tx, 'users', String(current.uid), 'Usuário');
       tx.update('topups', topupId, { status: 'approved', paymentId: payment.paymentId, approvedAt: this.iso() });
+      // Conta antiga sem o campo: congela os ganhos atuais antes da recarga (a recarga não vira saque).
+      if (user.earnedCents === undefined) tx.update('users', user.uid, { earnedCents: this.withdrawable(user) });
       this.credit(tx, user, Number(current.amountCents), 'Recarga via Mercado Pago (Pix/cartão)', 'recarga_pix');
     });
     return { status: 'approved' as const };
@@ -661,16 +697,37 @@ export class FrocService {
     return { handled: true };
   }
 
-  async requestWithdrawal(auth: AuthUser, amountReais: unknown, pixKey: unknown) {
-    await this.anyProvider(auth);
+  /** Quanto a pessoa pode sacar agora: o que ganhou (corridas, entregas, fretes), até o saldo atual. */
+  private withdrawable(user: UserDoc) {
+    return Math.max(0, Math.min(user.balanceCents, user.earnedCents ?? (user.driverStatus === 'approved' || user.truckerStatus === 'approved' ? user.balanceCents : 0)));
+  }
+
+  /**
+   * Saque por Pix para qualquer conta (do próprio prestador ou outra que ele quiser).
+   * Só sai o que foi GANHO na Froc: dinheiro de recarga fica para usar no app.
+   */
+  async requestWithdrawal(auth: AuthUser, amountReais: unknown, pixKey: unknown, pixKeyType?: unknown) {
+    await this.ensureUser(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 50000, 'saque'));
     const key = text(pixKey, 120);
-    if (key.length < 5) fail(400, 'invalid_pix_key', 'Informe a chave Pix para receber o saque.');
+    const detected = pixKeyKind(key);
+    if (!detected) fail(400, 'invalid_pix_key', 'Chave Pix inválida. Use CPF, CNPJ, e-mail, celular com DDD ou chave aleatória.');
+    const chosen = String(pixKeyType || '');
+    // 11 números pode ser CPF ou celular: vale o tipo escolhido pela pessoa.
+    const ambiguous = key.replace(/\D/g, '').length === 11 && ['cpf', 'telefone'].includes(chosen);
+    if (chosen && chosen !== detected && !ambiguous) fail(400, 'pix_type_mismatch', 'O tipo escolhido não combina com a chave Pix digitada. Confira.');
+    const type = ambiguous ? chosen : detected;
     const id = randomUUID();
     await this.store.transaction(async (tx) => {
       const user = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Usuário');
-      this.debit(tx, user, amountCents, `Saque solicitado · Pix ${key}`, 'saque');
-      tx.set('withdrawals', id, { id, uid: user.uid, name: user.name, amountCents, pixKey: key, status: 'pending', createdAt: this.iso() });
+      const available = this.withdrawable(user);
+      if (available <= 0) fail(403, 'nothing_to_withdraw', 'Saque é para o que você ganhou na Froc. Saldo de recarga fica para usar nas corridas, caronas, fretes e entregas.');
+      if (amountCents > available) fail(402, 'over_withdrawable', `Você pode sacar até ${brl(available / 100)} (seus ganhos disponíveis).`);
+      const earnedBefore = user.earnedCents ?? available;
+      this.debit(tx, user, amountCents, `Saque por Pix · ${type} ${maskPix(key)}`, 'saque');
+      user.earnedCents = Math.max(0, earnedBefore - amountCents);
+      tx.update('users', user.uid, { earnedCents: user.earnedCents });
+      tx.set('withdrawals', id, { id, uid: user.uid, name: user.name, amountCents, pixKey: key, pixKeyType: type, status: 'pending', createdAt: this.iso() });
     });
     return { id };
   }
@@ -906,6 +963,7 @@ export class FrocService {
         name: String(w.name),
         amount: toReais(Number(w.amountCents)),
         pixKey: String(w.pixKey),
+        pixKeyType: String(w.pixKeyType || ''),
         status: w.status as 'pending',
         createdAt: String(w.createdAt),
       })),
@@ -942,7 +1000,11 @@ export class FrocService {
       if (w.status !== 'pending') fail(409, 'not_pending', 'Este saque já foi resolvido.');
       const user = await this.mustGet<UserDoc>(tx, 'users', String(w.uid), 'Usuário');
       tx.update('withdrawals', String(id), { status: decision, resolvedBy: auth.email, resolvedAt: this.iso() });
-      if (decision === 'rejected') this.credit(tx, user, Number(w.amountCents), 'Saque recusado · valor devolvido', 'estorno');
+      if (decision === 'rejected') {
+        this.credit(tx, user, Number(w.amountCents), 'Saque recusado · valor devolvido', 'estorno');
+        // Devolve também ao "pode sacar" (era ganho).
+        tx.update('users', user.uid, { earnedCents: (user.earnedCents ?? 0) + Number(w.amountCents) });
+      }
     });
     await this.audit(auth, decision === 'paid' ? 'saque_pago' : 'saque_recusado', String(id));
     return { ok: true };
@@ -1191,7 +1253,7 @@ export class FrocService {
       fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km é ${brl(minimum)} (cobre combustível e tempo do motorista).`);
     const user = await this.ensureUser(auth);
     if (method === 'froc_pay' && user.balanceCents < toCents(offer))
-      fail(402, 'insufficient_balance', 'Saldo insuficiente para essa oferta. Recarregue a carteira ou escolha dinheiro.');
+      fail(402, 'insufficient_balance', `Saldo insuficiente: sua carteira tem ${brl(user.balanceCents / 100)}. Recarregue por Pix ou cartão.`);
     const open = await this.store.query<Doc>('indrive', [['passengerId', '==', auth.uid]], 200);
     if (open.some((r) => r.status === 'open' || r.status === 'matched'))
       fail(409, 'request_in_progress', 'Você já tem um pedido de negociação em andamento.');
@@ -1448,7 +1510,7 @@ export class FrocService {
         const total = paid.reduce((acc, b) => acc + Number(b.amountCents), 0);
         for (const b of paid) tx.update('carpoolBookings', String(b.id), { status: 'released' });
         if (total > 0) {
-          this.credit(tx, driver, this.providerCut(total), `Ganho · carona ${route} (${100 - this.cfg.commissionPercent}% líquido)`, 'ganho_motorista');
+          this.creditEarning(tx, driver, this.providerCut(total), `Ganho · carona ${route} (${100 - this.cfg.commissionPercent}% líquido)`);
           this.platformRevenue(tx, 'carona', total, total - this.providerCut(total));
           for (const b of paid) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
         }

@@ -69,14 +69,16 @@ beforeEach(async () => {
     files: { async save() {}, async signedUrl(p) { return 'https://x/' + p; } },
   });
   for (const u of [ana, bia, caio, duda, tonhao, admin]) await svc.ensureUser(u);
+  // Todo pagamento é pela carteira: passageiros começam com saldo.
+  for (const u of [ana, bia]) await topUp(u, 500);
 });
 
 describe('H3: despacho por região e preço dinâmico', () => {
   test('motorista com localização só vê pedidos da região dele', async () => {
     await approve(caio, 'driver');
     await svc.updateProfile(caio, { driverOnline: true });
-    await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
-    await svc.createRide(bia, { originId: 'br-campinas', destinationId: 'sp-tiete', categoryId: 'froc_x', paymentMethod: 'cash' }).catch(() => undefined);
+    await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
+    await svc.createRide(bia, { originId: 'br-campinas', destinationId: 'sp-tiete', categoryId: 'froc_x', paymentMethod: 'froc_pay' }).catch(() => undefined);
     assert.equal((await svc.bootstrap(caio)).rides.length >= 1, true, 'sem localização vê todos');
     await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
     const near = (await svc.bootstrap(caio)).rides;
@@ -91,12 +93,13 @@ describe('H3: despacho por região e preço dinâmico', () => {
     assert.equal(calm.surge, 1);
     for (const [i, u] of [bia, caio, duda, tonhao].entries()) {
       await svc.ensureUser(u);
-      await svc.createRide(u, { originPoint: { ...PAULISTA, name: 'Paulista ' + i, city: 'São Paulo' }, destinationId: 'sp-pinheiros', categoryId: 'froc_x', paymentMethod: 'cash' });
+      if (u !== bia) await topUp(u, 100);
+      await svc.createRide(u, { originPoint: { ...PAULISTA, name: 'Paulista ' + i, city: 'São Paulo' }, destinationId: 'sp-pinheiros', categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     }
     const busy = await svc.quoteRide(ana, SP);
     assert.ok(busy.surge > 1, `esperava preço dinâmico, veio ${busy.surge}`);
     assert.ok(busy.surge <= 2);
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     assert.equal(ride.surgeMultiplier, busy.surge);
     await svc.updateSettings(admin, { surgeEnabled: false });
     assert.equal((await svc.quoteRide(bia, SP)).surge, 1);
@@ -105,7 +108,7 @@ describe('H3: despacho por região e preço dinâmico', () => {
   test('passageiro vê a posição do motorista durante a corrida', async () => {
     await approve(caio, 'driver');
     await svc.updateProfile(caio, { driverOnline: true });
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await svc.updateLocation(caio, PAULISTA.lat + 0.001, PAULISTA.lng);
     const seen = (await svc.bootstrap(ana)).rides.find((r) => r.id === ride.id)!;
@@ -117,6 +120,7 @@ describe('H3: despacho por região e preço dinâmico', () => {
 describe('prazos automáticos (papel do Cadence)', () => {
   test('corrida sem motorista é cancelada e estornada depois do prazo', async () => {
     await topUp(ana, 100);
+    const before = await balance(ana);
     const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     minutes(5);
     await svc.sweep(true);
@@ -124,13 +128,13 @@ describe('prazos automáticos (papel do Cadence)', () => {
     minutes(6);
     const result = await svc.sweep(true);
     assert.equal(result.ridesCancelled, 1);
-    assert.equal(await balance(ana), 100);
+    assert.equal(await balance(ana), before);
     assert.equal((await svc.bootstrap(ana)).rides.find((r) => r.id === ride.id)!.status, 'cancelled');
   });
 
   test('negociação aberta expira; prazo configurável no admin', async () => {
     await svc.updateSettings(admin, { indriveOpenTimeoutMin: 5 });
-    await svc.createInDrive(ana, { ...SP, passengerOffer: 20, paymentMethod: 'cash' });
+    await svc.createInDrive(ana, { ...SP, passengerOffer: 20, paymentMethod: 'froc_pay' });
     minutes(6);
     assert.equal((await svc.sweep(true)).requestsExpired, 1);
   });
@@ -140,7 +144,7 @@ describe('SOS', () => {
   test('participante dispara SOS com dados da viagem; admin vê e resolve', async () => {
     await approve(caio, 'driver');
     await svc.updateProfile(caio, { driverOnline: true });
-    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'cash' });
+    const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await expectError(svc.createSos(bia, { kind: 'ride', refId: ride.id }), 'forbidden');
     await svc.createSos(ana, { kind: 'ride', refId: ride.id, lat: PAULISTA.lat, lng: PAULISTA.lng, message: 'Motorista mudou o caminho' });
@@ -208,7 +212,7 @@ describe('admin: usuários e bloqueio', () => {
 describe('pisos de preço', () => {
   test('negociação e frete abaixo do mínimo são recusados', async () => {
     await approve(tonhao, 'trucker');
-    await expectError(svc.createInDrive(ana, { originId: 'sp-tiete', destinationId: 'br-campinas', passengerOffer: 20, paymentMethod: 'cash' }), 'below_floor');
+    await expectError(svc.createInDrive(ana, { originId: 'sp-tiete', destinationId: 'br-campinas', passengerOffer: 20, paymentMethod: 'froc_pay' }), 'below_floor');
     assert.ok(negotiationFloor(90) > 100);
     await expectError(
       svc.createFreight(ana, { ...INTERCITY, estimatedWeightKg: 100, proposedBudget: 100, scheduledDate: 'Sábado' }),

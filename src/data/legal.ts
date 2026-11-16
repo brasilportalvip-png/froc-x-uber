@@ -173,7 +173,8 @@ export const QUALITY_CONTROL = [
   'PIN de embarque: a viagem só começa com o código que o passageiro informa no carro certo.',
   'Botão SOS com localização para a central, ligação para o 190 e compartilhamento da viagem.',
   'Gravação de áudio e vídeo pelo próprio celular, com aviso à outra parte.',
-  'Valores pagos pela carteira ficam retidos até o serviço terminar; cancelamento devolve.',
+  'Todo pagamento passa pela carteira Froc (sem dinheiro na mão): o valor fica retido até o serviço terminar e cancelamento devolve.',
+  'Só ganhos podem ser transferidos por Pix: recarga feita com cartão não vira saque (bloqueia golpe com cartão roubado).',
   'Registro de auditoria de toda ação da equipe e dos agentes de IA.',
 ];
 
@@ -183,7 +184,7 @@ export const HOW_IT_WORKS: { title: string; steps: string[] }[] = [
     steps: [
       'Abra o app: a partida já vem com o seu endereço atual.',
       'Digite o destino, escolha a categoria e veja o preço antes de pedir.',
-      'Pague com a carteira Froc (Pix ou cartão) ou em dinheiro.',
+      'Pague com o saldo da carteira Froc (recarga por Pix ou cartão). Não existe dinheiro na mão.',
       'Acompanhe o carro chegando no mapa, confira placa e modelo e informe o PIN ao motorista.',
       'Durante a viagem: chat, SOS, gravação e link para a família acompanhar.',
       'No fim, avalie o motorista. O valor só é liberado para ele quando a corrida termina.',
@@ -236,7 +237,9 @@ export const FAQ: [string, string][] = [
   ['O mapa mostra os carros andando?', 'Sim. Antes de pedir, você vê os motoristas online perto de você (posição aproximada, por privacidade). Depois do aceite, vê o carro do seu motorista se movendo até você e durante a viagem.'],
   ['Minha loja pode usar a entrega da Froc?', 'Pode. Crie a conta, envie o CNPJ na aba Conta > Froc para lojas e, depois de aprovado, chame entregas pelo painel ou integre seu sistema pela API (veja /desenvolvedores).'],
   ['Quanto a Froc cobra?', 'A comissão aparece no app e é definida pela administração. O prestador vê exatamente quanto vai receber antes de aceitar.'],
-  ['Como funciona o pagamento?', 'Pela carteira Froc (recarga por Pix ou cartão via Mercado Pago) ou em dinheiro nas corridas. Pela carteira, o valor fica retido e só é liberado quando o serviço termina.'],
+  ['Como funciona o pagamento?', 'Tudo pela carteira Froc. Você recarrega por Pix ou cartão (Mercado Pago). Ao pedir, o valor sai do seu saldo (tinha R$ 100, corrida de R$ 20, fica com R$ 80) e a Froc guarda. Quando a corrida termina, vai sozinho para a conta do motorista. Cancelou antes? Volta para você.'],
+  ['Posso pagar em dinheiro ou fazer Pix direto para o motorista?', 'Não. Para acabar com golpes de troco, cobrança por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se alguém pedir pagamento por fora, não pague e avise o Atendimento.'],
+  ['Como o motorista recebe e tira o dinheiro?', 'O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no próprio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. Só os ganhos podem ir para Pix; saldo de recarga é para usar no app.'],
   ['E se o motorista não aparecer?', 'Se ninguém aceitar no tempo limite, o pedido é cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila.'],
   ['Como funciona o controle de qualidade?', 'Documentos conferidos por pessoas, CNH e veículo dentro da validade e da idade permitida, avaliação dos dois lados e revisão de quem fica com nota baixa.'],
   ['Em emergência, o que faço?', 'Ligue 190 (Polícia) ou 192 (SAMU). No app, toque em SOS: a central Froc recebe sua localização e os dados da viagem.'],
