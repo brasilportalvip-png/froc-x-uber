@@ -120,6 +120,29 @@ export function createApp(options: AppOptions) {
   app.get('/api/public-config', (_req, res) => res.json(options.publicConfig()));
   app.get('/api/maps-config', (_req, res) => res.json({ apiKey: options.publicConfig().mapsApiKey || '' }));
 
+  // Erros que acontecem no navegador das pessoas (a equipe vê no Admin / Equipe IA → Manutenção).
+  app.post('/api/client-error', rateLimit(10, 60_000), async (req: Request, res: Response) => {
+    try {
+      if (options.platform) {
+        const { store } = await options.platform();
+        const b = (req.body || {}) as Record<string, unknown>;
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await store.set('client_errors', id, {
+          id,
+          message: String(b.message || '').slice(0, 500),
+          stack: String(b.stack || '').slice(0, 3000),
+          extra: String(b.extra || '').slice(0, 1500),
+          url: String(b.url || '').slice(0, 200),
+          ua: String(b.ua || '').slice(0, 200),
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      console.warn('Não foi possível salvar o erro do navegador:', error);
+    }
+    res.status(204).end();
+  });
+
   // Aviso automático do Mercado Pago (pagamento aprovado → credita a recarga).
   app.post(
     '/api/webhooks/mercadopago',
