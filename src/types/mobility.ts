@@ -123,7 +123,8 @@ export interface CarpoolTrip {
   bookedByUserSeats: number;
 }
 
-export type { CargoVehicleType as TruckType } from '../data/cargoVehicles.ts';
+import type { CargoVehicleType } from '../data/cargoVehicles.ts';
+export type TruckType = CargoVehicleType;
 
 export interface EmptyTruckRoute {
   id: string;
