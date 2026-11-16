@@ -129,7 +129,8 @@ Limite: 60 mensagens por pessoa por dia (protege a sua conta do Gemini).
 
 **Blog diário:** o mesmo agendador do item 5 dispara, a partir das 7h, 1 post por dia em `/blog`, com SEO
 (título, descrição, palavra-chave, perguntas frequentes, dados estruturados) e avisa o Bing na hora (IndexNow).
-Post fora do padrão vira rascunho em vez de ir ao ar. Admin → Blog e SEO: gerar outro na hora, publicar ou tirar do ar.
+Post com texto realmente ruim vira rascunho; título e descrição são ajustados sozinhos.
+**Capas:** cada post ganha uma foto gerada pela IA (modelo de imagem do Gemini, mesma chave), guardada no Firebase Storage. Enquanto a foto não fica pronta, aparece a capa da marca. O agendador coloca as capas que faltarem. Opcional: `GEMINI_IMAGE_MODEL` para forçar um modelo de imagem. Admin → Blog e SEO: gerar outro na hora, publicar ou tirar do ar.
 Relatório diário da Froc: Admin → Equipe IA → Relatórios diários.
 
 **Google Search Console (dia 1):**
@@ -180,7 +181,7 @@ Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` 
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 69 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 74 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

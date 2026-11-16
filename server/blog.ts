@@ -12,6 +12,9 @@ import type { Doc, Store } from './store.ts';
 import type { LlmClient } from './ai/gemini.ts';
 import { parseJsonLoose } from './ai/gemini.ts';
 import { FROC_VOICE } from './ai/persona.ts';
+import type { ImageClient } from './ai/images.ts';
+import { coverPrompt } from './ai/images.ts';
+import type { FileStorage } from './services.ts';
 
 export interface BlogSection {
   heading: string;
@@ -36,6 +39,9 @@ export interface BlogPost extends Doc {
   createdAt: string;
   updatedAt: string;
   publishedAt: string;
+  /** Capa gerada pela IA (guardada no Firebase Storage). Sem ela, usa a capa da marca. */
+  image?: { path: string; mimeType: string; alt: string; model: string };
+  imageAttempts?: number;
 }
 
 export const SITE_NAME = 'Froc X Uber';
@@ -199,10 +205,29 @@ Regras de conteúdo:
 Responda SOMENTE com JSON válido: {"keyword","title","description","h1","intro","sections":[{"heading","paragraphs":[]}],"faq":[{"q","a"}],"cta","tags":[]}
 `;
 
+export interface BlogDeps {
+  llm?: LlmClient;
+  images?: ImageClient;
+  files?: FileStorage;
+  siteUrl: () => string;
+  indexNow?: (urls: string[]) => Promise<unknown>;
+}
+
+/** Endereço público da capa do post (foto da IA ou capa da marca). */
+export function coverUrl(post: Pick<BlogPost, 'id' | 'slug' | 'image'>) {
+  if (post.image) return `/blog/img/${post.id}.${post.image.mimeType.includes('jpeg') ? 'jpg' : 'png'}`;
+  return `/blog/capa/${post.slug}.svg`;
+}
+
+/** Texto alternativo da capa (acessibilidade e Google Imagens). */
+export function coverAlt(post: Pick<BlogPost, 'keyword' | 'title' | 'image'>) {
+  return post.image?.alt || `${post.title} — ${SITE_NAME}`;
+}
+
 export class BlogService {
   private store: Store;
-  private deps: { llm?: LlmClient; siteUrl: () => string; indexNow?: (urls: string[]) => Promise<unknown> };
-  constructor(store: Store, deps: { llm?: LlmClient; siteUrl: () => string; indexNow?: (urls: string[]) => Promise<unknown> }) {
+  private deps: BlogDeps;
+  constructor(store: Store, deps: BlogDeps) {
     this.store = store;
     this.deps = deps;
   }
@@ -238,6 +263,43 @@ export class BlogService {
   }
 
   /** Já existe post publicado hoje (horário de Brasília)? */
+  /** Gera a capa com a IA e guarda no Storage. Devolve true se deu certo. */
+  async attachImage(slug: string) {
+    const post = await this.get(slug);
+    if (!post) throw new Error('Post não encontrado.');
+    if (!this.deps.images?.configured || !this.deps.files) throw new Error('Imagens indisponíveis (IA ou Storage sem configuração).');
+    await this.store.update('blog', post.id, { imageAttempts: Number(post.imageAttempts || 0) + 1 });
+    const img = await this.deps.images.generate(coverPrompt(post.topic, post.keyword));
+    const ext = img.mimeType.includes('jpeg') ? 'jpg' : 'png';
+    const path = `froc-x-uber/blog/${post.id}.${ext}`;
+    await this.deps.files.save(path, img.mimeType, img.bytes);
+    const image = { path, mimeType: img.mimeType, alt: `Imagem ilustrativa: ${post.keyword || post.title}`, model: img.model };
+    await this.store.update('blog', post.id, { image, updatedAt: new Date().toISOString() });
+    return { ok: true, url: coverUrl({ ...post, image }), model: img.model };
+  }
+
+  /** Coloca capa nos posts publicados que ainda não têm (até `max` por vez; 3 tentativas por post). */
+  async fillMissingImages(max = 1) {
+    if (!this.deps.images?.configured || !this.deps.files) return { skipped: true };
+    const pending = (await this.list({ limit: 15 })).filter((p) => !p.image && Number(p.imageAttempts || 0) < 3).slice(0, max);
+    const done: string[] = [];
+    for (const p of pending) {
+      try {
+        await this.attachImage(p.slug);
+        done.push(p.slug);
+      } catch (e) {
+        console.warn('Capa do blog não gerada:', p.slug, e instanceof Error ? e.message : e);
+      }
+    }
+    return { done };
+  }
+
+  async readImage(id: string) {
+    const post = (await this.store.get<BlogPost>('blog', id)) ?? null;
+    if (!post?.image || !this.deps.files?.read) return null;
+    return this.deps.files.read(post.image.path);
+  }
+
   async hasPostOn(day: string) {
     const recent = await this.list({ includeDrafts: true, limit: 10 });
     return recent.some((p) => brDate(new Date(p.createdAt)) === day);
@@ -332,12 +394,13 @@ h1{font:800 clamp(28px,5vw,42px)/1.15 Outfit,system-ui;margin:28px 0 12px}h2{fon
 .meta{color:#a1a1aa;font-size:13px}.lead{font-size:18px;color:#e4e4e7}
 .card{border:1px solid rgba(212,175,55,.35);border-radius:18px;padding:20px;margin:28px 0;background:linear-gradient(135deg,rgba(255,45,149,.08),rgba(212,175,55,.06))}
 details{border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:12px 16px;margin:8px 0;background:rgba(255,255,255,.03)}summary{cursor:pointer;font-weight:700}
-.list a{display:block;padding:16px 0;border-bottom:1px solid rgba(255,255,255,.08);text-decoration:none}.list b{display:block;color:#fff;font-size:18px}.list span{color:#a1a1aa;font-size:14px}
+.hero{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;border-radius:18px;margin:18px 0 6px;border:1px solid rgba(212,175,55,.35);box-shadow:0 18px 50px -24px rgba(255,45,149,.6)}
+.list a{display:flex;gap:14px;align-items:center;padding:16px 0;border-bottom:1px solid rgba(255,255,255,.08);text-decoration:none}.list img{width:120px;height:68px;object-fit:cover;border-radius:10px;flex-shrink:0;border:1px solid rgba(212,175,55,.3)}.list div{min-width:0}.list b{display:block;color:#fff;font-size:18px}.list span{color:#a1a1aa;font-size:14px}
 .crumbs{font-size:13px;color:#a1a1aa;margin-top:18px}.crumbs a{color:#d4af37}footer{border-top:1px solid rgba(255,255,255,.1);margin-top:50px;padding:28px 0;color:#77777f;font-size:13px;text-align:center}
 .tags span{display:inline-block;border:1px solid rgba(212,175,55,.4);color:#f2c14e;border-radius:999px;padding:2px 10px;font-size:12px;margin:2px}
 `;
 
-function layout(o: { title: string; description: string; canonical: string; body: string; jsonLd: unknown[]; type?: string; publishedAt?: string }) {
+function layout(o: { title: string; description: string; canonical: string; body: string; jsonLd: unknown[]; type?: string; publishedAt?: string; image?: string; imageAlt?: string }) {
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -354,6 +417,8 @@ function layout(o: { title: string; description: string; canonical: string; body
 <meta property="og:description" content="${escapeHtml(o.description)}">
 <meta property="og:url" content="${escapeHtml(o.canonical)}">
 ${o.publishedAt ? `<meta property="article:published_time" content="${escapeHtml(o.publishedAt)}">` : ''}
+<meta property="og:image" content="${escapeHtml(o.image || `${o.canonical.replace(/^(https?:\/\/[^/]+).*/, '$1')}/pwa-512x512.png`)}">
+${o.imageAlt ? `<meta property="og:image:alt" content="${escapeHtml(o.imageAlt)}">` : ''}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#050505">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
@@ -379,6 +444,39 @@ const ORG = (site: string) => ({
   logo: `${site}/pwa-512x512.png`,
 });
 
+function listItem(p: BlogPost) {
+  return `<a href="/blog/${escapeHtml(p.slug)}"><img src="${escapeHtml(coverUrl(p))}" alt="${escapeHtml(coverAlt(p))}" width="240" height="135" loading="lazy"><div><b>${escapeHtml(p.title)}</b><span>${escapeHtml(p.description)}</span></div></a>`;
+}
+
+/** Capa da marca (quando a IA não gerou foto): preto, rosa e dourado com o título do post. */
+export function renderCoverSvg(post: Pick<BlogPost, 'title' | 'keyword'>) {
+  const words = post.title.split(/\s+/);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + ' ' + w).trim().length > 26 && cur) {
+      lines.push(cur);
+      cur = w;
+    } else cur = (cur + ' ' + w).trim();
+  }
+  if (cur) lines.push(cur);
+  const shown = lines.slice(0, 4);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050505"/><stop offset="1" stop-color="#1a0010"/></linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f7e08a"/><stop offset=".5" stop-color="#d4af37"/><stop offset="1" stop-color="#9c7a1c"/></linearGradient>
+<linearGradient id="pink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4fa7"/><stop offset="1" stop-color="#c2006b"/></linearGradient>
+<radialGradient id="glow" cx=".85" cy=".1" r=".6"><stop offset="0" stop-color="#ff2d95" stop-opacity=".45"/><stop offset="1" stop-color="#ff2d95" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1280" height="720" fill="url(#bg)"/><rect width="1280" height="720" fill="url(#glow)"/>
+<rect x="24" y="24" width="1232" height="672" rx="36" fill="none" stroke="url(#gold)" stroke-width="3" opacity=".8"/>
+<text x="80" y="130" font-family="Outfit,Arial,sans-serif" font-size="40" font-weight="800" fill="url(#gold)">${escapeHtml(SITE_NAME)}</text>
+<rect x="80" y="160" width="140" height="8" rx="4" fill="url(#pink)"/>
+${shown.map((l, i) => `<text x="80" y="${280 + i * 92}" font-family="Outfit,Arial,sans-serif" font-size="76" font-weight="800" fill="#ffffff">${escapeHtml(l)}</text>`).join('\n')}
+<text x="80" y="660" font-family="Arial,sans-serif" font-size="28" fill="#d4af37">Corridas · Caronas · Fretes — todo o Brasil</text>
+</svg>`;
+}
+
 export function renderPost(post: BlogPost, site: string, related: BlogPost[] = []) {
   const url = `${site}/blog/${post.slug}`;
   const body = `
@@ -386,17 +484,22 @@ export function renderPost(post: BlogPost, site: string, related: BlogPost[] = [
 <article>
 <h1>${escapeHtml(post.h1)}</h1>
 <div class="meta">Por ${escapeHtml(post.author)} · ${new Date(post.publishedAt || post.createdAt).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</div>
+<img class="hero" src="${escapeHtml(coverUrl(post))}" alt="${escapeHtml(coverAlt(post))}" width="1280" height="720" fetchpriority="high">
 <p class="lead">${escapeHtml(post.intro)}</p>
 ${post.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>${s.paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join('')}`).join('\n')}
 <div class="card"><h2 style="margin-top:0">Experimente o ${SITE_NAME}</h2><p>${escapeHtml(post.cta)}</p><a class="btn" href="/#entrar">Criar conta grátis</a> <a class="btn gold" href="/seja-motorista">Quero ser motorista</a></div>
 ${post.faq.length ? `<h2>Perguntas frequentes</h2>${post.faq.map((f) => `<details><summary>${escapeHtml(f.q)}</summary><p>${escapeHtml(f.a)}</p></details>`).join('')}` : ''}
 ${post.tags.length ? `<p class="tags">${post.tags.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</p>` : ''}
 </article>
-${related.length ? `<h2>Leia também</h2><div class="list">${related.map((r) => `<a href="/blog/${escapeHtml(r.slug)}"><b>${escapeHtml(r.title)}</b><span>${escapeHtml(r.description)}</span></a>`).join('')}</div>` : ''}`;
+${related.length ? `<h2>Leia também</h2><div class="list">${related.map(listItem).join('')}</div>` : ''}`;
+  const image = `${site}${coverUrl(post)}`;
   return layout({
     title: post.title,
     description: post.description,
     canonical: url,
+    // Rede social não mostra SVG: sem foto da IA, usa o ícone da marca.
+    image: post.image ? image : undefined,
+    imageAlt: coverAlt(post),
     type: 'article',
     publishedAt: post.publishedAt || post.createdAt,
     body,
@@ -406,6 +509,7 @@ ${related.length ? `<h2>Leia também</h2><div class="list">${related.map((r) => 
         '@type': 'BlogPosting',
         headline: post.title,
         description: post.description,
+        image: [image],
         mainEntityOfPage: url,
         url,
         datePublished: post.publishedAt || post.createdAt,
@@ -435,7 +539,7 @@ export function renderBlogIndex(posts: BlogPost[], site: string) {
   const body = `
 <h1>Blog do ${SITE_NAME}</h1>
 <p class="lead">Dicas de corridas, caronas entre cidades, fretes, mudanças e como ganhar dinheiro dirigindo — um artigo novo todo dia.</p>
-<div class="list">${posts.length ? posts.map((p) => `<a href="/blog/${escapeHtml(p.slug)}"><b>${escapeHtml(p.title)}</b><span>${escapeHtml(p.description)}</span></a>`).join('') : '<p>Os primeiros artigos chegam em breve.</p>'}</div>`;
+<div class="list">${posts.length ? posts.map(listItem).join('') : '<p>Os primeiros artigos chegam em breve.</p>'}</div>`;
   return layout({
     title: `Blog ${SITE_NAME}: corridas, caronas e fretes`,
     description: 'Artigos diários sobre corrida por aplicativo, carona intermunicipal, frete, mudança e como ser motorista. Dicas práticas para todo o Brasil.',
@@ -596,9 +700,14 @@ ${urls.map((u) => `  <url><loc>${xmlEscape(u.loc)}</loc><lastmod>${STATIC_LASTMO
 
 export function sitemapBlog(site: string, posts: BlogPost[]) {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
 ${posts
-  .map((p) => `  <url><loc>${xmlEscape(`${site}/blog/${p.slug}`)}</loc><lastmod>${String(p.updatedAt || p.publishedAt || p.createdAt).slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>`)
+  .map(
+    (p) =>
+      `  <url><loc>${xmlEscape(`${site}/blog/${p.slug}`)}</loc><lastmod>${String(p.updatedAt || p.publishedAt || p.createdAt).slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority>${
+        p.image ? `<image:image><image:loc>${xmlEscape(`${site}${coverUrl(p)}`)}</image:loc></image:image>` : ''
+      }</url>`,
+  )
   .join('\n')}
 </urlset>
 `;

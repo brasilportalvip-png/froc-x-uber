@@ -11,6 +11,8 @@ import { createGridGeo, createH3Geo } from './geo.ts';
 import { SupportDesk } from './support.ts';
 import { BlogService, createIndexNow } from './blog.ts';
 import { createGemini, geminiKeysFromEnv } from './ai/gemini.ts';
+import { createGeminiImages } from './ai/images.ts';
+import type { FileStorage } from './services.ts';
 import type { LlmClient } from './ai/gemini.ts';
 import { AiTeam } from './ai/team.ts';
 import type { Store } from './store.ts';
@@ -46,6 +48,7 @@ export function getLlm() {
 }
 let platformPromise: Promise<Platform> | null = null;
 let sharedStore: Store | null = null;
+let sharedFiles: FileStorage | undefined;
 
 /** Serviços extras (atendimento, blog, Equipe IA) usando o mesmo banco do app. */
 export function getPlatform() {
@@ -53,7 +56,8 @@ export function getPlatform() {
     const store = sharedStore!;
     const llm = getLlm();
     const support = new SupportDesk(store);
-    const blog = new BlogService(store, { llm, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
+    const images = createGeminiImages({ apiKeys: geminiKeysFromEnv(process.env), model: process.env.GEMINI_IMAGE_MODEL || undefined });
+    const blog = new BlogService(store, { llm, images, files: sharedFiles, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
     const team = new AiTeam({ store, service, support, blog, llm, configStatus });
     return { store, service, support, blog, team };
   });
@@ -74,6 +78,7 @@ export function getService() {
   ]).then(
     ([fb, geo]) => {
       sharedStore = new FirestoreStore(fb.db, COLLECTION_PREFIX);
+      sharedFiles = fb.files;
       return new FrocService(sharedStore, {
         geo,
         files: fb.files,

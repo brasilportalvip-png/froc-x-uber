@@ -116,6 +116,13 @@ export function initFirebase(): Promise<FirebaseBundle> {
           async save(path, contentType, bytes) {
             await getStorage(app).bucket().file(path).save(Buffer.from(bytes), { contentType, resumable: false, metadata: { cacheControl: 'private, max-age=0' } });
           },
+          async read(path) {
+            const file = getStorage(app).bucket().file(path);
+            const [exists] = await file.exists();
+            if (!exists) return null;
+            const [[bytes], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
+            return { bytes, contentType: String(meta.contentType || 'application/octet-stream') };
+          },
           async signedUrl(path) {
             const [url] = await getStorage(app)
               .bucket()

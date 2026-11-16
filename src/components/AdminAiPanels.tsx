@@ -489,6 +489,8 @@ export const SupportAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => 
 };
 
 interface PostRow {
+  id: string;
+  image?: { mimeType: string };
   slug: string;
   title: string;
   description: string;
@@ -520,8 +522,12 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
           onClick={async () => {
             setBusy(true);
             try {
-              const r = await api<{ title: string; published: boolean; problems: string[] }>('/api/admin/blog/generate', { body: { topic } });
-              onToast(r.published ? `Publicado: ${r.title}` : `Salvo como rascunho: ${r.problems.join('; ')}`);
+              const r = await api<{ title: string; published: boolean; problems: string[]; image?: { ok: boolean } | null }>('/api/admin/blog/generate', { body: { topic } });
+              onToast(
+                r.published
+                  ? `Publicado: ${r.title}${r.image?.ok ? ' (com capa)' : ' — a capa chega em alguns minutos'}`
+                  : `Salvo como rascunho: ${r.problems.join('; ')}`,
+              );
               setTopic('');
               await load();
             } catch (e) {
@@ -546,7 +552,13 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
       {posts.map((p) => (
         <div key={p.slug} className={card}>
           <div className="flex items-start justify-between gap-2">
-            <div>
+            <img
+              src={p.image ? `/blog/img/${p.id}.${p.image.mimeType.includes('jpeg') ? 'jpg' : 'png'}` : `/blog/capa/${p.slug}.svg`}
+              alt=""
+              className="w-24 h-14 object-cover rounded-lg border border-amber-500/30 shrink-0"
+              loading="lazy"
+            />
+            <div className="flex-1 min-w-0">
               <a href={`/blog/${p.slug}`} target="_blank" rel="noreferrer" className="font-bold text-slate-900 dark:text-white hover:underline">
                 {p.title}
               </a>
@@ -565,6 +577,18 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
               className="shrink-0 px-3 min-h-[34px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer"
             >
               {p.published ? 'Tirar do ar' : 'Publicar'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onToast('Gerando a capa com a IA (até 30 s)...');
+                api<{ model: string }>(`/api/admin/blog/${p.slug}/image`, { body: {} })
+                  .then((r) => load().then(() => onToast(`Capa pronta (${r.model}).`)))
+                  .catch((e) => onToast(e.message));
+              }}
+              className="shrink-0 px-3 min-h-[34px] rounded-lg border border-amber-500/50 text-amber-700 dark:text-amber-300 font-semibold cursor-pointer"
+            >
+              {p.image ? 'Nova capa' : 'Gerar capa'}
             </button>
           </div>
         </div>
