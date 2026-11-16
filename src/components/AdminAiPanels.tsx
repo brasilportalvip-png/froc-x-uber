@@ -157,12 +157,15 @@ export const AiHealthBox: React.FC<{ onToast: Toast }> = ({ onToast }) => {
       </div>
       <div className="grid gap-1">
         {h.models.map((m) => (
-          <div key={m.model} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 dark:border-slate-800 px-2.5 py-1.5">
-            <span className="font-mono-num font-semibold text-slate-800 dark:text-slate-100">{m.model}</span>
-            <span className={`text-[11px] font-bold ${STATE_LABEL[m.state][1]}`} title={m.lastError || ''}>
-              {STATE_LABEL[m.state][0]}
-              {m.avgLatencyMs ? ` · ${(m.avgLatencyMs / 1000).toFixed(1)} s` : ''}
-            </span>
+          <div key={m.model} className="rounded-lg border border-slate-200 dark:border-slate-800 px-2.5 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono-num font-semibold text-slate-800 dark:text-slate-100">{m.model}</span>
+              <span className={`text-[11px] font-bold ${STATE_LABEL[m.state][1]}`}>
+                {STATE_LABEL[m.state][0]}
+                {m.avgLatencyMs ? ` · ${(m.avgLatencyMs / 1000).toFixed(1)} s` : ''}
+              </span>
+            </div>
+            {m.state !== 'ok' && m.lastError && <div className="mt-0.5 text-[10px] text-slate-500 break-words">Último erro: {m.lastError}</div>}
           </div>
         ))}
       </div>

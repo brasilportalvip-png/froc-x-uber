@@ -11,7 +11,7 @@
  *  5. Várias chaves: GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3. Se uma estourar a cota ou
  *     for recusada, as próximas assumem.
  *  6. Orçamento de tempo: nunca passa do limite do servidor (avisa em vez de travar).
- *  7. Lembra o último modelo que funcionou e começa por ele.
+ *  7. Volta sozinho para o modelo preferido (3.8) assim que ele se recupera.
  *  8. Painel de saúde: estado de cada modelo e de cada chave em /api/health e no Admin.
  * Sem bibliotecas: API REST direta. Suporta ferramentas (function calling) e resposta em JSON.
  */
@@ -121,7 +121,7 @@ export interface GeminiOptions {
   random?: () => number;
 }
 
-type Failure = { kind: 'transient' | 'model_missing' | 'key_problem' | 'fatal'; status: number; message: string; retryAfterMs?: number };
+type Failure = { kind: 'transient' | 'model_missing' | 'key_problem' | 'fatal' | 'budget'; status: number; message: string; retryAfterMs?: number };
 
 const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -146,6 +146,8 @@ export function parseRetryAfter(value: string | null | undefined, detail = ''): 
 }
 
 interface ModelStats {
+  /** Quantas vezes o disjuntor abriu seguidas (a pausa dobra a cada vez, até 30 min). */
+  opens: number;
   consecutive: number;
   successes: number;
   failures: number;
@@ -171,7 +173,7 @@ export function createGemini(options: GeminiOptions): LlmClient {
   const random = options.random ?? Math.random;
 
   const stats = new Map<string, ModelStats>();
-  for (const m of models) stats.set(m, { consecutive: 0, successes: 0, failures: 0, openUntil: 0, missingUntil: 0, latencyTotal: 0 });
+  for (const m of models) stats.set(m, { opens: 0, consecutive: 0, successes: 0, failures: 0, openUntil: 0, missingUntil: 0, latencyTotal: 0 });
   const keyCoolUntil = new Map<string, number>();
   let workingModel: string | null = null;
 
@@ -187,8 +189,11 @@ export function createGemini(options: GeminiOptions): LlmClient {
       return;
     }
     s.consecutive++;
-    if (s.consecutive >= threshold) {
-      s.openUntil = now() + cooldown;
+    // Modelo que já esteve em pausa volta "em teste": 1 falha já o põe de volta em pausa (mais longa).
+    if (s.consecutive >= threshold || s.opens > 0) {
+      s.opens++;
+      s.openUntil = now() + Math.min(30 * 60_000, cooldown * 2 ** (s.opens - 1));
+      s.consecutive = 0;
       if (workingModel === m) workingModel = null;
     }
   };
@@ -196,6 +201,7 @@ export function createGemini(options: GeminiOptions): LlmClient {
     const s = st(m);
     s.consecutive = 0;
     s.openUntil = 0;
+    s.opens = 0;
     s.successes++;
     s.latencyTotal += latency;
     s.lastSuccessAt = now();
@@ -240,6 +246,9 @@ export function createGemini(options: GeminiOptions): LlmClient {
       .trim();
     const functionCalls = content.parts.filter((p) => p.functionCall).map((p) => ({ name: p.functionCall!.name, args: p.functionCall!.args || {} }));
     // Resposta vazia (sem texto e sem ferramenta) conta como falha passageira: tenta de novo / outro modelo.
+    // Gemini 3 "pensa" antes de responder: se o limite de tamanho acabou no pensamento, não é queda —
+    // é só pedir de novo com mais espaço.
+    if (!text && !functionCalls.length && cand?.finishReason === 'MAX_TOKENS') return { kind: 'budget', status: 200, message: 'limite de tamanho gasto no raciocínio' };
     if (!text && !functionCalls.length) return { kind: 'transient', status: 502, message: `resposta vazia (${cand?.finishReason || 'sem motivo'})` };
     recordSuccess(model, now() - started);
     return { content, model, text, functionCalls };
@@ -251,27 +260,33 @@ export function createGemini(options: GeminiOptions): LlmClient {
     async generate(input) {
       if (!keys.length) throw new LlmUnavailableError('GEMINI_API_KEY não configurada.');
       const deadline = now() + (input.deadlineMs ?? 50_000);
-      const body = JSON.stringify({
+      let maxTokens = input.maxOutputTokens ?? 4096;
+      const makeBody = () => JSON.stringify({
         systemInstruction: { parts: [{ text: input.system }] },
         contents: input.contents,
         ...(input.tools?.length ? { tools: [{ functionDeclarations: input.tools }] } : {}),
         generationConfig: {
           temperature: input.temperature ?? 0.6,
-          maxOutputTokens: input.maxOutputTokens ?? 4096,
+          maxOutputTokens: maxTokens,
           ...(input.json ? { responseMimeType: 'application/json' } : {}),
         },
       });
+      let body = makeBody();
 
       // Ordem: o último que funcionou primeiro; depois os disponíveis; por último os desligados
       // pelo disjuntor (se todos estiverem desligados, ainda tenta — melhor do que desistir).
-      const ordered = workingModel ? [workingModel, ...models.filter((m) => m !== workingModel)] : [...models];
+      // Sempre na ordem de preferência (3.8 primeiro). Modelo em pausa fica fora até a pausa acabar;
+      // aí ganha 1 tentativa de teste — assim o 3.8 volta a ser usado assim que se recupera.
+      const ordered = [...models];
       const order = [...ordered.filter(available), ...ordered.filter((m) => !available(m) && st(m).missingUntil <= now())];
       const errors: string[] = [];
       let attempts = 0;
 
       for (const model of order) {
         let tries = 0;
-        while (tries <= retries) {
+        // Modelo que estava em pausa e acabou de voltar: só 1 tentativa (não atrasa a resposta).
+        const maxTries = st(model).opens > 0 ? 0 : retries;
+        while (tries <= maxTries) {
           const remaining = deadline - now();
           if (remaining < 1500) throw new LlmUnavailableError(`Tempo esgotado tentando a IA (${errors.slice(-3).join(' | ') || 'sem resposta'}).`);
           const key = pickKey();
@@ -286,11 +301,16 @@ export function createGemini(options: GeminiOptions): LlmClient {
             if (!pickKey()) throw new LlmUnavailableError(`Chaves do Gemini sem cota ou recusadas (${out.status}). Confira a cobrança no Google AI Studio.`);
             continue;
           }
+          if (out.kind === 'budget' && maxTokens < 16384) {
+            maxTokens = Math.min(16384, Math.max(1024, maxTokens * 4));
+            body = makeBody();
+            continue;
+          }
           recordFailure(model, out);
           tries++;
           if (out.kind === 'model_missing' || out.kind === 'fatal') break; // próximo modelo
           if (!available(model)) break; // disjuntor abriu: próximo modelo
-          if (tries <= retries) {
+          if (tries <= maxTries) {
             const wait = out.retryAfterMs ?? Math.min(8000, base * 2 ** (tries - 1)) * (0.6 + random() * 0.8);
             if (now() + wait > deadline - 1500) break;
             await sleep(wait);
@@ -309,7 +329,7 @@ export function createGemini(options: GeminiOptions): LlmClient {
         activeModel: workingModel,
         models: models.map((m) => {
           const s = st(m);
-          const state: ModelHealth['state'] = s.missingUntil > t ? 'indisponivel' : s.openUntil > t ? 'desligado' : s.consecutive > 0 ? 'instavel' : 'ok';
+          const state: ModelHealth['state'] = s.missingUntil > t ? 'indisponivel' : s.openUntil > t ? 'desligado' : s.consecutive > 0 || s.opens > 0 ? 'instavel' : 'ok';
           return {
             model: m,
             state,

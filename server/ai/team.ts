@@ -386,7 +386,7 @@ ${platformKnowledge(cfg)}`;
     this.requireAdmin(admin);
     const started = Date.now();
     try {
-      const out = await this.d.llm.generate({ system: 'Responda apenas: OK', contents: [{ role: 'user', parts: [{ text: 'Teste de conexão.' }] }], temperature: 0, maxOutputTokens: 20, deadlineMs: 25_000 });
+      const out = await this.d.llm.generate({ system: 'Responda apenas: OK', contents: [{ role: 'user', parts: [{ text: 'Teste de conexão.' }] }], temperature: 0, maxOutputTokens: 1024, deadlineMs: 25_000 });
       return { ok: true, model: out.model, attempts: out.attempts ?? 1, ms: Date.now() - started, health: this.d.llm.health?.() };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e), ms: Date.now() - started, health: this.d.llm.health?.() };

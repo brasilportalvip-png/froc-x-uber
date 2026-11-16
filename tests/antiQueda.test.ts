@@ -176,3 +176,36 @@ test('Rotina diária: se a IA falhar, tenta de novo mais tarde (não perde o pos
   const again = (await team.daily()) as { skipped?: boolean };
   assert.notEqual(again.skipped, true);
 });
+
+test('Gemini 3 gastou o limite pensando (MAX_TOKENS sem texto): pede de novo com mais espaço, sem pausar o modelo', async () => {
+  const think: Reply = { status: 200, body: { candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'MAX_TOKENS' }] } };
+  const bodies: number[] = [];
+  let clock = 0;
+  const f = fakeFetch({ 'gemini-3.8-flash': [think, ok('OK')] });
+  const llm = createGemini({
+    apiKey: 'k',
+    fetchImpl: async (url, init) => {
+      bodies.push(JSON.parse(init.body).generationConfig.maxOutputTokens);
+      return f.fn(url, init);
+    },
+    sleep: async () => undefined,
+    now: () => clock++,
+  });
+  const out = await llm.generate({ ...input, maxOutputTokens: 20 });
+  assert.equal(out.model, 'gemini-3.8-flash');
+  assert.deepEqual(bodies, [20, 1024]);
+  assert.equal(llm.health!().models[0].state, 'ok');
+});
+
+test('Modelo que volta da pausa tem só 1 chance; se falhar, a pausa dobra (não atrasa a resposta)', async () => {
+  const down = Array.from({ length: 20 }, () => ({ status: 503, text: 'overloaded' }) as Reply);
+  const c = client({ 'gemini-3.8-flash': [...down], 'gemini-3.7-flash': Array.from({ length: 5 }, () => ok('ok')) }, { breakerCooldownMs: 60_000 });
+  await c.llm.generate(input); // 3 falhas no 3.8 → pausa de 1 min
+  c.advance(61_000);
+  const before = c.calls.filter((x) => x.model === 'gemini-3.8-flash').length;
+  await c.llm.generate(input); // volta em teste: 1 tentativa só
+  assert.equal(c.calls.filter((x) => x.model === 'gemini-3.8-flash').length - before, 1);
+  const h = c.llm.health!().models[0];
+  assert.equal(h.state, 'desligado');
+  assert.ok(Date.parse(h.retryAfter!) - Date.parse(new Date(0).toISOString()) > 0);
+});
