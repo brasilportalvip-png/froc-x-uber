@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BadgeCheck, LogOut, ShieldCheck } from 'lucide-react';
-import { api } from '../lib/session.ts';
+import { api, prepareUpload } from '../lib/session.ts';
 import type { UserProfile } from '../types/mobility.ts';
 
 const maskInput = (v: string) => {
@@ -126,3 +126,59 @@ export const VerifiedBadge: React.FC<{ level?: string; who?: string }> = ({ leve
       <BadgeCheck className="w-3.5 h-3.5" /> CPF cadastrado
     </span>
   ) : null;
+
+/**
+ * Passageiro com CPF só "cadastrado": envia foto da CNH, RG ou CIN e a IA da Froc confere
+ * na hora (CPF, nome e nascimento). Bateu: selo verde de verificado.
+ */
+export const IdentityDocUpload: React.FC<{ profile: UserProfile; onDone: () => Promise<void> | void; onToast: (m: string) => void }> = ({ profile, onDone, onToast }) => {
+  const [busy, setBusy] = useState(false);
+  if (profile.cpfStatus !== 'basic') return null;
+  const last = profile.identityDocCheck;
+  return (
+    <div className="rounded-2xl bg-white dark:bg-[#111013] border border-emerald-300 dark:border-emerald-900 p-4 space-y-2 text-xs">
+      <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
+        <BadgeCheck className="w-4 h-4 text-emerald-600" /> Ganhe o selo de verificado
+      </div>
+      <p className="text-slate-500">
+        Envie uma foto nítida da sua CNH, RG ou CIN (frente, inteira, sem reflexo). A IA da Froc confere CPF, nome e nascimento na hora. Motoristas preferem passageiros verificados.
+      </p>
+      {last && last.status !== 'verificado' && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-2 text-amber-800 dark:text-amber-200">Última tentativa: {last.reasons.join(' ')}</div>
+      )}
+      <label className={`flex items-center justify-center gap-2 min-h-[44px] rounded-xl font-bold cursor-pointer ${busy ? 'bg-slate-300 text-slate-600' : 'bg-emerald-600 text-white'}`}>
+        {busy ? 'A IA está conferindo...' : 'Enviar foto do documento'}
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          capture="environment"
+          className="sr-only"
+          disabled={busy}
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            setBusy(true);
+            try {
+              const up = await prepareUpload(file);
+              const r = await api<{ result: { ok: boolean; status: string; reasons: string[] } }>('/api/identity/document', { body: { contentType: up.contentType, dataBase64: up.dataBase64 } });
+              onToast(
+                r.result.ok
+                  ? 'Pronto! Seu CPF está verificado.'
+                  : r.result.status === 'nao_confere'
+                    ? 'Os dados do documento não bateram com o cadastro. A equipe Froc vai analisar.'
+                    : r.result.reasons[0] || 'Não deu para conferir agora. Tente outra foto.',
+              );
+              await onDone();
+            } catch (err) {
+              onToast(err instanceof Error ? err.message : 'Falha no envio.');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      </label>
+      <p className="text-[11px] text-slate-500">O documento fica em área privada e é usado só para conferir sua identidade.</p>
+    </div>
+  );
+};

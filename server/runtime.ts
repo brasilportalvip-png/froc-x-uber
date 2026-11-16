@@ -15,6 +15,7 @@ import { createGeminiImages } from './ai/images.ts';
 import type { FileStorage } from './services.ts';
 import type { LlmClient } from './ai/gemini.ts';
 import { AiTeam } from './ai/team.ts';
+import { IdentityReviewer } from './ai/identityCheck.ts';
 import type { Store } from './store.ts';
 import { createWebhookDispatcher } from './merchants.ts';
 import { createGoogleGeocoder } from './geocode.ts';
@@ -39,6 +40,7 @@ export interface Platform {
   support: SupportDesk;
   blog: BlogService;
   team: AiTeam;
+  identity: IdentityReviewer;
 }
 
 let servicePromise: Promise<FrocService> | null = null;
@@ -61,8 +63,9 @@ export function getPlatform() {
     const support = new SupportDesk(store);
     const images = createGeminiImages({ apiKeys: geminiKeysFromEnv(process.env), model: process.env.GEMINI_IMAGE_MODEL || undefined });
     const blog = new BlogService(store, { llm, images, files: sharedFiles, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
-    const team = new AiTeam({ store, service, support, blog, llm, configStatus });
-    return { store, service, support, blog, team };
+    const identity = new IdentityReviewer({ store, service, llm, files: sharedFiles });
+    const team = new AiTeam({ store, service, support, blog, llm, configStatus, identity });
+    return { store, service, support, blog, team, identity };
   });
   platformPromise.catch(() => {
     platformPromise = null;

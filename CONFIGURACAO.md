@@ -207,9 +207,15 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
   Regular e o nome precisa bater; o nome do app passa a ser o nome oficial (ou o nome social, quando existir).
   Depois de contratar, abra o menu **Demonstração** do Serpro e confira o endereço da consulta; se for diferente do padrão,
   coloque em `SERPRO_CPF_URL` (use `{cpf}` e `{nascimento}` no lugar dos dados).
-- **Sem o Serpro:** o CPF é aceito como "cadastrado" (dígitos certos, maior de 18, não usado em outra conta) e você confere em
-  Admin → Usuários → **Ver CPF** → "Conferir na Receita" → **Conferido** ou **CPF não confere** (libera o CPF para o dono verdadeiro).
-  Aprovar um motorista marca o CPF dele como verificado (a equipe comparou com a CNH).
+- **Sem o Serpro, quem confere é a Equipe IA (Analista de Cadastros):** o CPF entra como "cadastrado" (dígitos certos, maior de 18,
+  não usado em outra conta) e a IA confere lendo o documento com foto:
+  - **Motoristas e transportadores:** a IA lê a CNH enviada (na hora do cadastro e, de reserva, a cada rodada do agendador):
+    CPF, nome e nascimento iguais ao cadastro → CPF **verificado sozinho**. Em Pendências aparece "🤖 IA leu a CNH" com a
+    validade lida e se a CNH tem **EAR**.
+  - **Passageiros:** em Conta → **"Ganhe o selo de verificado"** a pessoa manda foto da CNH, RG ou CIN; a IA confere na hora.
+  - Quem decide é a comparação exata (CPF idêntico, nascimento idêntico, nome batendo); a IA só lê. Se não bater, ela **não pune
+    sozinha**: prepara "CPF não confere" na Equipe IA para você confirmar com 1 clique (erro de leitura não pode bloquear inocente).
+  - Você ainda pode conferir na mão em Admin → Usuários → **Ver CPF**.
 - **Uma pessoa, uma conta:** o CPF só pode estar em uma conta, mesmo trocando de celular, chip ou e-mail. A tela mostra o e-mail
   mascarado da conta que já existe. Bloquear uma conta bloqueia o CPF. Três ou mais contas no mesmo aparelho aparecem como
   **POSSÍVEL MULTICONTA** em Admin → Usuários (não bloqueia sozinho, porque família divide celular).
@@ -241,7 +247,7 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 129 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 136 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

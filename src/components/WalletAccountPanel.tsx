@@ -209,9 +209,11 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
           <div className="text-[11px] text-slate-600 dark:text-slate-300">
             CPF {profile.cpfMasked} ·{' '}
             {profile.cpfStatus === 'verified' ? (
-              <strong className="text-emerald-600">verificado {profile.cpfSource === 'receita' ? 'na Receita Federal' : 'pela equipe Froc'}</strong>
+              <strong className="text-emerald-600">
+                verificado {profile.cpfSource === 'receita' ? 'na Receita Federal' : profile.cpfSource?.startsWith('ia_') ? 'pelo documento (IA Froc)' : 'pela equipe Froc'}
+              </strong>
             ) : (
-              <strong className="text-sky-600">cadastrado (conferência da equipe em andamento)</strong>
+              <strong className="text-sky-600">cadastrado (envie um documento abaixo para ganhar o selo verde)</strong>
             )}
             . O nome vem do CPF; para corrigir, fale com o Atendimento.
           </div>

@@ -2,6 +2,7 @@
  * Equipe IA: roda os agentes (Gemini + ferramentas), guarda conversas, propostas que
  * precisam do clique do administrador, a auditoria e o atendimento das pessoas.
  */
+import type { IdentityReviewer } from './identityCheck.ts';
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../services.ts';
 import type { AuthUser, FrocService } from '../services.ts';
@@ -27,6 +28,8 @@ export interface TeamDeps {
   blog: BlogService;
   llm: LlmClient;
   configStatus?: () => Record<string, unknown>;
+  /** Leitura de documentos para conferir CPF (opcional). */
+  identity?: IdentityReviewer;
 }
 
 export interface ActionLog {
@@ -134,6 +137,7 @@ ${platformKnowledge(cfg)}`;
       auth,
       requestedBy,
       configStatus: this.d.configStatus,
+      identity: this.d.identity,
       propose: async (tool, args, summary) => {
         const id = randomUUID();
         await this.d.store.set('ai_proposals', id, {

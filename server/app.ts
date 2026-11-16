@@ -13,6 +13,7 @@ import { SERVICE_PAGES, renderBlogIndex, renderCoverSvg, renderPost, renderServi
 import type { AiTeam } from './ai/team.ts';
 import { consumeQuota } from './rateLimit.ts';
 import type { Store } from './store.ts';
+import type { IdentityReviewer } from './ai/identityCheck.ts';
 import { GUIDE_RENDERERS } from './guidePages.ts';
 import { authenticateApiKey, createApiKey, listApiKeys, revokeApiKey } from './merchants.ts';
 
@@ -21,6 +22,8 @@ export interface PlatformParts {
   support: SupportDesk;
   blog: BlogService;
   team: AiTeam;
+  /** Conferência de CPF por leitura de documento (IA). */
+  identity?: IdentityReviewer;
 }
 
 export interface AppOptions {
@@ -176,7 +179,9 @@ export function createApp(options: AppOptions) {
       if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
       // Capa com IA para posts que ainda não têm (1 por vez, para caber no tempo do servidor).
       const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
-      return { sweep, daily, images };
+      // Equipe IA confere o CPF dos motoristas pendentes lendo a CNH (2 por rodada).
+      const cpf = options.platform ? await ((await options.platform()).identity?.reviewPending(2) ?? Promise.resolve(null)).catch((e) => ({ erro: String(e?.message || e) })) : null;
+      return { sweep, daily, images, cpf };
     }),
   );
 
@@ -330,6 +335,19 @@ export function createApp(options: AppOptions) {
     guard('cpf', 8, 864e5, 'Muitas tentativas de CPF hoje. Tente amanhã ou fale com o Atendimento.'),
     wrap(async (req) => (await service()).registerCpf(a(req), req.body || {}, req.headers['x-froc-device'])),
   );
+  // Passageiro envia documento com foto: a IA lê e confere o CPF na hora (selo verde).
+  api.post(
+    '/identity/document',
+    rateLimit(5, 60_000),
+    guard('iddoc', 6, 864e5, 'Muitos envios de documento hoje. Tente amanhã.'),
+    wrap(async (req) => {
+      const svc = await service();
+      const { path } = await svc.uploadIdentityDocument(a(req), req.body?.contentType, req.body?.dataBase64);
+      const reviewer = options.platform ? (await options.platform()).identity : undefined;
+      const result = reviewer ? await reviewer.review(a(req).uid, path, 'documento') : { ok: false, status: 'ia_indisponivel', reasons: ['A conferência automática está desligada; a equipe vai conferir.'] };
+      return { result, profile: svc.profileView((await svc.store.get('users', a(req).uid)) as never, a(req)) };
+    }),
+  );
   api.post('/device', rateLimit(10, 60_000), wrap(async (req) => (await service()).recordDevice(a(req), req.headers['x-froc-device'])));
 
   api.post('/rides/quote', wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
@@ -375,7 +393,22 @@ export function createApp(options: AppOptions) {
     guard('docs', 40, 864e5, 'Muitos envios de documentos hoje. Tente amanhã.'),
     wrap(async (req) => (await service()).uploadDocument(a(req), req.body?.kind, req.body?.docType, req.body?.contentType, req.body?.dataBase64)),
   );
-  api.post('/driver/apply', limited, guard('apply', 10, 864e5, 'Muitas tentativas de cadastro hoje.'), wrap(async (req) => (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {})));
+  api.post(
+    '/driver/apply',
+    limited,
+    guard('apply', 10, 864e5, 'Muitas tentativas de cadastro hoje.'),
+    wrap(async (req) => {
+      const profile = await (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {});
+      // A IA já lê a CNH e confere CPF, nome, nascimento, validade e EAR (o resultado aparece para a equipe).
+      if (options.platform && req.body?.kind !== 'merchant') {
+        const reviewer = (await options.platform()).identity;
+        const u = await (await service()).store.get<Record<string, unknown>>('users', a(req).uid);
+        const cnh = ((req.body?.kind === 'trucker' ? u?.truckerDocs : u?.driverDocs) as Record<string, string> | undefined)?.cnh;
+        if (reviewer && cnh) await reviewer.review(a(req).uid, cnh, 'cnh').catch((e) => console.warn('Leitura da CNH falhou:', e));
+      }
+      return profile;
+    }),
+  );
 
   // ----- painel da loja (Froc Entregas)
   api.post('/merchant/apply', limited, guard('apply', 10, 864e5, 'Muitas tentativas de cadastro hoje.'), wrap(async (req) => (await service()).applyAsMerchant(a(req), req.body || {})));

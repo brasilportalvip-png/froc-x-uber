@@ -180,6 +180,14 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                       </div>
                     )}
                     {app.cnhExpiry && <div>CNH válida até {app.cnhExpiry.split('-').reverse().join('/')} · confira a observação EAR na foto da CNH</div>}
+                    {app.aiDocCheck && (
+                      <div className={app.aiDocCheck.ok ? 'text-emerald-600' : 'text-amber-600'}>
+                        🤖 IA leu a CNH:{' '}
+                        {app.aiDocCheck.ok ? 'CPF, nome e nascimento conferem (CPF verificado)' : app.aiDocCheck.reasons.join(' ')}
+                        {app.aiDocCheck.ear === true ? ' · EAR encontrada' : app.aiDocCheck.ear === false ? ' · SEM EAR na CNH' : ''}
+                        {app.aiDocCheck.validade ? ` · validade lida ${app.aiDocCheck.validade.split('-').reverse().join('/')}` : ''}
+                      </div>
+                    )}
                     {app.cpf ? (
                       <div>
                         CPF informado <strong className="font-mono-num">{app.cpf}</strong> · nome {app.legalName} — <strong>confira se é o mesmo da CNH</strong> (aprovar marca o CPF como verificado)
@@ -313,6 +321,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                 <span>
                   CPF {u.cpfMasked || 'não cadastrado'} ·{' '}
                   {u.cpfStatus === 'verified' ? `verificado (${u.cpfSource})` : u.cpfStatus === 'basic' ? 'cadastrado, falta conferir' : u.cpfStatus === 'rejected' ? 'recusado' : 'pendente'}
+                  {u.aiDocCheck && !u.aiDocCheck.ok ? ` · IA: ${u.aiDocCheck.reasons.join(' ')}` : ''}
                 </span>
                 {u.cpfMasked && (
                   <button
