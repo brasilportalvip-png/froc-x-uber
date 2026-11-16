@@ -15,6 +15,7 @@
 import { CARGO_VEHICLE_TYPES } from '../src/data/cargoVehicles.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
+import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, cancelFeePercent, waitingFeePercent } from '../src/data/ridePolicy.ts';
 import { formatCnpj, isValidCnpj, newWebhookSecret, validateWebhookUrl } from './merchants.ts';
 import type { WebhookDispatcher } from './merchants.ts';
 import type { Geocoder } from './geocode.ts';
@@ -230,6 +231,8 @@ interface UserDoc extends Doc {
   merchantCnpj?: string;
   /** Quanto do saldo veio de ganhos (só isso pode ser sacado). Ausente = conta antiga (usa o saldo). */
   earnedCents?: number;
+  ridePolicyAccepted?: string;
+  ridePolicyAcceptedAt?: string;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -1012,6 +1015,27 @@ export class FrocService {
 
   // ------------------------------------------------------- 1) corrida Uber/99
 
+  /**
+   * Taxa de cancelamento do passageiro (regras em src/data/ridePolicy.ts): grátis antes do aceite,
+   * até 1 min depois do aceite ou com o motorista muito atrasado; 50% entre 1 e 2 min; 100% depois
+   * de 2 min ou com o motorista já no embarque.
+   */
+  private rideCancelPercent(ride: Doc, acceptedField = 'acceptedAt'): number {
+    if (!ride.driverId || !ride[acceptedField]) return 0;
+    if (ride.status === 'arriving') return 100;
+    const sinceAccept = (this.now().getTime() - Date.parse(String(ride[acceptedField]))) / 1000;
+    const etaMin = Number(ride.etaMin ?? 5) || 5;
+    if (ride.status === 'accepted' && sinceAccept > (etaMin + LATE_GRACE_MIN) * 60) return 0; // motorista atrasado
+    return cancelFeePercent(sinceAccept);
+  }
+
+  /** Taxa de cancelamento/não comparecimento vai para o motorista como ganho (menos a comissão). */
+  private payCancellation(tx: Tx, driver: UserDoc, feeCents: number, pct: number, label: string, kind: string, noShow = false) {
+    const cut = this.providerCut(feeCents);
+    this.creditEarning(tx, driver, cut, noShow ? `Passageiro não apareceu · ${label} (100%)` : `Taxa de cancelamento ${pct}% · ${label}`);
+    this.platformRevenue(tx, `cancelamento_${kind}`, feeCents, feeCents - cut);
+  }
+
   private rideView(r: Doc, uid: string): RideOrder {
     const mine = involvement(uid, r.passengerId, r.driverId);
     const { escrowCents: _e, priceCents: _p, deliveryPin: _d, trackToken: _t, ...rest } = r;
@@ -1059,6 +1083,9 @@ export class FrocService {
     const id = randomUUID();
     const ride = await this.store.transaction(async (tx) => {
       const user = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Usuário');
+      // Registro do aceite das regras de cancelamento e espera (mostradas antes do 1º pedido).
+      if (body.acceptPolicy === true && user.ridePolicyAccepted !== RIDE_POLICY_VERSION)
+        tx.update('users', user.uid, { ridePolicyAccepted: RIDE_POLICY_VERSION, ridePolicyAcceptedAt: this.iso() });
       const doc: Doc = {
         id,
         passengerId: user.uid,
@@ -1079,6 +1106,7 @@ export class FrocService {
         paymentMethod: method,
         pinCode: String(randomInt(1000, 10000)),
         status: 'searching',
+        policyVersion: RIDE_POLICY_VERSION,
         escrowCents: 0,
         createdAt: this.iso(),
         messages: [],
@@ -1138,7 +1166,25 @@ export class FrocService {
         case 'arriving': {
           if (!isDriver) fail(403, 'forbidden', 'Só o motorista da corrida pode fazer isso.');
           if (status !== 'accepted') fail(409, 'invalid_state', 'A corrida não está aguardando chegada.');
-          set({ status: 'arriving', etaMin: 0 });
+          // Só vale "cheguei" perto do embarque: a espera paga começa a contar daqui.
+          const me = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
+          const fresh = typeof me.driverLat === 'number' && this.now().getTime() - Date.parse(String(me.locationAt || 0)) < 2 * 60_000;
+          if (!fresh) fail(409, 'location_required', 'Ative a localização do celular para avisar que chegou.');
+          const origin = ride.origin as GeoPoint;
+          const away = straightKm({ lat: me.driverLat!, lng: me.driverLng! }, origin);
+          if (away > ARRIVAL_RADIUS_KM)
+            fail(409, 'too_far_from_pickup', `Você ainda está a ${away < 1 ? `${Math.round(away * 1000)} m` : `${away.toFixed(1)} km`} do embarque. Avise quando estiver no local.`);
+          const messages = Array.isArray(ride.messages) ? (ride.messages as unknown[]) : [];
+          const time = this.now().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          set({
+            status: 'arriving',
+            etaMin: 0,
+            arrivedAt: this.iso(),
+            messages: [
+              ...messages,
+              { sender: 'froc', text: '🚗 Seu motorista chegou ao embarque. O 1º minuto de espera é grátis; depois: +10% (1 min), +30% (2 min) e +50% (3 min).', time },
+            ].slice(-200),
+          });
           return { ride };
         }
         case 'start': {
@@ -1146,7 +1192,20 @@ export class FrocService {
           if (status !== 'accepted' && status !== 'arriving') fail(409, 'invalid_state', 'A corrida não pode ser iniciada agora.');
           // Entrega de loja: "iniciar" = coletou o pedido (o código é pedido só na entrega ao cliente).
           if (!ride.delivery && String(body.pin || '') !== String(ride.pinCode)) fail(400, 'wrong_pin', 'PIN incorreto. Peça o PIN de 4 dígitos ao passageiro.');
-          set({ status: 'in_progress', etaMin: ride.durationMin, startedAt: this.iso() });
+          const patch: Doc = { status: 'in_progress', etaMin: ride.durationMin, startedAt: this.iso() };
+          // Tempo de espera no embarque: acréscimo cobrado da carteira do passageiro.
+          if (!ride.delivery && ride.arrivedAt && ride.paymentMethod === 'froc_pay') {
+            const waitSec = (this.now().getTime() - Date.parse(String(ride.arrivedAt))) / 1000;
+            const pct = waitingFeePercent(waitSec);
+            const extra = Math.round((Number(ride.priceCents) * pct) / 100);
+            if (extra > 0) {
+              const passenger = await this.mustGet<UserDoc>(tx, 'users', String(ride.passengerId), 'Passageiro');
+              // Pode ficar negativo: o passageiro precisa recarregar antes do próximo pedido.
+              this.debit(tx, passenger, extra, `Tempo de espera ${Math.floor(waitSec / 60)} min (+${pct}%) · ${ride.categoryLabel}`, 'corrida', true);
+              Object.assign(patch, { escrowCents: Number(ride.escrowCents || 0) + extra, waitingFeePercent: pct, waitingFee: toReais(extra), waitSeconds: Math.round(waitSec) });
+            }
+          }
+          set(patch);
           return { ride };
         }
         case 'complete': {
@@ -1166,15 +1225,21 @@ export class FrocService {
             if (!['searching', 'accepted', 'arriving'].includes(status)) fail(409, 'invalid_state', 'Não é possível cancelar agora.');
             const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
             const escrow = Number(ride.escrowCents || 0);
-            set({ status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'passenger' });
-            if (escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} cancelada`, 'estorno');
+            const pct = this.rideCancelPercent(ride);
+            const fee = Math.round((escrow * pct) / 100);
+            // Lê tudo antes de gravar (regra do Firestore).
+            const driver = fee > 0 ? await this.mustGet<UserDoc>(tx, 'users', String(ride.driverId), 'Motorista') : null;
+            set({ status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'passenger', cancellationFeePercent: pct, cancellationFee: toReais(fee) });
+            if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · ${ride.categoryLabel} cancelada (taxa ${pct}%)` : `Estorno · ${ride.categoryLabel} cancelada`, 'estorno');
+            if (driver) this.payCancellation(tx, driver, fee, pct, String(ride.categoryLabel), ride.delivery ? 'entrega' : 'corrida');
             return { ride };
           }
           if (isDriver) {
             if (!['accepted', 'arriving'].includes(status)) fail(409, 'invalid_state', 'Não é possível desistir agora.');
-            // Motorista desistiu: a corrida volta para a fila dos outros motoristas.
+            // Motorista desistiu: a corrida volta para a fila dos outros motoristas (sem custo ao passageiro).
             set({
               status: 'searching',
+              arrivedAt: null,
               driverId: null,
               driverName: null,
               driverRating: null,
@@ -1185,6 +1250,18 @@ export class FrocService {
             return { ride };
           }
           return fail(403, 'forbidden', 'Você não participa desta corrida.');
+        }
+        case 'no_show': {
+          // Passageiro não apareceu depois de 5 min de espera: motorista encerra e recebe 100%.
+          if (!isDriver) fail(403, 'forbidden', 'Só o motorista da corrida pode fazer isso.');
+          if (status !== 'arriving' || !ride.arrivedAt) fail(409, 'invalid_state', 'Avise que chegou ao embarque primeiro.');
+          const waited = (this.now().getTime() - Date.parse(String(ride.arrivedAt))) / 1000;
+          if (waited < NO_SHOW_SEC) fail(409, 'too_early', `Aguarde ${Math.ceil((NO_SHOW_SEC - waited) / 60)} min de espera antes de encerrar.`);
+          const escrow = Number(ride.escrowCents || 0);
+          const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
+          set({ status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'no_show', cancellationFeePercent: 100, cancellationFee: toReais(escrow) });
+          if (escrow > 0) this.payCancellation(tx, driver, escrow, 100, String(ride.categoryLabel), 'corrida', true);
+          return { ride };
         }
         case 'message': {
           if (!isPassenger && !isDriver) fail(403, 'forbidden', 'Você não participa desta corrida.');
@@ -1362,10 +1439,15 @@ export class FrocService {
       if (r.status !== 'open' && r.status !== 'matched') fail(409, 'invalid_state', 'Não é possível cancelar agora.');
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
       const escrow = Number(r.escrowCents || 0);
-      const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso() };
+      // Mesma regra das corridas, contando a partir do acordo com o motorista.
+      const pct = r.status === 'matched' ? this.rideCancelPercent({ ...r, status: 'accepted', etaMin: 60 }, 'matchedAt') : 0;
+      const fee = Math.round((escrow * pct) / 100);
+      const driver = fee > 0 ? await this.mustGet<UserDoc>(tx, 'users', String(r.driverId), 'Motorista') : null;
+      const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancellationFeePercent: pct, cancellationFee: toReais(fee) };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      if (escrow > 0) this.credit(tx, passenger, escrow, 'Estorno · negociação cancelada', 'estorno');
+      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · negociação cancelada (taxa ${pct}%)` : 'Estorno · negociação cancelada', 'estorno');
+      if (driver) this.payCancellation(tx, driver, fee, pct, 'Corrida negociada', 'indrive');
       return r;
     });
     return this.indriveView(req, auth.uid);

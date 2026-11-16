@@ -269,7 +269,7 @@ export default function App() {
   const handleRideAction = (rideId: string, action: string, extra?: Record<string, string | number>) =>
     run(
       () => api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } }),
-      ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!' } as Record<string, string>)[action],
+      ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!', arriving: 'Passageiro avisado na tela: a espera começou a contar.', no_show: 'Corrida encerrada: passageiro não apareceu. O valor caiu no seu saldo.' } as Record<string, string>)[action],
     );
   const handleSetOnline = (online: boolean) =>
     run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');

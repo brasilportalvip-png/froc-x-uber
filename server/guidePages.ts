@@ -14,6 +14,7 @@ import {
   REQUIREMENTS,
   SHARE_RULES,
 } from '../src/data/legal.ts';
+import { RIDE_POLICY_TEXT } from '../src/data/ridePolicy.ts';
 
 const EXTRA_STYLE = `<style>
 table{width:100%;border-collapse:collapse;margin:12px 0;font-size:15px}td,th{border:1px solid rgba(255,255,255,.12);padding:8px 10px;text-align:left}th{color:#f2c14e}
@@ -52,7 +53,7 @@ export function renderRules(site: string) {
 <h1>Regras, leis e requisitos para dirigir, entregar e transportar</h1>
 <p class="lead">Tudo o que a lei brasileira e a Froc exigem de motoristas, mototaxistas, motoboys, transportadores de carga, lojas e passageiros — explicado sem juridiquês.</p>
 <p class="note">Atualizado em ${e(LEGAL_UPDATED.split('-').reverse().join('/'))}. Não é parecer jurídico: cada prefeitura tem decreto próprio e, quando ela é mais rígida, vale a regra dela.</p>
-<p class="toc">${REQUIREMENTS.map((s) => `<a href="#${s.id}">${e(s.title.split(' (')[0])}</a>`).join('')}<a href="#ano">Ano do veículo</a><a href="#gravacao">Gravação</a><a href="#compartilhar">Compartilhar viagem</a></p>
+<p class="toc">${REQUIREMENTS.map((s) => `<a href="#${s.id}">${e(s.title.split(' (')[0])}</a>`).join('')}<a href="#ano">Ano do veículo</a><a href="#cancelamento">Cancelamento e espera</a><a href="#gravacao">Gravação</a><a href="#compartilhar">Compartilhar viagem</a></p>
 ${REQUIREMENTS.map(
   (s) => `<h2 id="${s.id}">${e(s.title)}</h2><p>${e(s.summary)}</p>${list(s.items)}<p class="note">Base legal: ${e(s.sources.join('; '))}.</p>`,
 ).join('')}
@@ -64,6 +65,10 @@ ${CITY_VEHICLE_AGE.map((c) => `<tr><td>${e(c.city)}/${e(c.state)}</td><td>até $
 </tbody></table>
 <h2 id="gravacao">${e(RECORDING_RULES.title)}</h2>${list(RECORDING_RULES.items)}
 <h2 id="compartilhar">${e(SHARE_RULES.title)}</h2>${list(SHARE_RULES.items)}
+<h2 id="cancelamento">${e(RIDE_POLICY_TEXT.title)}</h2>
+<p>O motorista se desloca até o passageiro. Estas regras, cobradas automaticamente pela carteira, protegem o tempo de quem dirige e o dinheiro de quem viaja.</p>
+<h3>Cancelamento</h3>${list(RIDE_POLICY_TEXT.cancel)}
+<h3>Tempo de espera no embarque</h3>${list(RIDE_POLICY_TEXT.wait)}
 <h2>Controle de qualidade Froc</h2>${list(QUALITY_CONTROL)}
 <p>Dúvidas? Veja as <a href="/perguntas-frequentes">perguntas frequentes</a> ou fale com o Atendimento dentro do app.</p>
 ${cta}`;

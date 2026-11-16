@@ -148,6 +148,7 @@ var QUALITY_CONTROL = [
   "Todo motorista, motoboy e transportador passa por an\xE1lise manual de documentos antes de ser liberado (CNH com EAR, CRLV, antecedentes e, em cargas, RNTRC).",
   "Ano do ve\xEDculo conferido no cadastro conforme a regra da cidade.",
   "CNH com validade: vencida, o motorista fica offline at\xE9 atualizar.",
+  "Regras de respeito com cobran\xE7a autom\xE1tica: cancelamento tardio paga o motorista e espera no embarque tem acr\xE9scimo (+10%, +30%, +50%).",
   "Avalia\xE7\xE3o dos dois lados em toda viagem. Motorista com m\xE9dia abaixo de 4,5 depois de 20 avalia\xE7\xF5es entra em revis\xE3o pela equipe.",
   "PIN de embarque: a viagem s\xF3 come\xE7a com o c\xF3digo que o passageiro informa no carro certo.",
   "Bot\xE3o SOS com localiza\xE7\xE3o para a central, liga\xE7\xE3o para o 190 e compartilhamento da viagem.",
@@ -218,6 +219,8 @@ var FAQ = [
   ["Posso pagar em dinheiro ou fazer Pix direto para o motorista?", "N\xE3o. Para acabar com golpes de troco, cobran\xE7a por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se algu\xE9m pedir pagamento por fora, n\xE3o pague e avise o Atendimento."],
   ["Como o motorista recebe e tira o dinheiro?", "O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no pr\xF3prio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. S\xF3 os ganhos podem ir para Pix; saldo de recarga \xE9 para usar no app."],
   ["E se o motorista n\xE3o aparecer?", "Se ningu\xE9m aceitar no tempo limite, o pedido \xE9 cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila."],
+  ["Posso cancelar a corrida?", "Pode. Antes de algum motorista aceitar, e at\xE9 1 minuto depois do aceite, \xE9 gr\xE1tis. Entre 1 e 2 minutos, 50% do valor vai para o motorista. Depois de 2 minutos, ou com o motorista j\xE1 no embarque, ele recebe 100%. Se o motorista atrasar mais de 10 minutos al\xE9m do previsto, ou desistir, voc\xEA n\xE3o paga nada."],
+  ["O motorista chegou e eu demorei. Pago a mais?", 'Quando o motorista chega, aparece um aviso na sua tela com um contador. O primeiro minuto \xE9 gr\xE1tis. Depois: +10% com 1 minuto, +30% com 2 minutos e +50% a partir de 3 minutos. Com 5 minutos, o motorista pode encerrar como "passageiro n\xE3o apareceu" e recebe 100%.'],
   ["Como funciona o controle de qualidade?", "Documentos conferidos por pessoas, CNH e ve\xEDculo dentro da validade e da idade permitida, avalia\xE7\xE3o dos dois lados e revis\xE3o de quem fica com nota baixa."],
   ["Em emerg\xEAncia, o que fa\xE7o?", "Ligue 190 (Pol\xEDcia) ou 192 (SAMU). No app, toque em SOS: a central Froc recebe sua localiza\xE7\xE3o e os dados da viagem."]
 ];
@@ -239,6 +242,46 @@ ${req}
 - Voc\xEA N\xC3O \xE9 advogado: em d\xFAvida jur\xEDdica espec\xEDfica, explique a regra geral, cite a lei e recomende confirmar com a prefeitura, o Detran, a ANTT ou um advogado.
 `;
 }
+
+// src/data/ridePolicy.ts
+var RIDE_POLICY_VERSION = "2026-11-16";
+var FREE_CANCEL_SEC = 60;
+var HALF_CANCEL_SEC = 120;
+var WAIT_TIERS = [
+  { afterSec: 60, percent: 10 },
+  { afterSec: 120, percent: 30 },
+  { afterSec: 180, percent: 50 }
+];
+var NO_SHOW_SEC = 5 * 60;
+var ARRIVAL_RADIUS_KM = 0.3;
+var LATE_GRACE_MIN = 10;
+function cancelFeePercent(secondsSinceAccept) {
+  if (secondsSinceAccept < FREE_CANCEL_SEC) return 0;
+  if (secondsSinceAccept < HALF_CANCEL_SEC) return 50;
+  return 100;
+}
+function waitingFeePercent(waitSeconds) {
+  let pct = 0;
+  for (const t of WAIT_TIERS) if (waitSeconds >= t.afterSec) pct = t.percent;
+  return pct;
+}
+var RIDE_POLICY_TEXT = {
+  title: "Regras de respeito: cancelamento e tempo de espera",
+  cancel: [
+    "Cancelou at\xE9 1 minuto depois que o motorista aceitou: gr\xE1tis, o dinheiro volta inteiro.",
+    "Entre 1 e 2 minutos: 50% do valor vai para o motorista pelo deslocamento.",
+    "Depois de 2 minutos, ou com o motorista j\xE1 no embarque: o motorista recebe 100%.",
+    "Antes de algum motorista aceitar, cancelar \xE9 sempre gr\xE1tis.",
+    "Se o motorista atrasar mais de 10 minutos al\xE9m do tempo previsto, ou se ele desistir, voc\xEA n\xE3o paga nada."
+  ],
+  wait: [
+    "Quando o motorista chega, voc\xEA recebe um aviso na tela. O primeiro minuto de espera \xE9 gr\xE1tis.",
+    "Depois de 1 minuto esperando: +10% no valor. Depois de 2 minutos: +30%. Depois de 3 minutos: +50% (m\xE1ximo).",
+    'Depois de 5 minutos, o motorista pode encerrar como "passageiro n\xE3o apareceu" e recebe 100% do valor.',
+    "O motorista s\xF3 consegue avisar que chegou quando est\xE1 a at\xE9 300 metros do ponto de embarque."
+  ]
+};
+var policyKnowledgeText = () => `${RIDE_POLICY_TEXT.title} (corridas; cobran\xE7a autom\xE1tica pela carteira): ${[...RIDE_POLICY_TEXT.cancel, ...RIDE_POLICY_TEXT.wait].join(" ")} Na negocia\xE7\xE3o (estilo inDrive) vale a mesma regra de cancelamento, contada a partir do acordo. Nas entregas de lojas, a loja segue a regra de cancelamento; n\xE3o h\xE1 taxa de espera. A taxa vai para o motorista com o mesmo desconto da comiss\xE3o de uma corrida normal.`;
 
 // server/merchants.ts
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -1517,6 +1560,25 @@ var FrocService = class {
     return { ok: true };
   }
   // ------------------------------------------------------- 1) corrida Uber/99
+  /**
+   * Taxa de cancelamento do passageiro (regras em src/data/ridePolicy.ts): grátis antes do aceite,
+   * até 1 min depois do aceite ou com o motorista muito atrasado; 50% entre 1 e 2 min; 100% depois
+   * de 2 min ou com o motorista já no embarque.
+   */
+  rideCancelPercent(ride, acceptedField = "acceptedAt") {
+    if (!ride.driverId || !ride[acceptedField]) return 0;
+    if (ride.status === "arriving") return 100;
+    const sinceAccept = (this.now().getTime() - Date.parse(String(ride[acceptedField]))) / 1e3;
+    const etaMin = Number(ride.etaMin ?? 5) || 5;
+    if (ride.status === "accepted" && sinceAccept > (etaMin + LATE_GRACE_MIN) * 60) return 0;
+    return cancelFeePercent(sinceAccept);
+  }
+  /** Taxa de cancelamento/não comparecimento vai para o motorista como ganho (menos a comissão). */
+  payCancellation(tx, driver, feeCents, pct, label, kind, noShow = false) {
+    const cut = this.providerCut(feeCents);
+    this.creditEarning(tx, driver, cut, noShow ? `Passageiro n\xE3o apareceu \xB7 ${label} (100%)` : `Taxa de cancelamento ${pct}% \xB7 ${label}`);
+    this.platformRevenue(tx, `cancelamento_${kind}`, feeCents, feeCents - cut);
+  }
   rideView(r, uid) {
     const mine = involvement(uid, r.passengerId, r.driverId);
     const { escrowCents: _e, priceCents: _p, deliveryPin: _d, trackToken: _t, ...rest } = r;
@@ -1561,6 +1623,8 @@ var FrocService = class {
     const id = randomUUID2();
     const ride = await this.store.transaction(async (tx) => {
       const user = await this.mustGet(tx, "users", auth.uid, "Usu\xE1rio");
+      if (body.acceptPolicy === true && user.ridePolicyAccepted !== RIDE_POLICY_VERSION)
+        tx.update("users", user.uid, { ridePolicyAccepted: RIDE_POLICY_VERSION, ridePolicyAcceptedAt: this.iso() });
       const doc = {
         id,
         passengerId: user.uid,
@@ -1581,6 +1645,7 @@ var FrocService = class {
         paymentMethod: method,
         pinCode: String(randomInt(1e3, 1e4)),
         status: "searching",
+        policyVersion: RIDE_POLICY_VERSION,
         escrowCents: 0,
         createdAt: this.iso(),
         messages: []
@@ -1638,14 +1703,42 @@ var FrocService = class {
         case "arriving": {
           if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista da corrida pode fazer isso.");
           if (status !== "accepted") fail2(409, "invalid_state", "A corrida n\xE3o est\xE1 aguardando chegada.");
-          set({ status: "arriving", etaMin: 0 });
+          const me = await this.mustGet(tx, "users", auth.uid, "Motorista");
+          const fresh = typeof me.driverLat === "number" && this.now().getTime() - Date.parse(String(me.locationAt || 0)) < 2 * 6e4;
+          if (!fresh) fail2(409, "location_required", "Ative a localiza\xE7\xE3o do celular para avisar que chegou.");
+          const origin = ride.origin;
+          const away = straightKm({ lat: me.driverLat, lng: me.driverLng }, origin);
+          if (away > ARRIVAL_RADIUS_KM)
+            fail2(409, "too_far_from_pickup", `Voc\xEA ainda est\xE1 a ${away < 1 ? `${Math.round(away * 1e3)} m` : `${away.toFixed(1)} km`} do embarque. Avise quando estiver no local.`);
+          const messages = Array.isArray(ride.messages) ? ride.messages : [];
+          const time = this.now().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+          set({
+            status: "arriving",
+            etaMin: 0,
+            arrivedAt: this.iso(),
+            messages: [
+              ...messages,
+              { sender: "froc", text: "\u{1F697} Seu motorista chegou ao embarque. O 1\xBA minuto de espera \xE9 gr\xE1tis; depois: +10% (1 min), +30% (2 min) e +50% (3 min).", time }
+            ].slice(-200)
+          });
           return { ride };
         }
         case "start": {
           if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista da corrida pode iniciar.");
           if (status !== "accepted" && status !== "arriving") fail2(409, "invalid_state", "A corrida n\xE3o pode ser iniciada agora.");
           if (!ride.delivery && String(body.pin || "") !== String(ride.pinCode)) fail2(400, "wrong_pin", "PIN incorreto. Pe\xE7a o PIN de 4 d\xEDgitos ao passageiro.");
-          set({ status: "in_progress", etaMin: ride.durationMin, startedAt: this.iso() });
+          const patch = { status: "in_progress", etaMin: ride.durationMin, startedAt: this.iso() };
+          if (!ride.delivery && ride.arrivedAt && ride.paymentMethod === "froc_pay") {
+            const waitSec = (this.now().getTime() - Date.parse(String(ride.arrivedAt))) / 1e3;
+            const pct = waitingFeePercent(waitSec);
+            const extra = Math.round(Number(ride.priceCents) * pct / 100);
+            if (extra > 0) {
+              const passenger = await this.mustGet(tx, "users", String(ride.passengerId), "Passageiro");
+              this.debit(tx, passenger, extra, `Tempo de espera ${Math.floor(waitSec / 60)} min (+${pct}%) \xB7 ${ride.categoryLabel}`, "corrida", true);
+              Object.assign(patch, { escrowCents: Number(ride.escrowCents || 0) + extra, waitingFeePercent: pct, waitingFee: toReais(extra), waitSeconds: Math.round(waitSec) });
+            }
+          }
+          set(patch);
           return { ride };
         }
         case "complete": {
@@ -1665,14 +1758,19 @@ var FrocService = class {
             if (!["searching", "accepted", "arriving"].includes(status)) fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
             const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
             const escrow = Number(ride.escrowCents || 0);
-            set({ status: "cancelled", escrowCents: 0, cancelledAt: this.iso(), cancelledBy: "passenger" });
-            if (escrow > 0) this.credit(tx, passenger, escrow, `Estorno \xB7 ${ride.categoryLabel} cancelada`, "estorno");
+            const pct = this.rideCancelPercent(ride);
+            const fee = Math.round(escrow * pct / 100);
+            const driver = fee > 0 ? await this.mustGet(tx, "users", String(ride.driverId), "Motorista") : null;
+            set({ status: "cancelled", escrowCents: 0, cancelledAt: this.iso(), cancelledBy: "passenger", cancellationFeePercent: pct, cancellationFee: toReais(fee) });
+            if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial \xB7 ${ride.categoryLabel} cancelada (taxa ${pct}%)` : `Estorno \xB7 ${ride.categoryLabel} cancelada`, "estorno");
+            if (driver) this.payCancellation(tx, driver, fee, pct, String(ride.categoryLabel), ride.delivery ? "entrega" : "corrida");
             return { ride };
           }
           if (isDriver) {
             if (!["accepted", "arriving"].includes(status)) fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel desistir agora.");
             set({
               status: "searching",
+              arrivedAt: null,
               driverId: null,
               driverName: null,
               driverRating: null,
@@ -1683,6 +1781,17 @@ var FrocService = class {
             return { ride };
           }
           return fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
+        }
+        case "no_show": {
+          if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista da corrida pode fazer isso.");
+          if (status !== "arriving" || !ride.arrivedAt) fail2(409, "invalid_state", "Avise que chegou ao embarque primeiro.");
+          const waited = (this.now().getTime() - Date.parse(String(ride.arrivedAt))) / 1e3;
+          if (waited < NO_SHOW_SEC) fail2(409, "too_early", `Aguarde ${Math.ceil((NO_SHOW_SEC - waited) / 60)} min de espera antes de encerrar.`);
+          const escrow = Number(ride.escrowCents || 0);
+          const driver = await this.mustGet(tx, "users", auth.uid, "Motorista");
+          set({ status: "cancelled", escrowCents: 0, cancelledAt: this.iso(), cancelledBy: "no_show", cancellationFeePercent: 100, cancellationFee: toReais(escrow) });
+          if (escrow > 0) this.payCancellation(tx, driver, escrow, 100, String(ride.categoryLabel), "corrida", true);
+          return { ride };
         }
         case "message": {
           if (!isPassenger && !isDriver) fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
@@ -1852,10 +1961,14 @@ var FrocService = class {
       if (r.status !== "open" && r.status !== "matched") fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
       const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
       const escrow = Number(r.escrowCents || 0);
-      const patch = { status: "cancelled", escrowCents: 0, cancelledAt: this.iso() };
+      const pct = r.status === "matched" ? this.rideCancelPercent({ ...r, status: "accepted", etaMin: 60 }, "matchedAt") : 0;
+      const fee = Math.round(escrow * pct / 100);
+      const driver = fee > 0 ? await this.mustGet(tx, "users", String(r.driverId), "Motorista") : null;
+      const patch = { status: "cancelled", escrowCents: 0, cancelledAt: this.iso(), cancellationFeePercent: pct, cancellationFee: toReais(fee) };
       Object.assign(r, patch);
       tx.update("indrive", id, patch);
-      if (escrow > 0) this.credit(tx, passenger, escrow, "Estorno \xB7 negocia\xE7\xE3o cancelada", "estorno");
+      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial \xB7 negocia\xE7\xE3o cancelada (taxa ${pct}%)` : "Estorno \xB7 negocia\xE7\xE3o cancelada", "estorno");
+      if (driver) this.payCancellation(tx, driver, fee, pct, "Corrida negociada", "indrive");
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -3215,7 +3328,9 @@ SEGURAN\xC7A
 ADMINISTRA\xC7\xC3O (s\xF3 para a equipe)
 - Painel Admin: Pend\xEAncias (cadastros e saques), SOS, Usu\xE1rios (bloquear/desbloquear), Relat\xF3rios, Configura\xE7\xF5es (comiss\xE3o ${cfg.commissionPercent}%, tarifa din\xE2mica, tempos, pontos), Equipe IA, Atendimento e Blog.
 - Prazos autom\xE1ticos rodam pelo agendador (cron) a cada 5 min.
-${legalKnowledgeText(cfg.maxVehicleAgeYears)}`;
+${legalKnowledgeText(cfg.maxVehicleAgeYears)}
+- ${policyKnowledgeText()} Ao explicar ao passageiro, seja educado e mostre que a regra protege o tempo do motorista; ao motorista, explique o bot\xE3o "Passageiro n\xE3o apareceu" (libera com 5 min de espera).
+`;
 }
 
 // server/ai/images.ts
@@ -3943,7 +4058,7 @@ function renderRules(site) {
 <h1>Regras, leis e requisitos para dirigir, entregar e transportar</h1>
 <p class="lead">Tudo o que a lei brasileira e a Froc exigem de motoristas, mototaxistas, motoboys, transportadores de carga, lojas e passageiros \u2014 explicado sem juridiqu\xEAs.</p>
 <p class="note">Atualizado em ${escapeHtml(LEGAL_UPDATED.split("-").reverse().join("/"))}. N\xE3o \xE9 parecer jur\xEDdico: cada prefeitura tem decreto pr\xF3prio e, quando ela \xE9 mais r\xEDgida, vale a regra dela.</p>
-<p class="toc">${REQUIREMENTS.map((s) => `<a href="#${s.id}">${escapeHtml(s.title.split(" (")[0])}</a>`).join("")}<a href="#ano">Ano do ve\xEDculo</a><a href="#gravacao">Grava\xE7\xE3o</a><a href="#compartilhar">Compartilhar viagem</a></p>
+<p class="toc">${REQUIREMENTS.map((s) => `<a href="#${s.id}">${escapeHtml(s.title.split(" (")[0])}</a>`).join("")}<a href="#ano">Ano do ve\xEDculo</a><a href="#cancelamento">Cancelamento e espera</a><a href="#gravacao">Grava\xE7\xE3o</a><a href="#compartilhar">Compartilhar viagem</a></p>
 ${REQUIREMENTS.map(
     (s) => `<h2 id="${s.id}">${escapeHtml(s.title)}</h2><p>${escapeHtml(s.summary)}</p>${list(s.items)}<p class="note">Base legal: ${escapeHtml(s.sources.join("; "))}.</p>`
   ).join("")}
@@ -3955,6 +4070,10 @@ ${CITY_VEHICLE_AGE.map((c) => `<tr><td>${escapeHtml(c.city)}/${escapeHtml(c.stat
 </tbody></table>
 <h2 id="gravacao">${escapeHtml(RECORDING_RULES.title)}</h2>${list(RECORDING_RULES.items)}
 <h2 id="compartilhar">${escapeHtml(SHARE_RULES.title)}</h2>${list(SHARE_RULES.items)}
+<h2 id="cancelamento">${escapeHtml(RIDE_POLICY_TEXT.title)}</h2>
+<p>O motorista se desloca at\xE9 o passageiro. Estas regras, cobradas automaticamente pela carteira, protegem o tempo de quem dirige e o dinheiro de quem viaja.</p>
+<h3>Cancelamento</h3>${list(RIDE_POLICY_TEXT.cancel)}
+<h3>Tempo de espera no embarque</h3>${list(RIDE_POLICY_TEXT.wait)}
 <h2>Controle de qualidade Froc</h2>${list(QUALITY_CONTROL)}
 <p>D\xFAvidas? Veja as <a href="/perguntas-frequentes">perguntas frequentes</a> ou fale com o Atendimento dentro do app.</p>
 ${cta}`;

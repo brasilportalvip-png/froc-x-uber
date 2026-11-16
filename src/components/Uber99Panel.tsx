@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { SosButton } from './SosButton.tsx';
 import { TripSafetyBar } from './TripSafetyBar.tsx';
+import { DriverArrivedAlert, DriverWaitPanel, PassengerCancelButton, RidePolicyModal, policyAccepted } from './RideRespect.tsx';
 import { openReceipt } from '../lib/receipt.ts';
 import { api } from '../lib/session.ts';
 import {
@@ -41,6 +42,8 @@ interface Uber99PanelProps {
     categoryId: RideCategoryId;
     paymentMethod: PaymentMethod;
     stops: string[];
+    /** A pessoa viu e aceitou as regras de cancelamento e espera. */
+    acceptPolicy?: boolean;
   }) => Promise<void>;
   onRideAction: (rideId: string, action: string, extra?: Record<string, string | number>) => Promise<void>;
   onSetOnline: (online: boolean) => Promise<void>;
@@ -126,10 +129,17 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const driverToRate = rides.find((r) => r.mine === 'provider' && r.status === 'completed' && !r.ratedByDriver);
   const openQueueRides = rides.filter((r) => r.mine === null && r.status === 'searching');
 
+  const [showPolicy, setShowPolicy] = useState(false);
   const handleBook = async () => {
+    // Primeiro pedido: mostra as regras de respeito (cancelamento e espera) antes de pedir.
+    if (!policyAccepted()) {
+      setShowPolicy(true);
+      return;
+    }
     setSubmitting(true);
     try {
       await onCreateRide({
+        acceptPolicy: true,
         originId: origin.id,
         destinationId: destination.id,
         originPoint: origin,
@@ -247,7 +257,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <div
                   key={idx}
                   className={`text-xs px-2.5 py-1.5 rounded-lg max-w-[88%] ${
-                    m.sender === 'driver' ? 'ml-auto bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
+                    m.sender === 'froc'
+                      ? 'mx-auto max-w-full bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-900'
+                      : m.sender === 'driver'
+                        ? 'ml-auto bg-emerald-600 text-white'
+                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
                   }`}
                 >
                   {m.text}
@@ -288,6 +302,9 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               shareText={`Estou dirigindo pela Froc: ${profile.driverVehicle} placa ${profile.driverPlate}, de ${myDriving.origin.name.split('·')[0]} para ${myDriving.destination.name.split('·')[0]}.`}
             />
             <div className="flex flex-wrap gap-2">
+              {myDriving.status === 'arriving' && !myDriving.delivery && myDriving.arrivedAt && (
+                <DriverWaitPanel ride={myDriving} onNoShow={() => void onRideAction(myDriving.id, 'no_show')} />
+              )}
               {myDriving.status === 'accepted' && (
                 <button
                   type="button"
@@ -430,6 +447,15 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   // Passenger Perspective View
   return (
     <div className="space-y-4">
+      {showPolicy && (
+        <RidePolicyModal
+          onClose={() => setShowPolicy(false)}
+          onAccept={() => {
+            setShowPolicy(false);
+            if (!needsDestination && !locating && !lowBalance) void handleBook();
+          }}
+        />
+      )}
       {activeRide ? (
         <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-4">
           <div className="flex items-center justify-between gap-3">
@@ -487,9 +513,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <div
                   key={idx}
                   className={`text-xs px-2.5 py-1.5 rounded-lg max-w-[88%] ${
-                    m.sender === 'passenger'
-                      ? 'ml-auto bg-emerald-600 text-white'
-                      : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
+                    m.sender === 'froc'
+                      ? 'mx-auto max-w-full bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-900'
+                      : m.sender === 'passenger'
+                        ? 'ml-auto bg-emerald-600 text-white'
+                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
                   }`}
                 >
                   {m.text}
@@ -526,6 +554,9 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               shareText={`Motorista ${activeRide.driverName || ''}, ${activeRide.vehicleModel || ''} placa ${activeRide.vehiclePlate || ''}, de ${activeRide.origin.name} para ${activeRide.destination.name}.`}
             />
           )}
+          {activeRide.status === 'arriving' && activeRide.arrivedAt && (
+            <DriverArrivedAlert ride={activeRide} onOnMyWay={() => void onRideAction(activeRide.id, 'message', { message: 'Estou indo! 🏃' })} />
+          )}
           {activeRide.status !== 'searching' && (
             <TripSafetyBar
               kind="ride"
@@ -542,15 +573,9 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   <>Motorista a {calculateDistanceKm(activeRide.driverLocation, activeRide.origin)} km do embarque (ao vivo no mapa). </>
                 )}
                 Informe o PIN ao motorista só quando entrar no carro.
-                {' O valor já saiu da sua carteira e fica guardado pela Froc; vai para o motorista no fim da viagem. Cancelou antes? Volta para você.'}
+                {' O valor já saiu da sua carteira e fica guardado pela Froc; vai para o motorista no fim da viagem.'}
               </p>
-              <button
-                type="button"
-                onClick={() => onRideAction(activeRide.id, 'cancel')}
-                className="px-4 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition cursor-pointer"
-              >
-                Cancelar corrida
-              </button>
+              <PassengerCancelButton ride={activeRide} onCancel={() => void onRideAction(activeRide.id, 'cancel')} />
             </div>
           )}
         </div>
@@ -692,6 +717,12 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             )}
           </div>
 
+          <p className="text-[11px] text-slate-500 text-center">
+            Cancelar é grátis até 1 min depois do aceite · motorista no embarque: 1º minuto de espera grátis, depois +10%, +30% e +50%.{' '}
+            <button type="button" onClick={() => setShowPolicy(true)} className="underline font-semibold cursor-pointer">
+              Ver regras
+            </button>
+          </p>
           <button
             type="button"
             disabled={submitting || needsDestination || locating || lowBalance}
