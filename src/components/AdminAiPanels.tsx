@@ -212,7 +212,11 @@ export const AiTeamPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
         .catch(() => undefined);
   }, [agentId, conversations]);
 
-  useEffect(() => end.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), [messages]);
+  // Bloco com chaves de propósito: no Chrome novo, scrollIntoView() devolve uma Promise, e o
+  // React trataria essa Promise como função de limpeza (erro "l is not a function").
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [messages]);
 
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -496,7 +500,9 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
   const [topic, setTopic] = useState('');
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => api<PostRow[]>('/api/admin/blog').then(setPosts).catch((e) => onToast(e.message)), [onToast]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
   return (
     <div className="space-y-3">
       <div className={card}>
