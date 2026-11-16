@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Car, HandCoins, Truck, Users } from 'lucide-react';
+import { Car, Eye, EyeOff, HandCoins, Truck, Users } from 'lucide-react';
 import { resetPassword, signIn, signInWithGoogle, signUp } from '../lib/session.ts';
 
 /** Tela de entrada: entrar, criar conta ou recuperar senha. */
@@ -11,6 +11,7 @@ export const AuthScreen: React.FC<{
   modeRequest?: { mode: 'login' | 'signup'; at: number } | null;
 }> = ({ configError, embedded = false, modeRequest = null }) => {
   const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
+  const [showPassword, setShowPassword] = useState(false);
   useEffect(() => {
     if (modeRequest) setMode(modeRequest.mode);
   }, [modeRequest]);
@@ -68,16 +69,48 @@ export const AuthScreen: React.FC<{
             )}
             <input className={input} type="email" autoComplete="email" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} required />
             {mode !== 'reset' && (
-              <input
-                className={input}
-                type="password"
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                placeholder="Senha (mínimo 6 caracteres)"
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <input
+                    className={`${input} pr-12`}
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                    placeholder="Senha (mínimo 6 caracteres)"
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Esconder senha' : 'Mostrar senha'}
+                    aria-pressed={showPassword}
+                    className="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-slate-500 hover:text-emerald-600 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+                {mode === 'login' && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('reset');
+                        setMessage(null);
+                      }}
+                      className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                    >
+                      Esqueci minha senha
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {mode === 'reset' && (
+              <p className="text-xs text-slate-500">
+                Digite o e-mail da sua conta. Enviaremos um link para você criar uma senha nova (confira também o spam).
+              </p>
             )}
             {message && (
               <p role="alert" className={`text-sm ${message.kind === 'error' ? 'text-red-600' : 'text-emerald-600'}`}>
@@ -123,8 +156,8 @@ export const AuthScreen: React.FC<{
               ) : (
                 <button type="button" onClick={() => setMode('signup')} className="cursor-pointer">Criar conta</button>
               )}
-              {mode !== 'reset' && (
-                <button type="button" onClick={() => setMode('reset')} className="cursor-pointer">Esqueci a senha</button>
+              {mode === 'signup' && (
+                <button type="button" onClick={() => setMode('reset')} className="cursor-pointer">Esqueci minha senha</button>
               )}
             </div>
             {mode === 'signup' && (

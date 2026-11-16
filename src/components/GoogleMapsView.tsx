@@ -1,3 +1,4 @@
+import { isUnsetDestination } from '../lib/currentLocation.ts';
 import React, { useEffect, useRef, useState } from 'react';
 import { AdvancedMarker, Map as GoogleMap, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { LocateFixed, Navigation } from 'lucide-react';
@@ -32,6 +33,14 @@ const RouteLayer: React.FC<{
     polylinesRef.current.forEach((p) => p.setMap(null));
     polylinesRef.current = [];
     onRouteError?.(null);
+
+    // Sem destino ainda: mostra a pessoa onde ela está (ponto A), bem de perto.
+    if (isUnsetDestination(destination)) {
+      onRouteTelemetry?.(0, 0);
+      map.panTo({ lat: origin.lat, lng: origin.lng });
+      map.setZoom(16);
+      return;
+    }
 
     const strokeColor =
       activeModule === 'freight' ? '#D97706' : activeModule === 'indrive' ? '#0284C7' : '#059669';
@@ -181,9 +190,11 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
           <Pin background="#059669" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="A" />
         </AdvancedMarker>
 
-        <AdvancedMarker position={{ lat: destination.lat, lng: destination.lng }} title={`Destino: ${destination.name}`}>
-          <Pin background="#0F172A" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="B" />
-        </AdvancedMarker>
+        {!isUnsetDestination(destination) && (
+          <AdvancedMarker position={{ lat: destination.lat, lng: destination.lng }} title={`Destino: ${destination.name}`}>
+            <Pin background="#0F172A" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="B" />
+          </AdvancedMarker>
+        )}
 
         {driverPoint && (
           <AdvancedMarker position={driverPoint} title="Seu motorista (ao vivo)">
@@ -207,7 +218,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
           </span>
           <span className="text-slate-400">→</span>
           <span className="font-semibold text-slate-900 dark:text-white truncate max-w-[140px] sm:max-w-xs">
-            {destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0]}
+            {isUnsetDestination(destination) ? 'Escolha o destino' : destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0]}
           </span>
           {activeTripStatus && (
             <>

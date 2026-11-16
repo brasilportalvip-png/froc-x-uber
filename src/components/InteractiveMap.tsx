@@ -1,3 +1,4 @@
+import { isUnsetDestination } from '../lib/currentLocation.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Compass, LocateFixed, Minus, Plus, Navigation } from 'lucide-react';
 import { BRAZIL_LOCATIONS } from '../data/locations.ts';
@@ -340,7 +341,8 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       };
 
       drawPin(pA.x, pA.y, 'A', origin.zone === 'intercity' ? origin.city : origin.name.split('·')[0].trim(), '#10B981');
-      drawPin(pB.x, pB.y, 'B', destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0].trim(), '#0F172A');
+      if (!isUnsetDestination(destination))
+        drawPin(pB.x, pB.y, 'B', destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0].trim(), '#0F172A');
 
       ctx.restore();
       rafId = requestAnimationFrame(render);
@@ -442,7 +444,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
           </span>
           <span className="text-slate-400">→</span>
           <span className="font-semibold text-slate-900 dark:text-white truncate max-w-[140px] sm:max-w-xs">
-            {destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0]}
+            {isUnsetDestination(destination) ? 'Escolha o destino' : destination.zone === 'intercity' ? destination.city : destination.name.split('·')[0]}
           </span>
           {activeTripStatus && (
             <>

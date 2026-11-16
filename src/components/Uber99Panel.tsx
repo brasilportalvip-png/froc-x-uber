@@ -17,6 +17,7 @@ import {
 import { calculateDistanceKm, estimateDurationMin, formatBRL, RIDE_CATEGORIES } from '../data/locations.ts';
 import type { GeoPoint, PaymentMethod, RideCategoryId, RideOrder, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
+import { LOCATING_NAME, isUnsetDestination } from '../lib/currentLocation.ts';
 import sedanImg from '../assets/images/fleet_sedan_urban_1794683389130.jpg';
 import motoImg from '../assets/images/fleet_moto_express_1794683388258.jpg';
 
@@ -79,8 +80,14 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const [quote, setQuote] = useState<{ surge: number; prices: { categoryId: string; price: number }[] } | null>(null);
 
   // Preço oficial do servidor (inclui o preço dinâmico da região, calculado com H3).
+  const needsDestination = isUnsetDestination(destination);
+  const locating = origin.name === LOCATING_NAME;
   useEffect(() => {
     if (role !== 'passenger') return;
+    if (needsDestination || locating) {
+      setQuote(null);
+      return;
+    }
     let alive = true;
     const t = setTimeout(() => {
       api<{ surge: number; prices: { categoryId: string; price: number }[] }>('/api/rides/quote', {
@@ -93,10 +100,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
       alive = false;
       clearTimeout(t);
     };
-  }, [role, origin.lat, origin.lng, destination.lat, destination.lng]);
+  }, [role, origin.lat, origin.lng, destination.lat, destination.lng, needsDestination, locating]);
 
   const distanceKm = useMemo(
-    () => (liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
+    () => (isUnsetDestination(destination) ? 0 : liveDistanceKm && liveDistanceKm > 0 ? liveDistanceKm : calculateDistanceKm(origin, destination)),
     [liveDistanceKm, origin, destination]
   );
 
@@ -589,12 +596,20 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
 
           <button
             type="button"
-            disabled={submitting}
+            disabled={submitting || needsDestination || locating}
             onClick={handleBook}
             className="w-full min-h-[48px] rounded-2xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 text-white text-sm font-bold transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 cursor-pointer"
           >
             <ShieldCheck className="w-4 h-4" />
-            <span>{submitting ? 'Solicitando...' : `Confirmar ${RIDE_CATEGORIES.find((c) => c.id === selectedCat)?.label}`}</span>
+            <span>
+              {submitting
+                ? 'Solicitando...'
+                : locating
+                  ? 'Localizando você...'
+                  : needsDestination
+                    ? 'Escolha o destino (B) para pedir'
+                    : `Confirmar ${RIDE_CATEGORIES.find((c) => c.id === selectedCat)?.label}`}
+            </span>
           </button>
         </>
       )}
