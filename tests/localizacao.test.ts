@@ -137,3 +137,12 @@ test('App Android: assetlinks.json liga o app da Play Store ao site (atualiza ju
   assert.equal(vercel.rewrites[0].source, '/.well-known/assetlinks.json');
   assert.ok(read('src/main.tsx').includes('installAutoUpdate()'));
 });
+
+test('Marca Froc X: imagem de compartilhamento e ícones novos no lugar', () => {
+  const html = read('index.html');
+  assert.ok(html.includes('/og-froc-x.jpg') && html.includes('og:image:width" content="1024"'));
+  assert.ok(html.includes('/favicon.ico'));
+  for (const f of ['og-froc-x.jpg', 'favicon.ico', 'favicon-48x48.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png', 'apple-touch-icon.png']) {
+    assert.ok(readFileSync(new URL(`../public/${f}`, import.meta.url)).length > 1000, f);
+  }
+});

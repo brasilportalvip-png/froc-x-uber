@@ -4344,11 +4344,11 @@ function layout(o) {
 <meta property="og:description" content="${escapeHtml(o.description)}">
 <meta property="og:url" content="${escapeHtml(o.canonical)}">
 ${o.publishedAt ? `<meta property="article:published_time" content="${escapeHtml(o.publishedAt)}">` : ""}
-<meta property="og:image" content="${escapeHtml(o.image || `${o.canonical.replace(/^(https?:\/\/[^/]+).*/, "$1")}/pwa-512x512.png`)}">
+<meta property="og:image" content="${escapeHtml(o.image || `${o.canonical.replace(/^(https?:\/\/[^/]+).*/, "$1")}/og-froc-x.jpg`)}">
 ${o.imageAlt ? `<meta property="og:image:alt" content="${escapeHtml(o.imageAlt)}">` : ""}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#050505">
-<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png"><link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="alternate" type="application/rss+xml" title="${SITE_NAME} \xB7 Blog" href="/rss.xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
