@@ -401,10 +401,10 @@ export function createApp(options: AppOptions) {
       const profile = await (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {});
       // A IA já lê a CNH e confere CPF, nome, nascimento, validade e EAR (o resultado aparece para a equipe).
       if (options.platform && req.body?.kind !== 'merchant') {
+        // A IA lê CNH, CRLV e antecedentes e já decide (com autonomia ligada). Se demorar, o agendador termina.
         const reviewer = (await options.platform()).identity;
-        const u = await (await service()).store.get<Record<string, unknown>>('users', a(req).uid);
-        const cnh = ((req.body?.kind === 'trucker' ? u?.truckerDocs : u?.driverDocs) as Record<string, string> | undefined)?.cnh;
-        if (reviewer && cnh) await reviewer.review(a(req).uid, cnh, 'cnh').catch((e) => console.warn('Leitura da CNH falhou:', e));
+        if (reviewer) await reviewer.reviewProvider(a(req).uid, req.body?.kind === 'trucker' ? 'trucker' : 'driver').catch((e) => console.warn('Conferência do cadastro falhou:', e));
+        return (await service()).profileView((await (await service()).store.get('users', a(req).uid)) as never, a(req));
       }
       return profile;
     }),
@@ -445,6 +445,8 @@ export function createApp(options: AppOptions) {
     wrap(async (req) => (await service()).reviewApplication(a(req), id(req), req.body?.kind, req.body?.decision, req.body?.reason)),
   );
   api.get('/admin/users', wrap(async (req) => (await service()).adminUsers(a(req), req.query.q)));
+  api.get('/admin/risk-zones', wrap(async (req) => (await service()).listRiskZones(a(req))));
+  api.post('/admin/risk-zones', wrap(async (req) => (await service()).saveRiskZone(a(req), req.body || {})));
   api.get('/admin/users/:id/identity', wrap(async (req) => ({ identity: await (await service()).adminIdentity(a(req), id(req)) })));
   api.post('/admin/users/:id/cpf', wrap(async (req) => (await service()).adminSetCpfStatus(a(req), id(req), req.body?.decision, req.body?.reason)));
   api.post('/admin/users/:id/block', wrap(async (req) => (await service()).setBlocked(a(req), id(req), req.body?.blocked, req.body?.reason)));

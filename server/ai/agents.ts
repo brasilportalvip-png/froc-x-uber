@@ -15,6 +15,7 @@ export interface AgentDef {
 const READ_ALL = [
   'painel_geral',
   'cpfs_para_conferir',
+  'areas_de_risco',
   'relatorio_financeiro',
   'cadastros_pendentes',
   'saques_pendentes',
@@ -125,7 +126,7 @@ export const AGENTS: AgentDef[] = [
     area: 'Segurança',
     mission:
       'Prioridade máxima: alertas SOS. Lê o alerta, a ficha das pessoas envolvidas, orienta (190 Polícia, 192 SAMU) e acompanha. Só marca como resolvido depois de confirmar que está tudo bem.',
-    tools: [...READ_ALL, ...COMMS, 'resolver_sos', 'bloquear_ou_desbloquear_usuario'],
+    tools: [...READ_ALL, ...COMMS, 'resolver_sos', 'bloquear_ou_desbloquear_usuario', 'area_de_risco'],
   },
   {
     id: 'manutencao',
@@ -151,7 +152,7 @@ export const AGENTS: AgentDef[] = [
     area: 'Estratégia',
     mission:
       'Analisa comissão, tarifa dinâmica, tempos e pontos de fidelidade com base no movimento real, e propõe ajustes (que o administrador confirma). Mostra o impacto esperado de cada mudança.',
-    tools: [...READ_ALL, 'anotar_para_equipe', 'alterar_configuracoes'],
+    tools: [...READ_ALL, 'anotar_para_equipe', 'alterar_configuracoes', 'area_de_risco'],
   },
   {
     id: 'marketing-seo',

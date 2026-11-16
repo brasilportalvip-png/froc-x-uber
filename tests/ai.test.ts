@@ -80,12 +80,39 @@ test('A equipe tem a Froc central + 19 especialistas, todos com ferramentas que 
     assert.equal(TOOLS.find((t) => t.name === n)?.level, 'confirmar');
 });
 
-test('Agente consulta, prepara banimento e só o administrador executa (com auditoria)', async () => {
+test('Autonomia total (padrão): o agente confere e EXECUTA o bloqueio sozinho, com auditoria em nome dele', async () => {
+  const { team, store, service } = setup([
+    { calls: [{ name: 'buscar_usuarios', args: { termo: 'caio@x.com' } }] },
+    { calls: [{ name: 'bloquear_ou_desbloquear_usuario', args: { uid: 'd1', bloquear: true, motivo: 'Fraude confirmada em 3 corridas' } }] },
+    { text: 'Bloqueei o Caio: fraude confirmada em 3 corridas.' },
+  ]);
+  await service.ensureUser(driver);
+  const r = await team.chat(admin, 'antifraude', 'O Caio está fraudando?');
+  assert.deepEqual(r.actions.map((a) => a.level), ['ler', 'executada']);
+  assert.equal((await store.get<{ blocked?: boolean }>('users', 'd1'))?.blocked, true);
+  assert.equal((await team.proposals(admin)).length, 0);
+  const log = await service.auditLog(admin);
+  assert.ok(log.some((l) => l.action === 'usuario_bloqueado' && l.actorType === 'ia'));
+});
+
+test('Agente não consegue ligar/desligar a própria autonomia', async () => {
+  const { team, service } = setup([
+    { calls: [{ name: 'alterar_configuracoes', args: { agentAutonomy: false, maxSurge: 1.5, justificativa: 'teste' } }] },
+    { text: 'Feito.' },
+  ]);
+  await team.chat(admin, 'precos', 'ajuste');
+  const cfg = await service.settings();
+  assert.equal(cfg.maxSurge, 1.5);
+  assert.equal(cfg.agentAutonomy, true);
+});
+
+test('Autonomia desligada: agente consulta, prepara banimento e só o administrador executa (com auditoria)', async () => {
   const { team, store, service } = setup([
     { calls: [{ name: 'buscar_usuarios', args: { termo: 'caio@x.com' } }] },
     { calls: [{ name: 'bloquear_ou_desbloquear_usuario', args: { uid: 'd1', bloquear: true, motivo: 'Fraude confirmada em 3 corridas' } }] },
     { text: 'Preparei o bloqueio do Caio. Está em "Aguardando sua aprovação".' },
   ]);
+  await service.updateSettings(admin, { agentAutonomy: false });
   await service.ensureUser(driver);
   const r = await team.chat(admin, 'antifraude', 'O Caio está fraudando?');
   assert.match(r.reply, /Aguardando sua aprovação/);

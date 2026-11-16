@@ -221,6 +221,27 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
   **POSSÍVEL MULTICONTA** em Admin → Usuários (não bloqueia sozinho, porque família divide celular).
 - O CPF completo fica numa coleção separada (`identities`); os usuários veem só o selo. Todo "Ver CPF" fica na auditoria.
 
+## 12. Preço, ganho da Froc e Equipe IA no comando
+
+- **Preço ao passageiro (modelo Uber):** bandeirada + km + minutos da categoria × dinâmico (faixa de horário × procura da
+  região, teto 2x) + área de risco. Faixas: madrugada +20%, pico da manhã (6h–9h30) +15%, almoço (11h30–14h) +10%,
+  pico da noite (17h–20h30) +20%, noite +10%, sexta e sábado à noite +25%. Tabela em `src/data/pricing.ts`.
+- **Ganho da Froc:** valor fixo de **R$ 2 a R$ 8** por corrida ("leilão" pelo horário, procura, área de risco e distância),
+  nunca mais que 30% da corrida; o motorista fica com o resto e vê o valor antes de aceitar. Vale para corridas,
+  negociação e entregas. Caronas e fretes seguem a comissão %. Admin → Configurações ajusta mínimo, máximo e teto.
+- **Áreas de risco:** Admin → Configurações → Áreas de risco (ou a Equipe IA de Segurança/Preços cadastra). Acréscimo de
+  10% a 30% que vai todo para o motorista; a Froc ganha só R$ 1 a mais.
+- **Autonomia total (padrão ligado):** a Equipe IA paga, aprova, verifica, bloqueia e configura sozinha; tudo fica na Auditoria
+  com o nome do agente. Regras que ficam no código (a IA não passa por cima):
+  - Saque é liberado sozinho até R$ 1.000 (ajustável) com CPF verificado, conta sem bloqueio e sem alerta de multiconta;
+    acima disso o Financeiro analisa. Agente não consegue marcar "pago" sem o Pix ter saído.
+  - Cadastro de motorista: a IA lê CNH (CPF, EAR, validade), CRLV (placa, ano, licenciamento) e certidão de antecedentes
+    (negativa, da pessoa, até 90 dias) e aprova ou recusa com o motivo.
+  - Loja: CNPJ ativo na consulta pública (BrasilAPI) aprova; baixado/inapto recusa.
+  - Nenhum agente liga ou desliga a própria autonomia (só você, em Configurações).
+- **O que falta para ser 100% sem você:** o envio do Pix. Os saques liberados ficam "Pix a enviar" até ligarmos o envio
+  automático (Mercado Pago Payouts / Money Out, que precisa ser habilitado na sua conta Mercado Pago).
+
 ## Como o dinheiro funciona
 
 | Situação | O que acontece |
@@ -247,7 +268,7 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 136 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 169 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

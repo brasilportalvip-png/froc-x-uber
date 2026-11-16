@@ -20,6 +20,7 @@ import type { Store } from './store.ts';
 import { createWebhookDispatcher } from './merchants.ts';
 import { createGoogleGeocoder } from './geocode.ts';
 import { createSerproVerifier } from './identity.ts';
+import { createCnpjLookup } from './merchants.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -91,6 +92,7 @@ export function getService() {
         geocode: createGoogleGeocoder(process.env.GOOGLE_SERVER_MAPS_KEY),
         // CPF obrigatório para todos (uma pessoa, uma conta). CPF_OBRIGATORIO=nao desliga (só para emergência).
         identity: { required: process.env.CPF_OBRIGATORIO !== 'nao', verify: createSerproVerifier(process.env) },
+        cnpjLookup: createCnpjLookup(),
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),

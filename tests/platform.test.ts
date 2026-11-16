@@ -90,19 +90,19 @@ describe('H3: despacho por região e preço dinâmico', () => {
 
   test('muitos pedidos e nenhum motorista na região aumentam o preço; admin pode desligar', async () => {
     const calm = await svc.quoteRide(ana, SP);
-    assert.equal(calm.surge, 1);
+    assert.equal(calm.demand, 1);
     for (const [i, u] of [bia, caio, duda, tonhao].entries()) {
       await svc.ensureUser(u);
       if (u !== bia) await topUp(u, 100);
       await svc.createRide(u, { originPoint: { ...PAULISTA, name: 'Paulista ' + i, city: 'São Paulo' }, destinationId: 'sp-pinheiros', categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     }
     const busy = await svc.quoteRide(ana, SP);
-    assert.ok(busy.surge > 1, `esperava preço dinâmico, veio ${busy.surge}`);
+    assert.ok(busy.demand > 1, `esperava preço dinâmico, veio ${busy.demand}`);
     assert.ok(busy.surge <= 2);
     const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     assert.equal(ride.surgeMultiplier, busy.surge);
     await svc.updateSettings(admin, { surgeEnabled: false });
-    assert.equal((await svc.quoteRide(bia, SP)).surge, 1);
+    assert.equal((await svc.quoteRide(bia, SP)).demand, 1);
   });
 
   test('passageiro vê a posição do motorista durante a corrida', async () => {
