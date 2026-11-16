@@ -416,11 +416,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                           setBusyId(null);
                         }
                       }}
-                      className={`px-3.5 min-h-[40px] rounded-xl text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer ${
-                        t.status === 'reserved'
-                          ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
-                          : 'bg-slate-900 dark:bg-amber-600 hover:opacity-90 text-white'
-                      }`}
+                      className="px-3.5 min-h-[40px] rounded-xl text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer bg-slate-900 dark:bg-amber-600 hover:opacity-90 text-white"
                     >
                       {busyId === t.id ? 'Reservando...' : 'Reservar (pago pela carteira)'}
                     </button>

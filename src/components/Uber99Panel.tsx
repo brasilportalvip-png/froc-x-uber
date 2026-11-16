@@ -444,7 +444,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             <div className="flex flex-wrap gap-2 pt-1">
               <p className="w-full text-[11px] text-slate-500">
                 {activeRide.driverLocation && (
-                  <>Motorista a {calculateDistanceKm(activeRide.driverLocation as GeoPoint, activeRide.origin)} km do embarque (ao vivo no mapa). </>
+                  <>Motorista a {calculateDistanceKm(activeRide.driverLocation, activeRide.origin)} km do embarque (ao vivo no mapa). </>
                 )}
                 Informe o PIN ao motorista só quando entrar no carro.
                 {activeRide.paymentMethod === 'froc_pay' ? ' O valor está retido na carteira e só vai para o motorista no fim da viagem.' : ' Pagamento em dinheiro direto ao motorista.'}
