@@ -204,7 +204,7 @@ export function createApp(options: AppOptions) {
   app.get('/sitemap-paginas.xml', publicPage(async (_req, res) => sendPage(res, 'application/xml', sitemapPages(site()), 86400)));
   app.get('/sitemap-blog.xml', publicPage(async (_req, res) => sendPage(res, 'application/xml', sitemapBlog(site(), await (await platform()).blog.list()))));
   app.get('/rss.xml', publicPage(async (_req, res) => sendPage(res, 'application/rss+xml', rssFeed(site(), await (await platform()).blog.list({ limit: 50 })))));
-  app.get('/blog', publicPage(async (_req, res) => sendPage(res, 'text/html', renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()))));
+  app.get('/blog', publicPage(async (_req, res) => sendPage(res, 'text/html', renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()), 120)));
   app.get('/blog/:slug', publicPage(async (req, res) => {
     const { blog } = await platform();
     const slug = String(req.params.slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
@@ -214,7 +214,7 @@ export function createApp(options: AppOptions) {
       return sendPage(res, 'text/html', renderBlogIndex(await blog.list({ limit: 30 }), site()).replace('<h1>', '<p class="meta">Este artigo não existe ou saiu do ar. Veja os mais recentes:</p><h1>'), 60);
     }
     const related = (await blog.list({ limit: 6 })).filter((p) => p.slug !== post.slug).slice(0, 4);
-    sendPage(res, 'text/html', renderPost(post, site(), related));
+    sendPage(res, 'text/html', renderPost(post, site(), related), 300);
   }));
   for (const page of SERVICE_PAGES) {
     app.get(`/${page.slug}`, publicPage(async (_req, res) => {

@@ -2335,22 +2335,51 @@ function slugify(text2) {
 function escapeHtml(text2) {
   return String(text2 ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
-function seoProblems(p) {
-  const problems = [];
+var plain = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+function hasKeyword(text2, keyword) {
+  const main = plain(keyword).split(/\s+/).filter((w) => w.length > 3).sort((a, b) => b.length - a.length)[0];
+  if (!main) return true;
+  return plain(text2).includes(main.slice(0, Math.max(4, main.length - 2)));
+}
+function seoReview(p) {
+  const hard = [];
+  const soft = [];
   const words = [p.intro, ...p.sections.flatMap((s) => s.paragraphs)].join(" ").split(/\s+/).filter(Boolean).length;
-  if (p.title.length < 30 || p.title.length > 65) problems.push(`t\xEDtulo com ${p.title.length} caracteres (ideal 30\u201365)`);
-  if (p.description.length < 110 || p.description.length > 160) problems.push(`descri\xE7\xE3o com ${p.description.length} caracteres (ideal 110\u2013160)`);
-  const kw = p.keyword.toLowerCase();
-  if (!kw) problems.push("sem palavra-chave");
+  if (!p.title) hard.push("sem t\xEDtulo");
+  if (p.sections.length < 2) hard.push("menos de 2 se\xE7\xF5es");
+  if (words < 350) hard.push(`texto curto demais (${words} palavras)`);
+  if (!p.slug) hard.push("sem endere\xE7o (slug)");
+  if (p.title.length < 30 || p.title.length > 65) soft.push(`t\xEDtulo com ${p.title.length} caracteres (ideal 30\u201365)`);
+  if (p.description.length < 110 || p.description.length > 160) soft.push(`descri\xE7\xE3o com ${p.description.length} caracteres (ideal 110\u2013160)`);
+  if (!p.keyword) soft.push("sem palavra-chave");
   else {
-    if (!p.title.toLowerCase().includes(kw.split(" ")[0])) problems.push("palavra-chave fora do t\xEDtulo");
-    if (!p.intro.toLowerCase().includes(kw.split(" ")[0])) problems.push("palavra-chave fora do primeiro par\xE1grafo");
+    if (!hasKeyword(p.title, p.keyword)) soft.push("palavra-chave fora do t\xEDtulo");
+    if (!hasKeyword(p.intro, p.keyword)) soft.push("palavra-chave fora do primeiro par\xE1grafo");
   }
-  if (p.sections.length < 3) problems.push("menos de 3 se\xE7\xF5es");
-  if (p.faq.length < 3) problems.push("menos de 3 perguntas frequentes");
-  if (words < 600) problems.push(`texto curto (${words} palavras; m\xEDnimo 600)`);
-  if (!p.slug) problems.push("sem endere\xE7o (slug)");
-  return problems;
+  if (p.sections.length < 3) soft.push("menos de 3 se\xE7\xF5es");
+  if (p.faq.length < 3) soft.push("menos de 3 perguntas frequentes");
+  if (words < 600) soft.push(`texto com ${words} palavras (ideal 600+)`);
+  return { hard, soft };
+}
+function autoFixSeo(p) {
+  let title = p.title.trim();
+  if (title.length > 65) {
+    const beforeColon = title.split(/[:|–-]/)[0].trim();
+    title = beforeColon.length >= 30 && beforeColon.length <= 65 ? beforeColon : title.slice(0, 63).replace(/\s+\S*$/, "");
+  }
+  if (title.length < 30) title = `${title} | ${SITE_NAME}`.slice(0, 65);
+  let description = p.description.trim().replace(/\s+/g, " ");
+  if (description.length > 160) {
+    description = description.slice(0, 157).replace(/\s+\S*$/, "").replace(/[,;:.\s]+$/, "") + ".";
+  }
+  if (description.length < 110) {
+    for (const extra of [`Veja dicas pr\xE1ticas e crie sua conta gr\xE1tis no ${SITE_NAME}.`, "Corridas, caronas e fretes em todo o Brasil."]) {
+      if (description.length >= 110) break;
+      description = `${description.replace(/[.\s]+$/, "")}. ${extra}`;
+    }
+    if (description.length > 160) description = description.slice(0, 157).replace(/\s+\S*$/, "").replace(/[,;:.\s]+$/, "") + ".";
+  }
+  return { ...p, title, description };
 }
 var POST_PROMPT = (topic, existingTitles) => `
 Escreva UM artigo de blog original para o site ${SITE_NAME} (app 4 em 1: corridas, negocia\xE7\xE3o de pre\xE7o, caronas entre cidades e cargas/fretes com caminh\xE3o, van, furg\xE3o e utilit\xE1rio \u2014 em todo o Brasil; inaugura\xE7\xE3o em 10/03/2027).
@@ -2435,9 +2464,11 @@ A vers\xE3o anterior foi recusada por: ${lastProblems.join("; ")}. Corrija.` : "
       let slug = post.slug;
       for (let n = 2; existing.some((p) => p.slug === slug); n++) slug = `${post.slug}-${n}`;
       post.slug = slug;
-      lastProblems = seoProblems(post);
-      if (lastProblems.length && attempt === 0) continue;
-      post.published = opts.publish !== false && lastProblems.length === 0;
+      Object.assign(post, autoFixSeo(post));
+      const review = seoReview(post);
+      lastProblems = [...review.hard, ...review.soft];
+      if (review.hard.length && attempt === 0) continue;
+      post.published = opts.publish !== false && review.hard.length === 0;
       post.publishedAt = post.published ? now3.toISOString() : "";
       await this.store.set("blog", post.id, post);
       if (post.published) await this.ping([this.url(post.slug), `${this.deps.siteUrl()}/blog`]);
@@ -2918,7 +2949,7 @@ function createApp(options) {
   app.get("/sitemap-paginas.xml", publicPage(async (_req, res) => sendPage(res, "application/xml", sitemapPages(site()), 86400)));
   app.get("/sitemap-blog.xml", publicPage(async (_req, res) => sendPage(res, "application/xml", sitemapBlog(site(), await (await platform()).blog.list()))));
   app.get("/rss.xml", publicPage(async (_req, res) => sendPage(res, "application/rss+xml", rssFeed(site(), await (await platform()).blog.list({ limit: 50 })))));
-  app.get("/blog", publicPage(async (_req, res) => sendPage(res, "text/html", renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()))));
+  app.get("/blog", publicPage(async (_req, res) => sendPage(res, "text/html", renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()), 120)));
   app.get("/blog/:slug", publicPage(async (req, res) => {
     const { blog } = await platform();
     const slug = String(req.params.slug || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 90);
@@ -2928,7 +2959,7 @@ function createApp(options) {
       return sendPage(res, "text/html", renderBlogIndex(await blog.list({ limit: 30 }), site()).replace("<h1>", '<p class="meta">Este artigo n\xE3o existe ou saiu do ar. Veja os mais recentes:</p><h1>'), 60);
     }
     const related = (await blog.list({ limit: 6 })).filter((p) => p.slug !== post.slug).slice(0, 4);
-    sendPage(res, "text/html", renderPost(post, site(), related));
+    sendPage(res, "text/html", renderPost(post, site(), related), 300);
   }));
   for (const page of SERVICE_PAGES) {
     app.get(`/${page.slug}`, publicPage(async (_req, res) => {
