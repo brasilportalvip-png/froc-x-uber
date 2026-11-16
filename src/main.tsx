@@ -3,8 +3,10 @@ import App from './App.tsx';
 import { TrackPage } from './components/TrackPage.tsx';
 import { ErrorBoundary, installGlobalErrorReporting, reportClientError } from './components/ErrorBoundary.tsx';
 import './index.css';
+import { installAutoUpdate } from './lib/autoUpdate.ts';
 
 installGlobalErrorReporting();
+installAutoUpdate();
 
 const trackToken = /^\/acompanhar\/([A-Za-z0-9_-]{20,40})\/?$/.exec(window.location.pathname)?.[1] || '';
 

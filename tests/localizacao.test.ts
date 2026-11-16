@@ -123,3 +123,17 @@ test('SIGILO: o ganho da Froc não aparece em páginas públicas, termos, FAQ ne
   const r = seoReview({ title: 'Quanto ganha um motorista de aplicativo', description: '', keyword: '', slug: 'x', intro: 'A Froc fica com R$ 3 por corrida.', sections: [], faq: [] } as never);
   assert.ok(r.hard.some((h) => h.includes('sigilosa')));
 });
+
+test('App Android: assetlinks.json liga o app da Play Store ao site (atualiza junto com o site)', async () => {
+  const { assetLinks } = await import('../server/assetLinks.ts');
+  assert.deepEqual(assetLinks(undefined, undefined), [], 'sem configuração: lista vazia');
+  const fp = Array.from({ length: 32 }, (_, i) => (i * 7 % 256).toString(16).padStart(2, '0')).join(':');
+  const out = assetLinks('com.frocx.app', `${fp.toLowerCase()}, lixo, ${fp}`);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].target.package_name, 'com.frocx.app');
+  assert.deepEqual(out[0].target.sha256_cert_fingerprints, [fp.toUpperCase()]);
+  assert.deepEqual(assetLinks('nome invalido', fp), []);
+  const vercel = JSON.parse(read('vercel.json'));
+  assert.equal(vercel.rewrites[0].source, '/.well-known/assetlinks.json');
+  assert.ok(read('src/main.tsx').includes('installAutoUpdate()'));
+});

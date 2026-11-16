@@ -2,6 +2,7 @@
  * Rotas HTTP do Froc X Uber. Toda rota de dados exige login (token do Firebase) e as
  * permissões são decididas no servidor (server/services.ts), nunca pelo navegador.
  */
+import { assetLinks } from './assetLinks.ts';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { AppError, FrocService } from './services.ts';
@@ -217,6 +218,17 @@ export function createApp(options: AppOptions) {
         if (!res.headersSent) res.status(503).type('text/plain').send('Página temporariamente indisponível. Tente em instantes.');
       }
     };
+  // App Android (Trusted Web Activity): prova ao Android que o app da Play Store e o site são
+  // do mesmo dono. Assim o app abre o site em tela cheia, sem barra de endereço, e toda
+  // atualização do site já aparece no app. Configure na Vercel:
+  //   ANDROID_PACKAGE_NAME = com.frocx.app (o mesmo do Android Studio)
+  //   ANDROID_SHA256 = impressões SHA-256 da Play Console (chave de assinatura do app e de upload), separadas por vírgula
+  app.get('/.well-known/assetlinks.json', (_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(JSON.stringify(assetLinks(process.env.ANDROID_PACKAGE_NAME, process.env.ANDROID_SHA256)));
+  });
+
   app.get('/sitemap.xml', publicPage(async (_req, res) => {
     const posts = await (await platform()).blog.list({ limit: 1 }).catch(() => []);
     sendPage(res, 'application/xml', sitemapIndex(site(), posts[0]?.updatedAt || posts[0]?.publishedAt));

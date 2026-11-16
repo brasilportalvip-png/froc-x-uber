@@ -27,8 +27,10 @@ export default defineConfig(() => {
           id: '/',
           name: 'Froc X Uber',
           short_name: 'Froc X',
-          description:
-            'Super App 4 em 1: corridas estilo Uber e 99, negociação inDrive, caronas BlaBlaCar e fretes com retorno vazio de caminhões.',
+          description: 'Corridas, preço negociado, caronas entre cidades, fretes e entregas num app só.',
+          lang: 'pt-BR',
+          dir: 'ltr',
+          categories: ['travel', 'navigation', 'business'],
           theme_color: '#050505',
           background_color: '#050505',
           display: 'standalone',
@@ -58,7 +60,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/legal\//, /^\/blog/, /^\/sitemap/, /^\/rss\.xml/, /^\/robots\.txt/, /^\/(corridas-por-aplicativo|caronas-intermunicipais|fretes-e-mudancas|seja-motorista|como-funciona|regras-e-requisitos|perguntas-frequentes|desenvolvedores)/],
+          navigateFallbackDenylist: [/^\/\.well-known\//, /^\/api\//, /^\/legal\//, /^\/blog/, /^\/sitemap/, /^\/rss\.xml/, /^\/robots\.txt/, /^\/(corridas-por-aplicativo|caronas-intermunicipais|fretes-e-mudancas|seja-motorista|como-funciona|regras-e-requisitos|perguntas-frequentes|desenvolvedores)/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
