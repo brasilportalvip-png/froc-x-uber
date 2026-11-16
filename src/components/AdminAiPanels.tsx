@@ -290,7 +290,7 @@ export const AiTeamPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
       </div>
 
       <div className={card}>
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <div className="font-bold text-sm text-slate-900 dark:text-white">
               {current?.emoji} {current?.name || 'Froc'} <span className="text-[10px] font-semibold text-amber-600">· {current?.area}</span>
@@ -504,6 +504,8 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [topic, setTopic] = useState('');
   const [busy, setBusy] = useState(false);
+  // Apagar pede 2 toques: o 1º arma o botão ("Confirmar?"), o 2º apaga de vez.
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const load = useCallback(() => api<PostRow[]>('/api/admin/blog').then(setPosts).catch((e) => onToast(e.message)), [onToast]);
   useEffect(() => {
     void load();
@@ -589,6 +591,26 @@ export const BlogAdminPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
               className="shrink-0 px-3 min-h-[34px] rounded-lg border border-amber-500/50 text-amber-700 dark:text-amber-300 font-semibold cursor-pointer"
             >
               {p.image ? 'Nova capa' : 'Gerar capa'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirmDel !== p.id) {
+                  setConfirmDel(p.id);
+                  return;
+                }
+                setConfirmDel(null);
+                api(`/api/admin/blog/${p.id}/delete`, { body: {} })
+                  .then(() => load())
+                  .then(() => onToast('Post apagado (saiu do blog, do sitemap e do RSS).'))
+                  .catch((e) => onToast(e.message));
+              }}
+              onBlur={() => setConfirmDel((c) => (c === p.id ? null : c))}
+              className={`shrink-0 px-3 min-h-[34px] rounded-lg border font-semibold cursor-pointer ${
+                confirmDel === p.id ? 'bg-rose-600 border-rose-600 text-white' : 'border-rose-500/50 text-rose-600 dark:text-rose-400'
+              }`}
+            >
+              {confirmDel === p.id ? 'Confirmar? Apagar' : 'Apagar'}
             </button>
           </div>
         </div>

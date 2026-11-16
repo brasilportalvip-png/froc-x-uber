@@ -1,4 +1,4 @@
-import { isUnsetDestination } from '../lib/currentLocation.ts';
+import { isUnsetDestination, isOriginPending } from '../lib/currentLocation.ts';
 import React, { useEffect, useRef, useState } from 'react';
 import { AdvancedMarker, Map as GoogleMap, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { LocateFixed, Navigation } from 'lucide-react';
@@ -39,6 +39,13 @@ const RouteLayer: React.FC<{
     polylinesRef.current = [];
     onRouteError?.(null);
 
+    // Ainda sem localização: mapa do Brasil, sem ponto A inventado.
+    if (isOriginPending(origin)) {
+      onRouteTelemetry?.(0, 0);
+      map.panTo({ lat: origin.lat, lng: origin.lng });
+      map.setZoom(4);
+      return;
+    }
     // Sem destino ainda: mostra a pessoa onde ela está (ponto A), bem de perto.
     if (isUnsetDestination(destination)) {
       onRouteTelemetry?.(0, 0);
@@ -110,7 +117,7 @@ const RouteLayer: React.FC<{
       polylinesRef.current.forEach((p) => p.setMap(null));
       polylinesRef.current = [];
     };
-  }, [routesLib, map, origin.lat, origin.lng, destination.lat, destination.lng, activeModule]);
+  }, [routesLib, map, origin.id, origin.lat, origin.lng, destination.lat, destination.lng, activeModule]);
 
   return null;
 };
@@ -158,7 +165,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
       <GoogleMap
         mapId="DEMO_MAP_ID"
         defaultCenter={{ lat: origin.lat, lng: origin.lng }}
-        defaultZoom={12}
+        defaultZoom={isOriginPending(origin) ? 4 : 12}
         gestureHandling="greedy"
         disableDefaultUI={false}
         streetViewControl={false}
@@ -193,9 +200,11 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
           onRouteError={setRouteError}
         />
 
-        <AdvancedMarker position={{ lat: origin.lat, lng: origin.lng }} title={`Partida: ${origin.name}`}>
-          <Pin background="#059669" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="A" />
-        </AdvancedMarker>
+        {!isOriginPending(origin) && (
+          <AdvancedMarker position={{ lat: origin.lat, lng: origin.lng }} title={`Partida: ${origin.name}`}>
+            <Pin background="#059669" borderColor="#FFFFFF" glyphColor="#FFFFFF" glyphText="A" />
+          </AdvancedMarker>
+        )}
 
         {!isUnsetDestination(destination) && (
           <AdvancedMarker position={{ lat: destination.lat, lng: destination.lng }} title={`Destino: ${destination.name}`}>

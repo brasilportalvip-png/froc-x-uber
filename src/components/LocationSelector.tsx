@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowUpDown, LocateFixed, MapPin } from 'lucide-react';
-import { LOCATING_NAME } from '../lib/currentLocation.ts';
+import { isOriginPending } from '../lib/currentLocation.ts';
 import { BRAZIL_LOCATIONS } from '../data/locations.ts';
 import type { GeoPoint } from '../types/mobility.ts';
 import { PlaceSearchInput } from './PlaceSearchInput.tsx';
@@ -57,11 +57,11 @@ export const LocationSelector: React.FC<LocationSelectorProps> = ({
           <button
             type="button"
             onClick={() => window.dispatchEvent(new Event('froc:use-my-location'))}
-            disabled={origin.name === LOCATING_NAME}
+            disabled={origin.id === 'locating'}
             className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 cursor-pointer disabled:opacity-60"
           >
-            <LocateFixed className={`w-3.5 h-3.5 ${origin.name === LOCATING_NAME ? 'animate-pulse' : ''}`} />
-            {origin.name === LOCATING_NAME ? 'Localizando você...' : 'Usar minha localização atual'}
+            <LocateFixed className={`w-3.5 h-3.5 ${origin.id === 'locating' ? 'animate-pulse' : ''}`} />
+            {origin.id === 'locating' ? 'Localizando você...' : isOriginPending(origin) ? 'Permitir e usar minha localização' : 'Usar minha localização atual'}
           </button>
           {mapsEnabled && (
             <PlaceSearchInput

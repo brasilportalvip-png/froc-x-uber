@@ -6,7 +6,7 @@ import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
 import type { GeoPoint, InDriveRequest, PaymentMethod, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
-import { LOCATING_NAME, isUnsetDestination } from '../lib/currentLocation.ts';
+import { isOriginPending, isUnsetDestination } from '../lib/currentLocation.ts';
 
 interface InDrivePanelProps {
   role: UserRole;
@@ -168,7 +168,7 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
 
             <button
               type="button"
-              disabled={submitting || isUnsetDestination(destination) || origin.name === LOCATING_NAME}
+              disabled={submitting || isUnsetDestination(destination) || isOriginPending(origin)}
               onClick={handlePublish}
               className="w-full min-h-[48px] rounded-2xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer"
             >

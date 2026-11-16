@@ -20,7 +20,7 @@ import {
 import { calculateDistanceKm, estimateDurationMin, formatBRL, RIDE_CATEGORIES } from '../data/locations.ts';
 import type { GeoPoint, PaymentMethod, RideCategoryId, RideOrder, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
-import { LOCATING_NAME, isUnsetDestination } from '../lib/currentLocation.ts';
+import { isOriginPending, isUnsetDestination } from '../lib/currentLocation.ts';
 import sedanImg from '../assets/images/fleet_sedan_urban_1794683389130.jpg';
 import motoImg from '../assets/images/fleet_moto_express_1794683388258.jpg';
 
@@ -98,7 +98,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
 
   // Preço oficial do servidor (inclui o preço dinâmico da região, calculado com H3).
   const needsDestination = isUnsetDestination(destination);
-  const locating = origin.name === LOCATING_NAME;
+  const locating = isOriginPending(origin);
   useEffect(() => {
     if (role !== 'passenger') return;
     if (needsDestination || locating) {
@@ -765,7 +765,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               {submitting
                 ? 'Solicitando...'
                 : locating
-                  ? 'Localizando você...'
+                  ? origin.name === 'Localizando você...' ? 'Localizando você...' : 'Informe onde você está (A)'
                   : needsDestination
                     ? 'Escolha o destino (B) para pedir'
                     : lowBalance

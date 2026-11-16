@@ -123,6 +123,9 @@ export function initFirebase(): Promise<FirebaseBundle> {
             const [[bytes], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
             return { bytes, contentType: String(meta.contentType || 'application/octet-stream') };
           },
+          async remove(path) {
+            await getStorage(app).bucket().file(path).delete({ ignoreNotFound: true });
+          },
           async signedUrl(path) {
             const [url] = await getStorage(app)
               .bucket()

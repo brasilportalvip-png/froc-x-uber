@@ -6,7 +6,7 @@ import { AdminPanel } from './components/AdminPanel.tsx';
 import { Landing } from './components/Landing.tsx';
 import { SupportChat } from './components/SupportChat.tsx';
 import { takeIntent } from './lib/launch.ts';
-import { LOCATING_NAME, currentLocationPoint, isUnsetDestination, unsetDestination } from './lib/currentLocation.ts';
+import { currentLocationPoint, isGpsOrigin, isOriginPending, isUnsetDestination, locatingPoint, metersBetween, needLocationPoint, pointAt, unsetDestination, watchCoords } from './lib/currentLocation.ts';
 import { BlaBlaCarPanel } from './components/BlaBlaCarPanel.tsx';
 import { GoogleMapsView } from './components/GoogleMapsView.tsx';
 import { InDrivePanel } from './components/InDrivePanel.tsx';
@@ -54,10 +54,11 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
 
   // O ponto A começa como "Localizando você..." e vira o endereço real assim que o GPS responde.
-  const [origin, setOrigin] = useState<GeoPoint>(() => ({ ...BRAZIL_LOCATIONS[0], id: 'locating', name: LOCATING_NAME }));
+  // O ponto A começa "Localizando você..." e vira o endereço REAL. Nunca um endereço fixo.
+  const [origin, setOrigin] = useState<GeoPoint>(() => locatingPoint());
   const gpsPoint = useRef<GeoPoint | null>(null);
   // B começa vazio (Para onde vamos?) até a pessoa escolher o destino.
-  const [destination, setDestination] = useState<GeoPoint>(() => unsetDestination(BRAZIL_LOCATIONS[0]));
+  const [destination, setDestination] = useState<GeoPoint>(() => unsetDestination(locatingPoint()));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (msg: string) => {
@@ -81,21 +82,22 @@ export default function App() {
   // Roda ao entrar e quando a pessoa toca em "Usar minha localização atual".
   const locateMe = useCallback(
     async (manual: boolean) => {
-      if (manual) setOrigin((prev) => ({ ...prev, id: 'locating', name: LOCATING_NAME }));
+      if (manual) setOrigin(() => locatingPoint());
       try {
         const point = await currentLocationPoint();
         gpsPoint.current = point;
         // Só troca se a pessoa ainda não escolheu outro ponto de partida enquanto o GPS respondia.
-        setOrigin((prev) => (prev.id === 'locating' ? point : prev));
+        setOrigin((prev) => (isOriginPending(prev) || isGpsOrigin(prev) ? point : prev));
         // Destino ainda vazio acompanha a partida (o mapa fica em volta da pessoa).
         setDestination((prev) => (isUnsetDestination(prev) ? unsetDestination(point) : prev));
         if (manual) showToast(`Partida: ${point.name}`);
       } catch (e) {
-        setOrigin((prev) => (prev.id === 'locating' ? gpsPoint.current ?? BRAZIL_LOCATIONS[0] : prev));
+        // Sem localização: A fica pedindo a localização (nunca um endereço inventado).
+        setOrigin((prev) => (isOriginPending(prev) ? gpsPoint.current ?? needLocationPoint() : prev));
         showToast(
           (e as Error).message === 'negado'
-            ? 'Para preencher sua partida automaticamente, permita a localização para este site no navegador.'
-            : 'Não consegui pegar sua localização agora. Escolha o ponto de partida (A).',
+            ? 'Permita a localização: toque no cadeado ao lado do endereço do site → Localização → Permitir.'
+            : 'Não consegui sua localização agora. Ligue a localização do aparelho ou digite onde você está.',
         );
       }
     },
@@ -104,6 +106,39 @@ export default function App() {
   );
   useEffect(() => {
     if (user) void locateMe(false);
+  }, [user, locateMe]);
+  // Tempo real: enquanto a partida for o GPS, o ponto A acompanha a pessoa (andou 25 m, atualiza).
+  const lastGeocode = useRef(0);
+  const busyRef = useRef(false); // em corrida: a partida já foi combinada, não muda mais
+  useEffect(() => {
+    if (!user) return;
+    const stop = watchCoords((c) => {
+      if (busyRef.current) return;
+      const prev = gpsPoint.current;
+      if (prev && metersBetween(prev, c) < 25) return;
+      if (Date.now() - lastGeocode.current < 10_000 && prev) return;
+      lastGeocode.current = Date.now();
+      void pointAt(c.lat, c.lng).then((point) => {
+        gpsPoint.current = point;
+        setOrigin((o) => (isOriginPending(o) || isGpsOrigin(o) ? point : o));
+        setDestination((d) => (isUnsetDestination(d) ? unsetDestination(point) : d));
+      });
+    });
+    // Se a pessoa liberar a localização depois (no cadeado do navegador), já atualiza sozinho.
+    let perm: PermissionStatus | null = null;
+    navigator.permissions
+      ?.query({ name: 'geolocation' as PermissionName })
+      .then((p) => {
+        perm = p;
+        p.onchange = () => {
+          if (p.state === 'granted') void locateMe(true);
+        };
+      })
+      .catch(() => undefined);
+    return () => {
+      stop();
+      if (perm) perm.onchange = null;
+    };
   }, [user, locateMe]);
   useEffect(() => {
     const onUse = () => void locateMe(true);
@@ -252,8 +287,8 @@ export default function App() {
       if (mod === 'freight' && role === 'driver') setRole('trucker');
     } else if (mod === 'rides' || mod === 'indrive') {
       if (origin.zone === 'intercity' && destination.zone === 'intercity') {
-        setOrigin(gpsPoint.current ?? BRAZIL_LOCATIONS[0]);
-        setDestination(unsetDestination(gpsPoint.current ?? BRAZIL_LOCATIONS[0]));
+        setOrigin(gpsPoint.current ?? needLocationPoint());
+        setDestination(unsetDestination(gpsPoint.current ?? needLocationPoint()));
       }
       if (role === 'trucker') setRole('passenger');
     }
@@ -348,6 +383,9 @@ export default function App() {
 
   const activeRide = state?.rides.find((r) => r.mine && r.status !== 'completed' && r.status !== 'cancelled');
   const matchedDeal = state?.indriveRequests.find((r) => r.mine === 'owner' && r.status === 'matched');
+  useEffect(() => {
+    busyRef.current = Boolean(activeRide || matchedDeal);
+  }, [activeRide, matchedDeal]);
   // Passageiro vê o carro do motorista andando (posição enviada pelo celular do motorista).
   const liveDriverPoint =
     (activeRide?.mine === 'owner' && activeRide.driverLocation) || matchedDeal?.driverLocation || null;
@@ -390,7 +428,7 @@ export default function App() {
   // Carrinhos por perto (como no Uber): só para quem vai pedir, sem corrida em andamento.
   const [nearbyDrivers, setNearbyDrivers] = useState<NearbyDriver[]>([]);
   const wantsNearby =
-    Boolean(user) && useGoogleMaps && role === 'passenger' && (activeModule === 'rides' || activeModule === 'indrive') && !activeRide && !matchedDeal && origin.id !== 'locating';
+    Boolean(user) && useGoogleMaps && role === 'passenger' && (activeModule === 'rides' || activeModule === 'indrive') && !activeRide && !matchedDeal && !isOriginPending(origin);
   useEffect(() => {
     if (!wantsNearby) {
       setNearbyDrivers([]);
