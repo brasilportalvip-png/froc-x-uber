@@ -361,6 +361,33 @@ function uniqueById<T extends Doc>(items: T[]): T[] {
   return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
 }
 
+/**
+ * SIGILO do ganho da Froc: tira de um pedido (ou orçamento) tudo que mostra ou permite
+ * calcular quanto a Froc ganha. 'cliente' vê o preço; 'motorista' vê só quanto recebe.
+ */
+export function hideFee(doc: Doc, viewer: 'cliente' | 'motorista') {
+  delete doc.platformFeeCents;
+  delete doc.platformFee;
+  delete doc.feeReasons;
+  const pricing = doc.pricing as Doc | undefined;
+  if (pricing && typeof pricing === 'object') {
+    const p = { ...pricing };
+    delete p.platformFee;
+    delete p.feeReasons;
+    if (viewer === 'cliente') delete p.driverEarning;
+    else {
+      delete p.total;
+      delete p.base;
+    }
+    doc.pricing = p;
+  }
+  if (viewer === 'cliente') delete doc.driverEarning;
+  else if (typeof doc.driverEarning === 'number') {
+    // O motorista vê o valor dele no lugar do preço do passageiro.
+    doc.price = doc.driverEarning;
+  }
+}
+
 export class FrocService {
   store: Store;
   deps: ServiceDeps;
@@ -657,7 +684,7 @@ export class FrocService {
     if (method === 'froc_pay' && escrowCents > 0 && typeof fixedFeeCents === 'number') {
       // Modelo novo: a Froc fica com um valor fixo (R$ 2 a 8); o motorista com todo o resto.
       const fee = Math.min(escrowCents, Math.max(0, fixedFeeCents));
-      this.creditEarning(tx, provider, escrowCents - fee, `Ganho · ${title} (taxa Froc ${brl(fee / 100)})`);
+      this.creditEarning(tx, provider, escrowCents - fee, `Ganho · ${title}`);
       this.platformRevenue(tx, kind, escrowCents, fee);
       provider.completedTrips += 1;
       tx.update('users', provider.uid, { completedTrips: provider.completedTrips });
@@ -672,7 +699,7 @@ export class FrocService {
       this.creditEarning(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`);
     } else if (method === 'cash' && escrowCents > 0 && pct > 0) {
       // Só corridas antigas (criadas antes do fim do dinheiro em mãos): a comissão sai da carteira.
-      this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa Froc ${pct}% · ${title} (pago em dinheiro)`, 'taxa', true);
+      this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa · ${title} (pago em dinheiro)`, 'taxa', true);
     }
     if (escrowCents > 0) this.platformRevenue(tx, kind, escrowCents, escrowCents - this.providerCut(escrowCents));
     provider.completedTrips += 1;
@@ -688,7 +715,8 @@ export class FrocService {
     const items = byNewest(await this.store.query<Doc>('transactions', [['uid', '==', uid]], 300)).slice(0, 60);
     return items.map((t) => ({
       id: String(t.id),
-      title: String(t.title),
+      // Lançamentos antigos traziam "(taxa Froc R$ x)": some do extrato (sigilo).
+      title: String(t.title).replace(/\s*\(taxa Froc[^)]*\)/gi, '').replace(/^Taxa Froc \d+% · /, 'Taxa · '),
       category: t.category as WalletTransaction['category'],
       amount: toReais(Number(t.amountCents)),
       type: t.type as 'credit' | 'debit',
@@ -1334,12 +1362,15 @@ export class FrocService {
 
   private rideView(r: Doc, uid: string): RideOrder {
     const mine = involvement(uid, r.passengerId, r.driverId);
-    const { escrowCents: _e, priceCents: _p, deliveryPin: _d, trackToken: _t, ...rest } = r;
+    const { escrowCents: _e, priceCents: _p, deliveryPin: _d, trackToken: _t, platformFeeCents: _f, ...rest } = r;
     const view = {
       ...(rest as unknown as RideOrder),
       mine,
       pinCode: mine === 'owner' ? String(r.pinCode ?? '') : '',
     };
+    // SIGILO: o ganho da Froc nunca sai do servidor. O passageiro vê só o preço; o motorista
+    // vê só quanto recebe (sem o preço do passageiro, para a taxa não ser deduzida).
+    hideFee(view as unknown as Doc, mine === 'owner' ? 'cliente' : 'motorista');
     if (r.delivery) {
       const d = { ...(r.delivery as Doc) };
       // Telefone do cliente só para a loja e para o entregador que aceitou.
@@ -1619,8 +1650,10 @@ export class FrocService {
   // ------------------------------------------------- 2) negociação inDrive
 
   private indriveView(r: Doc, uid: string): InDriveRequest {
-    const { escrowCents: _e, ...rest } = r;
+    const { escrowCents: _e, platformFeeCents: _f, ...rest } = r;
     const mine = involvement(uid, r.passengerId, r.driverId);
+    // Na negociação o preço é combinado às claras; só o detalhe da taxa fica escondido.
+    if (mine === 'owner') delete (rest as Doc).driverEarning;
     const offers = (Array.isArray(r.offers) ? r.offers : []) as Doc[];
     return {
       ...(rest as unknown as InDriveRequest),
@@ -2273,7 +2306,12 @@ export class FrocService {
       band: first.band,
       risk: first.risk,
       distanceKm: first.distanceKm,
-      prices: quotes.map((q) => ({ categoryId: q.categoryId, price: q.total, platformFee: q.platformFee, driverEarning: q.driverEarning, breakdown: q })),
+      // SIGILO: o passageiro não recebe o ganho da Froc nem o do motorista.
+      prices: quotes.map((q) => {
+        const breakdown = { ...q } as unknown as Doc;
+        hideFee(breakdown, 'cliente');
+        return { categoryId: q.categoryId, price: q.total, breakdown };
+      }),
     };
   }
 

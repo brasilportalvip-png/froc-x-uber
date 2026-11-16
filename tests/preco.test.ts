@@ -151,7 +151,7 @@ describe('corrida de verdade com o novo preço', () => {
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     await svc.rideAction(caio, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(caio, ride.id, { action: 'complete' });
-    const fee = ride.pricing!.platformFee;
+    const fee = (await feeOf(ride));
     assert.ok(fee >= 2 && fee <= 8);
     assert.equal((await svc.bootstrap(caio)).profile.walletBalance, Math.round((ride.price - fee) * 100) / 100);
     const ledger = [...(store.data.get('platformLedger')?.values() || [])];
@@ -235,3 +235,8 @@ describe('ferramentas da Equipe IA para preço', () => {
     assert.equal(r.zones[0].name, 'Zona teste');
   });
 });
+
+/** Ganho da Froc (sigiloso: só existe no banco, nunca na resposta ao app). */
+async function feeOf(r: { id: string }) {
+  return Number((await store.get<Record<string, unknown>>('rides', r.id))!.platformFeeCents) / 100;
+}

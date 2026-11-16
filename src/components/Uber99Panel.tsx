@@ -58,7 +58,7 @@ interface Quote {
   demand?: number;
   band?: { id: string; label: string; pct: number };
   risk?: { name: string; pct: number; amount: number } | null;
-  prices: { categoryId: string; price: number; platformFee?: number; driverEarning?: number }[];
+  prices: { categoryId: string; price: number }[];
 }
 
 // Importadas pelo Vite: o caminho /src/... não existe no site publicado.
@@ -423,11 +423,8 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                     <VerifiedBadge level={ride.passengerVerified} />
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.price)}</div>
-                    <div className="text-[11px] text-slate-500 font-mono-num">
-                      Você recebe {formatBRL(ride.driverEarning ?? ride.price * (1 - (profile.commissionPercent ?? 12) / 100))}
-                      {ride.pricing ? ` · taxa Froc ${formatBRL(ride.pricing.platformFee)}` : ''}
-                    </div>
+                    <div className="text-[11px] text-slate-500">Você recebe</div>
+                    <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.driverEarning ?? ride.price)}</div>
                     {ride.pricing?.risk && <div className="text-[11px] font-semibold text-amber-600">Área de risco: +{formatBRL(ride.pricing.risk.amount)} para você</div>}
                   </div>
                 </div>
@@ -673,14 +670,6 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 {quote.risk && <div>Área com acréscimo de segurança: +{quote.risk.pct}%, que vai inteiro para o motorista.</div>}
               </div>
             )}
-            {quote && (() => {
-              const q = quote.prices.find((p) => p.categoryId === selectedCat);
-              return q?.platformFee != null && q.driverEarning != null ? (
-                <div className="text-[11px] text-slate-500">
-                  Desta corrida: motorista recebe <strong className="font-mono-num">{formatBRL(q.driverEarning)}</strong> · Froc fica com <strong className="font-mono-num">{formatBRL(q.platformFee)}</strong>.
-                </div>
-              ) : null;
-            })()}
 
             <div className="space-y-2">
               {RIDE_CATEGORIES.map((cat) => {

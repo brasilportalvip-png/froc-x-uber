@@ -176,7 +176,7 @@ describe('carteira e Mercado Pago', () => {
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(driver, ride.id, { action: 'complete' });
-    const earned = Math.round((ride.price - ride.pricing!.platformFee) * 100) / 100;
+    const earned = Math.round((ride.price - (await feeOf(ride))) * 100) / 100;
     assert.equal((await svc.bootstrap(driver)).profile.withdrawableBalance, earned);
     await expectError(svc.requestWithdrawal(driver, earned + 1, 'caio@pix.com'), 'over_withdrawable');
     await expectError(svc.requestWithdrawal(driver, 20, 'isso não é chave'), 'invalid_pix_key');
@@ -219,8 +219,8 @@ describe('1) corrida estilo Uber/99', () => {
     await expectError(svc.rideAction(passenger, ride.id, { action: 'complete' }), 'forbidden');
     await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(driver, ride.id, { action: 'complete' });
-    assert.equal(await balance(driver), Math.round((ride.price - ride.pricing!.platformFee) * 100) / 100, 'motorista recebe tudo menos a taxa fixa da Froc');
-    assert.ok(ride.pricing!.platformFee >= 2 && ride.pricing!.platformFee <= 8, 'Froc fica com R$ 2 a 8');
+    assert.equal(await balance(driver), Math.round((ride.price - (await feeOf(ride))) * 100) / 100, 'motorista recebe tudo menos a taxa fixa da Froc');
+    assert.ok((await feeOf(ride)) >= 2 && (await feeOf(ride)) <= 8, 'Froc fica com R$ 2 a 8');
 
     await svc.rideAction(passenger, ride.id, { action: 'rate', stars: 4 });
     assert.equal((await svc.bootstrap(driver)).profile.rating, 4);
@@ -247,7 +247,7 @@ describe('1) corrida estilo Uber/99', () => {
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(driver, ride.id, { action: 'complete' });
-    const cut = Math.round((ride.price - ride.pricing!.platformFee) * 100) / 100;
+    const cut = Math.round((ride.price - (await feeOf(ride))) * 100) / 100;
     assert.equal(await balance(driver), cut);
     const prof = (await svc.bootstrap(driver)).profile;
     assert.equal(prof.withdrawableBalance, cut, 'ganho pode ir para Pix');
@@ -442,3 +442,8 @@ describe('aviso automático do Mercado Pago', () => {
     assert.equal(verifyMercadoPagoSignature({ secret, signatureHeader: `ts=${old},v1=${v1old}`, dataId: '123' }), false);
   });
 });
+
+/** Ganho da Froc (sigiloso: só existe no banco, nunca na resposta ao app). */
+async function feeOf(r: { id: string }) {
+  return Number((await store.get<Record<string, unknown>>('rides', r.id))!.platformFeeCents) / 100;
+}

@@ -11,7 +11,8 @@ import { randomUUID } from 'node:crypto';
 import type { Doc, Store } from './store.ts';
 import type { LlmClient } from './ai/gemini.ts';
 import { parseJsonLoose } from './ai/gemini.ts';
-import { FROC_VOICE } from './ai/persona.ts';
+import { FEE_SECRET_RULE, FROC_VOICE } from './ai/persona.ts';
+import { FEE_LEAK } from '../src/data/pricing.ts';
 import type { ImageClient } from './ai/images.ts';
 import { coverPrompt } from './ai/images.ts';
 import type { FileStorage } from './services.ts';
@@ -147,6 +148,9 @@ export function seoReview(p: SeoFields) {
   if (p.sections.length < 2) hard.push('menos de 2 seções');
   if (words < 350) hard.push(`texto curto demais (${words} palavras)`);
   if (!p.slug) hard.push('sem endereço (slug)');
+  // SIGILO: post que fala do ganho da Froc nunca é publicado.
+  const all = [p.title, p.description, p.intro, ...p.sections.flatMap((s) => [s.heading, ...s.paragraphs]), ...p.faq.flatMap((f) => [f.q, f.a])].join(' \n ');
+  if (FEE_LEAK.test(all)) hard.push('fala do ganho da Froc (informação sigilosa): retire qualquer valor, faixa ou porcentagem que a Froc ganha');
   if (p.title.length < 30 || p.title.length > 65) soft.push(`título com ${p.title.length} caracteres (ideal 30–65)`);
   if (p.description.length < 110 || p.description.length > 160) soft.push(`descrição com ${p.description.length} caracteres (ideal 110–160)`);
   if (!p.keyword) soft.push('sem palavra-chave');
@@ -333,7 +337,7 @@ export class BlogService {
     let lastProblems: string[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       const out = await this.deps.llm.generate({
-        system: FROC_VOICE + '\nVocê é o redator de SEO da Froc. Português do Brasil, texto humano, claro e útil.',
+        system: FROC_VOICE + '\nVocê é o redator de SEO da Froc. Português do Brasil, texto humano, claro e útil.\n' + FEE_SECRET_RULE,
         contents: [
           {
             role: 'user',

@@ -184,7 +184,11 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   const queue = (await svc.bootstrap(caio)).rides.find((r) => r.id === ride.id)!;
   assert.equal(queue.pinCode, '');
   assert.equal(queue.passengerVerified, 'cpf');
-  assert.ok(queue.driverEarning! > 0 && queue.pricing!.platformFee >= 2);
+  assert.ok(queue.driverEarning! > 0 && (await feeOf(ride)) >= 2);
+  // SIGILO: o motorista não recebe o ganho da Froc nem o preço do passageiro.
+  assert.equal(queue.pricing?.platformFee, undefined);
+  assert.equal(queue.price, queue.driverEarning);
+  assert.equal((ride as unknown as Record<string, unknown>).driverEarning, undefined, 'passageiro não vê o ganho do motorista');
   await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
   const share = await svc.shareTrip(ana, 'ride', ride.id);
   await svc.updateLocation(caio, PAULISTA.lat + 0.01, PAULISTA.lng);
@@ -206,7 +210,7 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   await svc.rideAction(caio, ride.id, { action: 'complete' });
   await expectError(svc.rideAction(caio, ride.id, { action: 'complete' }), 'invalid_state');
   const extra = Math.round(Math.round(ride.price * 100) * 0.1);
-  assert.equal(Math.round((await bal(caio)) * 100), Math.round(caioAntes * 100) + Math.round(ride.price * 100) + extra - Math.round(ride.pricing!.platformFee * 100));
+  assert.equal(Math.round((await bal(caio)) * 100), Math.round(caioAntes * 100) + Math.round(ride.price * 100) + extra - Math.round((await feeOf(ride)) * 100));
   await svc.rideAction(ana, ride.id, { action: 'rate', stars: 5 });
   await svc.rideAction(caio, ride.id, { action: 'rate_passenger', stars: 5 });
   assertMoneyConserved('corrida concluída');
@@ -282,3 +286,8 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   assert.ok(log.some((l) => l.action === 'cadastro_aprovado' && l.actorType === 'ia'), 'aprovação da IA aparece como IA');
   assertMoneyConserved('fim');
 });
+
+/** Ganho da Froc (sigiloso: só existe no banco, nunca na resposta ao app). */
+async function feeOf(r: { id: string }) {
+  return Number((await store.get<Record<string, unknown>>('rides', r.id))!.platformFeeCents) / 100;
+}
