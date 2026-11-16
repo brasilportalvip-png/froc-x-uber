@@ -18,6 +18,7 @@ import { AiTeam } from './ai/team.ts';
 import type { Store } from './store.ts';
 import { createWebhookDispatcher } from './merchants.ts';
 import { createGoogleGeocoder } from './geocode.ts';
+import { createSerproVerifier } from './identity.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -85,6 +86,8 @@ export function getService() {
         geo,
         webhooks: createWebhookDispatcher(sharedStore),
         geocode: createGoogleGeocoder(process.env.GOOGLE_SERVER_MAPS_KEY),
+        // CPF obrigatório para todos (uma pessoa, uma conta). CPF_OBRIGATORIO=nao desliga (só para emergência).
+        identity: { required: process.env.CPF_OBRIGATORIO !== 'nao', verify: createSerproVerifier(process.env) },
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
@@ -128,6 +131,8 @@ export function configStatus() {
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
     serverGeocoding: Boolean(process.env.GOOGLE_SERVER_MAPS_KEY),
+    cpfReceita: Boolean(process.env.SERPRO_CONSUMER_KEY && process.env.SERPRO_CONSUMER_SECRET),
+    cpfObrigatorio: process.env.CPF_OBRIGATORIO !== 'nao',
     cron: Boolean(process.env.CRON_SECRET),
     ai: geminiKeysFromEnv(process.env).length > 0,
     aiKeys: geminiKeysFromEnv(process.env).length,

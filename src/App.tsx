@@ -19,6 +19,7 @@ import { WalletAccountPanel } from './components/WalletAccountPanel.tsx';
 import { MerchantPanel } from './components/MerchantPanel.tsx';
 import { HelpLinks } from './components/HelpLinks.tsx';
 import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
+import { IdentityGate } from './components/IdentityGate.tsx';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
@@ -165,6 +166,12 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  // Aparelho: registra uma vez por sessão (regra "uma pessoa, uma conta").
+  useEffect(() => {
+    if (!user) return;
+    void api('/api/device', { body: {} }).catch(() => undefined);
+  }, [user]);
 
   // 2) Dados da pessoa logada + atualização automática (motoristas, propostas, lances)
   useEffect(() => {
@@ -762,6 +769,9 @@ export default function App() {
         </div>
       )}
 
+      {state && state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus) && (
+        <IdentityGate profile={state.profile} onDone={loadBootstrap} onLogout={() => void handleLogout()} />
+      )}
       {state && <SupportChat />}
       {state && <RecordingsRecovery />}
       <OfflineIndicator />

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SosButton } from './SosButton.tsx';
 import { TripSafetyBar } from './TripSafetyBar.tsx';
 import { DriverArrivedAlert, DriverWaitPanel, PassengerCancelButton, RidePolicyModal, policyAccepted } from './RideRespect.tsx';
+import { VerifiedBadge } from './IdentityGate.tsx';
 import { openReceipt } from '../lib/receipt.ts';
 import { api } from '../lib/session.ts';
 import {
@@ -219,6 +220,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <h5 className="text-sm font-bold text-slate-900 dark:text-white">
                   {myDriving.passengerName} <span className="text-xs text-amber-500">★ {myDriving.passengerRating ?? 5}</span>
                 </h5>
+                <VerifiedBadge level={myDriving.passengerVerified} />
                 <div className="text-xs text-slate-500">
                   {myDriving.origin.name} → {myDriving.destination.name}
                 </div>
@@ -409,6 +411,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                       {ride.passengerName} <span className="text-xs text-amber-500">★ {ride.passengerRating ?? 5}</span>
                       {(ride.surgeMultiplier ?? 1) > 1 && <span className="ml-1 text-[10px] text-amber-600">alta demanda {ride.surgeMultiplier}x</span>}
                     </h5>
+                    <VerifiedBadge level={ride.passengerVerified} />
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.price)}</div>
@@ -486,6 +489,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
                     {activeRide.driverName}
                   </div>
+                  <VerifiedBadge level="verificado" who="Motorista (documentos conferidos)" />
                   <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
                     <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                     <span className="font-mono-num">{activeRide.driverRating}</span>
