@@ -309,6 +309,8 @@ export function createApp(options: AppOptions) {
     await quota(req, 'ai-admin', 400, 864e5, 'Limite diário de mensagens para a Equipe IA atingido (protege sua conta do Gemini).');
     return p.team.chat(a(req), req.body?.agentId, req.body?.message, req.body?.conversationId);
   }));
+  api.get('/admin/ai/health', wrap(async (req) => (await admin(req)).team.aiHealth(a(req))));
+  api.post('/admin/ai/ping', wrap(async (req) => (await admin(req)).team.aiPing(a(req))));
   api.get('/admin/ai/conversations/:id', wrap(async (req) => (await admin(req)).team.conversation(a(req), id(req))));
   api.get('/admin/ai/proposals', wrap(async (req) => (await admin(req)).team.proposals(a(req), String(req.query.status || 'pending'))));
   api.post('/admin/ai/proposals/:id', wrap(async (req) => (await admin(req)).team.decide(a(req), id(req), req.body?.decision)));

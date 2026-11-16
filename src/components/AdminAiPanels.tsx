@@ -93,6 +93,85 @@ export const ProposalsBox: React.FC<{ onToast: Toast; refreshKey?: number }> = (
   );
 };
 
+interface ModelHealth {
+  model: string;
+  state: 'ok' | 'instavel' | 'desligado' | 'indisponivel';
+  successes: number;
+  failures: number;
+  lastError?: string;
+  avgLatencyMs?: number;
+  retryAfter?: string;
+}
+interface AiHealth {
+  configured: boolean;
+  keys: number;
+  keysCooling: number;
+  activeModel: string | null;
+  models: ModelHealth[];
+}
+
+const STATE_LABEL: Record<ModelHealth['state'], [string, string]> = {
+  ok: ['● no ar', 'text-emerald-600'],
+  instavel: ['● instável', 'text-amber-500'],
+  desligado: ['● em pausa (volta sozinho)', 'text-red-500'],
+  indisponivel: ['● não existe nesta chave', 'text-slate-400'],
+};
+
+/** Anti-queda da IA: estado dos modelos 3.8 → 3.7 → 3.6 (e reservas) e das chaves, com teste na hora. */
+export const AiHealthBox: React.FC<{ onToast: Toast }> = ({ onToast }) => {
+  const [h, setH] = useState<AiHealth | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [last, setLast] = useState<string>('');
+  const load = useCallback(() => api<AiHealth>('/api/admin/ai/health').then(setH).catch(() => undefined), []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  if (!h) return null;
+  return (
+    <div className={card}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-bold text-slate-900 dark:text-white">🛡️ Anti-queda da IA</div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await api<{ ok: boolean; model?: string; attempts?: number; ms: number; error?: string; health?: AiHealth }>('/api/admin/ai/ping', { body: {} });
+              if (r.health) setH(r.health);
+              setLast(r.ok ? `Respondeu: ${r.model} em ${(r.ms / 1000).toFixed(1)} s (${r.attempts} tentativa${r.attempts === 1 ? '' : 's'})` : `Falhou: ${r.error}`);
+            } catch (e) {
+              onToast(e instanceof Error ? e.message : 'Erro.');
+            } finally {
+              setBusy(false);
+            }
+          }}
+          className="px-3 min-h-[32px] rounded-lg bg-emerald-600 text-white text-[11px] font-bold cursor-pointer inline-flex items-center gap-1"
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} Testar IA agora
+        </button>
+      </div>
+      <div className="text-[11px] text-slate-500">
+        Ordem: 3.8 → 3.7 → 3.6 → reservas. Falha passageira tenta de novo; modelo com defeito fica em pausa e a IA segue no próximo. Chaves: {h.keys}
+        {h.keysCooling ? ` (${h.keysCooling} descansando por cota)` : ''}. {h.activeModel ? `Em uso: ${h.activeModel}.` : ''}
+      </div>
+      <div className="grid gap-1">
+        {h.models.map((m) => (
+          <div key={m.model} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 dark:border-slate-800 px-2.5 py-1.5">
+            <span className="font-mono-num font-semibold text-slate-800 dark:text-slate-100">{m.model}</span>
+            <span className={`text-[11px] font-bold ${STATE_LABEL[m.state][1]}`} title={m.lastError || ''}>
+              {STATE_LABEL[m.state][0]}
+              {m.avgLatencyMs ? ` · ${(m.avgLatencyMs / 1000).toFixed(1)} s` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+      {last && <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">{last}</div>}
+      <div className="text-[10px] text-slate-400">Os números valem para o servidor que respondeu agora (a Vercel pode usar mais de um).</div>
+    </div>
+  );
+};
+
 /** Conversa com a Froc central ou com qualquer um dos 19 especialistas. */
 export const AiTeamPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -185,6 +264,7 @@ export const AiTeamPanel: React.FC<{ onToast: Toast }> = ({ onToast }) => {
         </div>
       )}
       <ProposalsBox onToast={onToast} refreshKey={refreshKey} />
+      <AiHealthBox onToast={onToast} />
 
       <div className="flex gap-1.5 overflow-x-auto froc-scroll pb-1">
         {agents.map((a) => (

@@ -10,7 +10,8 @@ import { FrocService, parseAdminEmails } from './services.ts';
 import { createGridGeo, createH3Geo } from './geo.ts';
 import { SupportDesk } from './support.ts';
 import { BlogService, createIndexNow } from './blog.ts';
-import { createGemini } from './ai/gemini.ts';
+import { createGemini, geminiKeysFromEnv } from './ai/gemini.ts';
+import type { LlmClient } from './ai/gemini.ts';
 import { AiTeam } from './ai/team.ts';
 import type { Store } from './store.ts';
 
@@ -36,6 +37,13 @@ export interface Platform {
 }
 
 let servicePromise: Promise<FrocService> | null = null;
+let llmClient: LlmClient | null = null;
+
+/** IA com anti-queda (3.8 → 3.7 → 3.6 → reservas; até 3 chaves). Uma por instância do servidor. */
+export function getLlm() {
+  llmClient ??= createGemini({ apiKey: geminiKeysFromEnv(process.env), model: process.env.GEMINI_MODEL || undefined });
+  return llmClient;
+}
 let platformPromise: Promise<Platform> | null = null;
 let sharedStore: Store | null = null;
 
@@ -43,7 +51,7 @@ let sharedStore: Store | null = null;
 export function getPlatform() {
   platformPromise ??= getService().then((service) => {
     const store = sharedStore!;
-    const llm = createGemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL });
+    const llm = getLlm();
     const support = new SupportDesk(store);
     const blog = new BlogService(store, { llm, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
     const team = new AiTeam({ store, service, support, blog, llm, configStatus });
@@ -111,7 +119,9 @@ export function configStatus() {
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
     cron: Boolean(process.env.CRON_SECRET),
-    ai: Boolean(process.env.GEMINI_API_KEY),
+    ai: geminiKeysFromEnv(process.env).length > 0,
+    aiKeys: geminiKeysFromEnv(process.env).length,
+    aiFailover: getLlm().health?.(),
     aiModel: process.env.GEMINI_MODEL || 'automático',
     firestoreDatabase: process.env.FIRESTORE_DATABASE_ID || '(default)',
     collectionPrefix: COLLECTION_PREFIX,

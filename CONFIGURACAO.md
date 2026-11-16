@@ -99,10 +99,17 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 | CRON_SECRET | recomendado | você inventa |
 | GEMINI_API_KEY | para a Equipe IA, o atendimento e o blog | a mesma chave da Froc.IA (Google AI Studio → Get API key) |
 | GEMINI_MODEL | não | deixe vazio (usa os modelos da Froc.IA automaticamente) |
+| GEMINI_API_KEY_2 e GEMINI_API_KEY_3 | não (recomendado) | chaves reservas de OUTRO projeto do Google AI Studio: assumem se a principal estourar a cota |
 | GOOGLE_SITE_VERIFICATION | para o Google Search Console | só o código da metatag (item 7) |
 | BING_SITE_VERIFICATION | para o Bing Webmaster | só o código da metatag (item 7) |
 
 ## 7. Equipe IA, atendimento e blog
+
+**Anti-queda da IA:** a IA tenta gemini-3.8-flash → 3.7-flash → 3.6-flash → reservas (3.5-flash-lite e 2.5-flash).
+Falha passageira tenta de novo no mesmo modelo com espera crescente; modelo com defeito fica em pausa 1 minuto e a IA segue
+no próximo; modelo que não existe na chave sai da lista por 30 min; cota estourada passa para a chave reserva.
+Se tudo cair: o atendimento responde a pessoa e chama a equipe; o post do dia é tentado de novo a cada 15 min (até 4 vezes).
+Veja em Admin → Equipe IA → **Anti-queda da IA** (botão **Testar IA agora**) e em `/api/health` (`aiFailover`).
 
 **Ligar a IA:** cadastre `GEMINI_API_KEY` na Vercel (a mesma chave da Froc.IA) e faça **Redeploy**.
 O `/api/health` passa a mostrar `"ai": true`.
@@ -173,7 +180,7 @@ Se trocar para um domínio próprio, atualize `PUBLIC_SITE_URL`, o `robots.txt` 
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 58 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 69 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`
