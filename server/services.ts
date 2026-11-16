@@ -84,6 +84,8 @@ export interface PaymentsGateway {
 export interface FileStorage {
   save(path: string, contentType: string, bytes: Uint8Array): Promise<void>;
   signedUrl(path: string): Promise<string>;
+  /** Lê um arquivo (usado para servir as imagens do blog). null se não existir. */
+  read?(path: string): Promise<{ bytes: Uint8Array; contentType: string } | null>;
 }
 
 export interface ServiceDeps {

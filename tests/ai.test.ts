@@ -272,3 +272,52 @@ test('Blog: título/descrição fora do tamanho são ajustados sozinhos e o post
   assert.ok(post.description.length >= 110 && post.description.length <= 160, post.description);
   assert.ok(!problems.some((p) => /palavra-chave fora do título/.test(p)), 'fretes/frete contam como a mesma palavra');
 });
+
+test('Blog com imagem: capa da IA salva no Storage, aparece no post, nas redes e no sitemap; sem IA usa a capa da marca', async () => {
+  const { createGeminiImages } = await import('../server/ai/images.ts');
+  const { renderCoverSvg } = await import('../server/blog.ts');
+  const png = Buffer.from([137, 80, 78, 71, 1, 2, 3]);
+  const tried: string[] = [];
+  const images = createGeminiImages({
+    apiKeys: ['k'],
+    fetchImpl: async (url) => {
+      const model = decodeURIComponent(/models\/([^:]+):/.exec(url)![1]);
+      tried.push(model);
+      if (tried.length === 1) return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' };
+      return { ok: true, status: 200, text: async () => '', json: async () => ({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }] }) };
+    },
+  });
+  const saved = new Map<string, Uint8Array>();
+  const files = {
+    async save(path: string, _t: string, bytes: Uint8Array) {
+      saved.set(path, bytes);
+    },
+    async signedUrl(p: string) {
+      return p;
+    },
+    async read(path: string) {
+      const b = saved.get(path);
+      return b ? { bytes: b, contentType: 'image/png' } : null;
+    },
+  };
+  const store = new MemoryStore();
+  const llm = scriptedLlm([{ text: JSON.stringify(POST_JSON) }]);
+  const blog = new BlogService(store, { llm, images, files, siteUrl: () => 'https://froc.test' });
+  const { post } = await blog.generate({ topic: 'frete Recife' });
+  // Sem capa ainda: usa a da marca (SVG) e a rede social usa o ícone.
+  assert.match(renderPost(post, 'https://froc.test'), /\/blog\/capa\/frete-barato-em-recife\.svg/);
+  const r = await blog.attachImage(post.slug);
+  assert.equal(r.ok, true);
+  assert.equal(tried.length, 2, 'pulou o modelo de imagem inexistente');
+  const withImg = (await blog.get(post.slug))!;
+  const html = renderPost(withImg, 'https://froc.test');
+  assert.match(html, new RegExp(`<img class="hero" src="/blog/img/${withImg.id}\\.png"`));
+  assert.match(html, new RegExp(`og:image" content="https://froc.test/blog/img/${withImg.id}\\.png"`));
+  assert.match(html, /"image":\["https:\/\/froc.test\/blog\/img\//);
+  assert.match(sitemapBlog('https://froc.test', [withImg]), /<image:image><image:loc>https:\/\/froc.test\/blog\/img\//);
+  assert.deepEqual(Buffer.from((await blog.readImage(withImg.id))!.bytes), png);
+  // Capa da marca escapa texto (sem quebrar o SVG).
+  assert.match(renderCoverSvg({ title: 'Frete <barato> & rápido', keyword: '' }), /Frete &lt;barato&gt; &amp; rápido/);
+  // Preencher capas pendentes não repete quem já tem.
+  assert.deepEqual((await blog.fillMissingImages(2)) as { done: string[] }, { done: [] });
+});

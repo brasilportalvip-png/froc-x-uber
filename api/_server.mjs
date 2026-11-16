@@ -2258,6 +2258,62 @@ ADMINISTRA\xC7\xC3O (s\xF3 para a equipe)
 `;
 }
 
+// server/ai/images.ts
+var IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3-pro-image-preview", "gemini-2.5-flash-image-preview"];
+function createGeminiImages(options) {
+  const keys = options.apiKeys.filter(Boolean);
+  const models = [...new Set([options.model, ...IMAGE_MODELS].filter(Boolean))];
+  const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const timeoutMs = options.timeoutMs ?? 25e3;
+  return {
+    configured: keys.length > 0,
+    async generate(prompt) {
+      const errors = [];
+      for (const model of models) {
+        for (const key of keys) {
+          let res;
+          try {
+            res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: prompt }] }],
+                generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: "16:9" } }
+              }),
+              signal: AbortSignal.timeout(timeoutMs)
+            });
+          } catch (e) {
+            errors.push(`${model}: rede ${e.message}`);
+            continue;
+          }
+          if (!res.ok) {
+            const detail = (await res.text().catch(() => "")).slice(0, 160);
+            errors.push(`${model}: ${res.status} ${detail}`);
+            if (res.status === 404) break;
+            continue;
+          }
+          const data = await res.json();
+          const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
+          if (part?.inlineData?.data) {
+            return { bytes: Buffer.from(part.inlineData.data, "base64"), mimeType: part.inlineData.mimeType || "image/png", model };
+          }
+          errors.push(`${model}: sem imagem na resposta`);
+        }
+      }
+      throw new Error(`Nenhum modelo de imagem respondeu (${errors.slice(-3).join(" | ")})`);
+    }
+  };
+}
+function coverPrompt(topic, keyword) {
+  return [
+    `Fotografia realista, horizontal 16:9, para capa de um artigo de blog sobre "${keyword || topic}" no Brasil.`,
+    `Assunto: ${topic}.`,
+    "Cena brasileira aut\xEAntica (ruas, estradas, ve\xEDculos ou cidade, conforme o assunto), luz natural bonita, composi\xE7\xE3o limpa, apar\xEAncia profissional de revista.",
+    "Toques sutis de rosa pink e dourado na luz ou em detalhes, sem exagero.",
+    "PROIBIDO: qualquer texto, letras, n\xFAmeros, placas leg\xEDveis, logotipos, marcas reais, uniformes de empresas, rostos reconhec\xEDveis de pessoas reais."
+  ].join(" ");
+}
+
 // server/blog.ts
 var SITE_NAME = "Froc X Uber";
 var TOPIC_SERVICES = [
@@ -2402,6 +2458,13 @@ Regras de conte\xFAdo:
 - Evite t\xEDtulos parecidos com estes j\xE1 publicados: ${existingTitles.slice(0, 30).map((t) => `"${t}"`).join(", ") || "(nenhum)"}.
 Responda SOMENTE com JSON v\xE1lido: {"keyword","title","description","h1","intro","sections":[{"heading","paragraphs":[]}],"faq":[{"q","a"}],"cta","tags":[]}
 `;
+function coverUrl(post) {
+  if (post.image) return `/blog/img/${post.id}.${post.image.mimeType.includes("jpeg") ? "jpg" : "png"}`;
+  return `/blog/capa/${post.slug}.svg`;
+}
+function coverAlt(post) {
+  return post.image?.alt || `${post.title} \u2014 ${SITE_NAME}`;
+}
 var BlogService = class {
   constructor(store, deps) {
     this.store = store;
@@ -2433,6 +2496,40 @@ var BlogService = class {
     }
   }
   /** Já existe post publicado hoje (horário de Brasília)? */
+  /** Gera a capa com a IA e guarda no Storage. Devolve true se deu certo. */
+  async attachImage(slug) {
+    const post = await this.get(slug);
+    if (!post) throw new Error("Post n\xE3o encontrado.");
+    if (!this.deps.images?.configured || !this.deps.files) throw new Error("Imagens indispon\xEDveis (IA ou Storage sem configura\xE7\xE3o).");
+    await this.store.update("blog", post.id, { imageAttempts: Number(post.imageAttempts || 0) + 1 });
+    const img = await this.deps.images.generate(coverPrompt(post.topic, post.keyword));
+    const ext = img.mimeType.includes("jpeg") ? "jpg" : "png";
+    const path = `froc-x-uber/blog/${post.id}.${ext}`;
+    await this.deps.files.save(path, img.mimeType, img.bytes);
+    const image = { path, mimeType: img.mimeType, alt: `Imagem ilustrativa: ${post.keyword || post.title}`, model: img.model };
+    await this.store.update("blog", post.id, { image, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    return { ok: true, url: coverUrl({ ...post, image }), model: img.model };
+  }
+  /** Coloca capa nos posts publicados que ainda não têm (até `max` por vez; 3 tentativas por post). */
+  async fillMissingImages(max = 1) {
+    if (!this.deps.images?.configured || !this.deps.files) return { skipped: true };
+    const pending = (await this.list({ limit: 15 })).filter((p) => !p.image && Number(p.imageAttempts || 0) < 3).slice(0, max);
+    const done = [];
+    for (const p of pending) {
+      try {
+        await this.attachImage(p.slug);
+        done.push(p.slug);
+      } catch (e) {
+        console.warn("Capa do blog n\xE3o gerada:", p.slug, e instanceof Error ? e.message : e);
+      }
+    }
+    return { done };
+  }
+  async readImage(id) {
+    const post = await this.store.get("blog", id) ?? null;
+    if (!post?.image || !this.deps.files?.read) return null;
+    return this.deps.files.read(post.image.path);
+  }
   async hasPostOn(day) {
     const recent = await this.list({ includeDrafts: true, limit: 10 });
     return recent.some((p) => brDate(new Date(p.createdAt)) === day);
@@ -2516,7 +2613,8 @@ h1{font:800 clamp(28px,5vw,42px)/1.15 Outfit,system-ui;margin:28px 0 12px}h2{fon
 .meta{color:#a1a1aa;font-size:13px}.lead{font-size:18px;color:#e4e4e7}
 .card{border:1px solid rgba(212,175,55,.35);border-radius:18px;padding:20px;margin:28px 0;background:linear-gradient(135deg,rgba(255,45,149,.08),rgba(212,175,55,.06))}
 details{border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:12px 16px;margin:8px 0;background:rgba(255,255,255,.03)}summary{cursor:pointer;font-weight:700}
-.list a{display:block;padding:16px 0;border-bottom:1px solid rgba(255,255,255,.08);text-decoration:none}.list b{display:block;color:#fff;font-size:18px}.list span{color:#a1a1aa;font-size:14px}
+.hero{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;border-radius:18px;margin:18px 0 6px;border:1px solid rgba(212,175,55,.35);box-shadow:0 18px 50px -24px rgba(255,45,149,.6)}
+.list a{display:flex;gap:14px;align-items:center;padding:16px 0;border-bottom:1px solid rgba(255,255,255,.08);text-decoration:none}.list img{width:120px;height:68px;object-fit:cover;border-radius:10px;flex-shrink:0;border:1px solid rgba(212,175,55,.3)}.list div{min-width:0}.list b{display:block;color:#fff;font-size:18px}.list span{color:#a1a1aa;font-size:14px}
 .crumbs{font-size:13px;color:#a1a1aa;margin-top:18px}.crumbs a{color:#d4af37}footer{border-top:1px solid rgba(255,255,255,.1);margin-top:50px;padding:28px 0;color:#77777f;font-size:13px;text-align:center}
 .tags span{display:inline-block;border:1px solid rgba(212,175,55,.4);color:#f2c14e;border-radius:999px;padding:2px 10px;font-size:12px;margin:2px}
 `;
@@ -2537,6 +2635,8 @@ function layout(o) {
 <meta property="og:description" content="${escapeHtml(o.description)}">
 <meta property="og:url" content="${escapeHtml(o.canonical)}">
 ${o.publishedAt ? `<meta property="article:published_time" content="${escapeHtml(o.publishedAt)}">` : ""}
+<meta property="og:image" content="${escapeHtml(o.image || `${o.canonical.replace(/^(https?:\/\/[^/]+).*/, "$1")}/pwa-512x512.png`)}">
+${o.imageAlt ? `<meta property="og:image:alt" content="${escapeHtml(o.imageAlt)}">` : ""}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#050505">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
@@ -2560,6 +2660,36 @@ var ORG = (site) => ({
   url: site,
   logo: `${site}/pwa-512x512.png`
 });
+function listItem(p) {
+  return `<a href="/blog/${escapeHtml(p.slug)}"><img src="${escapeHtml(coverUrl(p))}" alt="${escapeHtml(coverAlt(p))}" width="240" height="135" loading="lazy"><div><b>${escapeHtml(p.title)}</b><span>${escapeHtml(p.description)}</span></div></a>`;
+}
+function renderCoverSvg(post) {
+  const words = post.title.split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + " " + w).trim().length > 26 && cur) {
+      lines.push(cur);
+      cur = w;
+    } else cur = (cur + " " + w).trim();
+  }
+  if (cur) lines.push(cur);
+  const shown = lines.slice(0, 4);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050505"/><stop offset="1" stop-color="#1a0010"/></linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f7e08a"/><stop offset=".5" stop-color="#d4af37"/><stop offset="1" stop-color="#9c7a1c"/></linearGradient>
+<linearGradient id="pink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4fa7"/><stop offset="1" stop-color="#c2006b"/></linearGradient>
+<radialGradient id="glow" cx=".85" cy=".1" r=".6"><stop offset="0" stop-color="#ff2d95" stop-opacity=".45"/><stop offset="1" stop-color="#ff2d95" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1280" height="720" fill="url(#bg)"/><rect width="1280" height="720" fill="url(#glow)"/>
+<rect x="24" y="24" width="1232" height="672" rx="36" fill="none" stroke="url(#gold)" stroke-width="3" opacity=".8"/>
+<text x="80" y="130" font-family="Outfit,Arial,sans-serif" font-size="40" font-weight="800" fill="url(#gold)">${escapeHtml(SITE_NAME)}</text>
+<rect x="80" y="160" width="140" height="8" rx="4" fill="url(#pink)"/>
+${shown.map((l, i) => `<text x="80" y="${280 + i * 92}" font-family="Outfit,Arial,sans-serif" font-size="76" font-weight="800" fill="#ffffff">${escapeHtml(l)}</text>`).join("\n")}
+<text x="80" y="660" font-family="Arial,sans-serif" font-size="28" fill="#d4af37">Corridas \xB7 Caronas \xB7 Fretes \u2014 todo o Brasil</text>
+</svg>`;
+}
 function renderPost(post, site, related = []) {
   const url = `${site}/blog/${post.slug}`;
   const body = `
@@ -2567,17 +2697,22 @@ function renderPost(post, site, related = []) {
 <article>
 <h1>${escapeHtml(post.h1)}</h1>
 <div class="meta">Por ${escapeHtml(post.author)} \xB7 ${new Date(post.publishedAt || post.createdAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</div>
+<img class="hero" src="${escapeHtml(coverUrl(post))}" alt="${escapeHtml(coverAlt(post))}" width="1280" height="720" fetchpriority="high">
 <p class="lead">${escapeHtml(post.intro)}</p>
 ${post.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>${s.paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("")}`).join("\n")}
 <div class="card"><h2 style="margin-top:0">Experimente o ${SITE_NAME}</h2><p>${escapeHtml(post.cta)}</p><a class="btn" href="/#entrar">Criar conta gr\xE1tis</a> <a class="btn gold" href="/seja-motorista">Quero ser motorista</a></div>
 ${post.faq.length ? `<h2>Perguntas frequentes</h2>${post.faq.map((f) => `<details><summary>${escapeHtml(f.q)}</summary><p>${escapeHtml(f.a)}</p></details>`).join("")}` : ""}
 ${post.tags.length ? `<p class="tags">${post.tags.map((t) => `<span>${escapeHtml(t)}</span>`).join("")}</p>` : ""}
 </article>
-${related.length ? `<h2>Leia tamb\xE9m</h2><div class="list">${related.map((r) => `<a href="/blog/${escapeHtml(r.slug)}"><b>${escapeHtml(r.title)}</b><span>${escapeHtml(r.description)}</span></a>`).join("")}</div>` : ""}`;
+${related.length ? `<h2>Leia tamb\xE9m</h2><div class="list">${related.map(listItem).join("")}</div>` : ""}`;
+  const image = `${site}${coverUrl(post)}`;
   return layout({
     title: post.title,
     description: post.description,
     canonical: url,
+    // Rede social não mostra SVG: sem foto da IA, usa o ícone da marca.
+    image: post.image ? image : void 0,
+    imageAlt: coverAlt(post),
     type: "article",
     publishedAt: post.publishedAt || post.createdAt,
     body,
@@ -2587,6 +2722,7 @@ ${related.length ? `<h2>Leia tamb\xE9m</h2><div class="list">${related.map((r) =
         "@type": "BlogPosting",
         headline: post.title,
         description: post.description,
+        image: [image],
         mainEntityOfPage: url,
         url,
         datePublished: post.publishedAt || post.createdAt,
@@ -2613,7 +2749,7 @@ function renderBlogIndex(posts, site) {
   const body = `
 <h1>Blog do ${SITE_NAME}</h1>
 <p class="lead">Dicas de corridas, caronas entre cidades, fretes, mudan\xE7as e como ganhar dinheiro dirigindo \u2014 um artigo novo todo dia.</p>
-<div class="list">${posts.length ? posts.map((p) => `<a href="/blog/${escapeHtml(p.slug)}"><b>${escapeHtml(p.title)}</b><span>${escapeHtml(p.description)}</span></a>`).join("") : "<p>Os primeiros artigos chegam em breve.</p>"}</div>`;
+<div class="list">${posts.length ? posts.map(listItem).join("") : "<p>Os primeiros artigos chegam em breve.</p>"}</div>`;
   return layout({
     title: `Blog ${SITE_NAME}: corridas, caronas e fretes`,
     description: "Artigos di\xE1rios sobre corrida por aplicativo, carona intermunicipal, frete, mudan\xE7a e como ser motorista. Dicas pr\xE1ticas para todo o Brasil.",
@@ -2751,8 +2887,10 @@ ${urls.map((u) => `  <url><loc>${xmlEscape(u.loc)}</loc><lastmod>${STATIC_LASTMO
 }
 function sitemapBlog(site, posts) {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${posts.map((p) => `  <url><loc>${xmlEscape(`${site}/blog/${p.slug}`)}</loc><lastmod>${String(p.updatedAt || p.publishedAt || p.createdAt).slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>`).join("\n")}
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+${posts.map(
+    (p) => `  <url><loc>${xmlEscape(`${site}/blog/${p.slug}`)}</loc><lastmod>${String(p.updatedAt || p.publishedAt || p.createdAt).slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority>${p.image ? `<image:image><image:loc>${xmlEscape(`${site}${coverUrl(p)}`)}</image:loc></image:image>` : ""}</url>`
+  ).join("\n")}
 </urlset>
 `;
 }
@@ -2921,7 +3059,8 @@ function createApp(options) {
       let daily = null;
       const hourBr = ((/* @__PURE__ */ new Date()).getUTCHours() + 21) % 24;
       if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
-      return { sweep, daily };
+      const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
+      return { sweep, daily, images };
     })
   );
   const site = () => (options.siteUrl?.() || "").replace(/\/+$/, "");
@@ -2950,6 +3089,22 @@ function createApp(options) {
   app.get("/sitemap-blog.xml", publicPage(async (_req, res) => sendPage(res, "application/xml", sitemapBlog(site(), await (await platform()).blog.list()))));
   app.get("/rss.xml", publicPage(async (_req, res) => sendPage(res, "application/rss+xml", rssFeed(site(), await (await platform()).blog.list({ limit: 50 })))));
   app.get("/blog", publicPage(async (_req, res) => sendPage(res, "text/html", renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()), 120)));
+  app.get("/blog/img/:file", publicPage(async (req, res) => {
+    const id2 = String(req.params.file || "").replace(/\.(png|jpg)$/i, "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 60);
+    const img = await (await platform()).blog.readImage(id2);
+    if (!img) {
+      res.status(404).type("text/plain").send("Imagem n\xE3o encontrada.");
+      return;
+    }
+    res.setHeader("Content-Type", img.contentType);
+    res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=31536000, immutable");
+    res.send(Buffer.from(img.bytes));
+  }));
+  app.get("/blog/capa/:file", publicPage(async (req, res) => {
+    const slug = String(req.params.file || "").replace(/\.svg$/i, "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 90);
+    const post = await (await platform()).blog.get(slug);
+    sendPage(res, "image/svg+xml", renderCoverSvg(post ?? { title: "Blog Froc X Uber", keyword: "" }), 3600);
+  }));
   app.get("/blog/:slug", publicPage(async (req, res) => {
     const { blog } = await platform();
     const slug = String(req.params.slug || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 90);
@@ -3081,7 +3236,14 @@ function createApp(options) {
     const p = await admin(req);
     const out = await p.blog.generate({ topic: req.body?.topic ? String(req.body.topic).slice(0, 200) : void 0, author: "Froc IA \xB7 Marketing e SEO" });
     await (await service()).audit(a(req), "post_criado", out.post.slug, { publicado: out.post.published });
-    return { slug: out.post.slug, title: out.post.title, published: out.post.published, problems: out.problems };
+    const image = out.post.published ? await p.blog.attachImage(out.post.slug).catch((e) => ({ ok: false, error: String(e?.message || e) })) : null;
+    return { slug: out.post.slug, title: out.post.title, published: out.post.published, problems: out.problems, image };
+  }));
+  api.post("/admin/blog/:id/image", wrap(async (req) => {
+    const p = await admin(req);
+    const r = await p.blog.attachImage(id(req));
+    await (await service()).audit(a(req), "capa_gerada", id(req), { modelo: r.model });
+    return r;
   }));
   api.post("/admin/blog/:id/publish", wrap(async (req) => {
     const p = await admin(req);
@@ -3248,6 +3410,13 @@ function initFirebase() {
     const files = bucketName ? {
       async save(path, contentType, bytes) {
         await getStorage(app).bucket().file(path).save(Buffer.from(bytes), { contentType, resumable: false, metadata: { cacheControl: "private, max-age=0" } });
+      },
+      async read(path) {
+        const file = getStorage(app).bucket().file(path);
+        const [exists] = await file.exists();
+        if (!exists) return null;
+        const [[bytes], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
+        return { bytes, contentType: String(meta.contentType || "application/octet-stream") };
       },
       async signedUrl(path) {
         const [url] = await getStorage(app).bucket().file(path).getSignedUrl({ action: "read", expires: Date.now() + 60 * 60 * 1e3 });
@@ -4188,12 +4357,14 @@ function getLlm() {
 }
 var platformPromise = null;
 var sharedStore = null;
+var sharedFiles;
 function getPlatform() {
   platformPromise ??= getService().then((service) => {
     const store = sharedStore;
     const llm = getLlm();
     const support = new SupportDesk(store);
-    const blog = new BlogService(store, { llm, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
+    const images = createGeminiImages({ apiKeys: geminiKeysFromEnv(process.env), model: process.env.GEMINI_IMAGE_MODEL || void 0 });
+    const blog = new BlogService(store, { llm, images, files: sharedFiles, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
     const team = new AiTeam({ store, service, support, blog, llm, configStatus });
     return { store, service, support, blog, team };
   });
@@ -4213,6 +4384,7 @@ function getService() {
   ]).then(
     ([fb, geo]) => {
       sharedStore = new FirestoreStore(fb.db, COLLECTION_PREFIX);
+      sharedFiles = fb.files;
       return new FrocService(sharedStore, {
         geo,
         files: fb.files,

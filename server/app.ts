@@ -9,7 +9,7 @@ import type { AuthUser } from './services.ts';
 import { verifyMercadoPagoSignature } from './mercadoPago.ts';
 import type { SupportDesk } from './support.ts';
 import type { BlogService } from './blog.ts';
-import { SERVICE_PAGES, renderBlogIndex, renderPost, renderServicePage, rssFeed, sitemapBlog, sitemapIndex, sitemapPages } from './blog.ts';
+import { SERVICE_PAGES, renderBlogIndex, renderCoverSvg, renderPost, renderServicePage, rssFeed, sitemapBlog, sitemapIndex, sitemapPages } from './blog.ts';
 import type { AiTeam } from './ai/team.ts';
 import { consumeQuota } from './rateLimit.ts';
 import type { Store } from './store.ts';
@@ -172,7 +172,9 @@ export function createApp(options: AppOptions) {
       let daily: unknown = null;
       const hourBr = (new Date().getUTCHours() + 21) % 24;
       if (options.platform && hourBr >= 7) daily = await (await options.platform()).team.daily().catch((e) => ({ erro: String(e?.message || e) }));
-      return { sweep, daily };
+      // Capa com IA para posts que ainda não têm (1 por vez, para caber no tempo do servidor).
+      const images = options.platform ? await (await options.platform()).blog.fillMissingImages(1).catch((e) => ({ erro: String(e?.message || e) })) : null;
+      return { sweep, daily, images };
     }),
   );
 
@@ -205,6 +207,24 @@ export function createApp(options: AppOptions) {
   app.get('/sitemap-blog.xml', publicPage(async (_req, res) => sendPage(res, 'application/xml', sitemapBlog(site(), await (await platform()).blog.list()))));
   app.get('/rss.xml', publicPage(async (_req, res) => sendPage(res, 'application/rss+xml', rssFeed(site(), await (await platform()).blog.list({ limit: 50 })))));
   app.get('/blog', publicPage(async (_req, res) => sendPage(res, 'text/html', renderBlogIndex(await (await platform()).blog.list({ limit: 200 }), site()), 120)));
+  // Capa gerada pela IA (guardada no Storage; servida daqui com cache longo).
+  app.get('/blog/img/:file', publicPage(async (req, res) => {
+    const id = String(req.params.file || '').replace(/\.(png|jpg)$/i, '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 60);
+    const img = await (await platform()).blog.readImage(id);
+    if (!img) {
+      res.status(404).type('text/plain').send('Imagem não encontrada.');
+      return;
+    }
+    res.setHeader('Content-Type', img.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=31536000, immutable');
+    res.send(Buffer.from(img.bytes));
+  }));
+  // Capa da marca (quando ainda não há foto da IA).
+  app.get('/blog/capa/:file', publicPage(async (req, res) => {
+    const slug = String(req.params.file || '').replace(/\.svg$/i, '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
+    const post = await (await platform()).blog.get(slug);
+    sendPage(res, 'image/svg+xml', renderCoverSvg(post ?? { title: 'Blog Froc X Uber', keyword: '' }), 3600);
+  }));
   app.get('/blog/:slug', publicPage(async (req, res) => {
     const { blog } = await platform();
     const slug = String(req.params.slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
@@ -356,7 +376,15 @@ export function createApp(options: AppOptions) {
     const p = await admin(req);
     const out = await p.blog.generate({ topic: req.body?.topic ? String(req.body.topic).slice(0, 200) : undefined, author: 'Froc IA · Marketing e SEO' });
     await (await service()).audit(a(req), 'post_criado', out.post.slug, { publicado: out.post.published });
-    return { slug: out.post.slug, title: out.post.title, published: out.post.published, problems: out.problems };
+    // Tenta já colocar a capa; se não der tempo, o agendador coloca nos próximos minutos.
+    const image = out.post.published ? await p.blog.attachImage(out.post.slug).catch((e) => ({ ok: false, error: String(e?.message || e) })) : null;
+    return { slug: out.post.slug, title: out.post.title, published: out.post.published, problems: out.problems, image };
+  }));
+  api.post('/admin/blog/:id/image', wrap(async (req) => {
+    const p = await admin(req);
+    const r = await p.blog.attachImage(id(req));
+    await (await service()).audit(a(req), 'capa_gerada', id(req), { modelo: r.model });
+    return r;
   }));
   api.post('/admin/blog/:id/publish', wrap(async (req) => {
     const p = await admin(req);

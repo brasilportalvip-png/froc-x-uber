@@ -13,6 +13,14 @@
       "destination": "/api"
     },
     {
+      "source": "/blog/img/:file",
+      "destination": "/api"
+    },
+    {
+      "source": "/blog/capa/:file",
+      "destination": "/api"
+    },
+    {
       "source": "/blog/:slug",
       "destination": "/api"
     },
@@ -75,7 +83,7 @@
         },
         {
           "key": "Permissions-Policy",
-         "value": "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()" 
+          "value": "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()"
         },
         {
           "key": "Cross-Origin-Opener-Policy",
