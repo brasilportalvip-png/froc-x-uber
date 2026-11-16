@@ -59,7 +59,16 @@ export interface RideOrder {
   vehiclePlate?: string;
   etaMin?: number;
   createdAt: string;
-  messages: { sender: 'passenger' | 'driver'; text: string; time: string }[];
+  /** 'froc' = aviso automático da plataforma (ex.: motorista chegou). */
+  messages: { sender: 'passenger' | 'driver' | 'froc'; text: string; time: string }[];
+  acceptedAt?: string;
+  /** Quando o motorista avisou que chegou ao embarque (começa a contar a espera). */
+  arrivedAt?: string;
+  waitingFeePercent?: number;
+  waitingFee?: number;
+  cancelledBy?: 'passenger' | 'timeout' | 'no_show';
+  cancellationFeePercent?: number;
+  cancellationFee?: number;
 }
 
 export interface TripRecordingState {
@@ -171,6 +180,7 @@ export interface InDriveRequest {
   notes: string;
   status: 'open' | 'matched' | 'completed' | 'cancelled';
   acceptedOfferId?: string;
+  matchedAt?: string;
   offers: InDriveOffer[];
   createdAt: string;
 }

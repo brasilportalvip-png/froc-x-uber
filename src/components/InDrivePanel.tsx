@@ -1,5 +1,6 @@
 import { SosButton } from './SosButton.tsx';
 import { TripSafetyBar } from './TripSafetyBar.tsx';
+import { cancelFeePercent } from '../data/ridePolicy.ts';
 import React, { useMemo, useState } from 'react';
 import { Check, Clock, HandCoins, Star, TrendingDown } from 'lucide-react';
 import { calculateDistanceKm, formatBRL } from '../data/locations.ts';
@@ -350,7 +351,14 @@ export const InDrivePanel: React.FC<InDrivePanelProps> = ({
                     ) : (
                       <button
                         type="button"
-                        onClick={() => onCancelRequest(m.id)}
+                        onClick={() => {
+                          // Mesma regra das corridas, contada a partir do acordo.
+                          const sec = m.matchedAt ? (Date.now() - Date.parse(m.matchedAt)) / 1000 : 0;
+                          const pct = cancelFeePercent(sec);
+                          const fee = Math.round((chosen?.offeredPrice ?? 0) * pct) / 100;
+                          if (window.confirm(pct ? `Cancelar agora custa ${pct}% (${formatBRL(fee)}), que vão para o motorista. Cancelar mesmo assim?` : 'Cancelar? O valor volta inteiro para sua carteira.'))
+                            void onCancelRequest(m.id);
+                        }}
                         className="px-3 min-h-[36px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
                       >
                         Cancelar (valor volta para a carteira)

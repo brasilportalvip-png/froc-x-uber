@@ -169,6 +169,7 @@ export const QUALITY_CONTROL = [
   'Todo motorista, motoboy e transportador passa por análise manual de documentos antes de ser liberado (CNH com EAR, CRLV, antecedentes e, em cargas, RNTRC).',
   'Ano do veículo conferido no cadastro conforme a regra da cidade.',
   'CNH com validade: vencida, o motorista fica offline até atualizar.',
+  'Regras de respeito com cobrança automática: cancelamento tardio paga o motorista e espera no embarque tem acréscimo (+10%, +30%, +50%).',
   'Avaliação dos dois lados em toda viagem. Motorista com média abaixo de 4,5 depois de 20 avaliações entra em revisão pela equipe.',
   'PIN de embarque: a viagem só começa com o código que o passageiro informa no carro certo.',
   'Botão SOS com localização para a central, ligação para o 190 e compartilhamento da viagem.',
@@ -241,6 +242,8 @@ export const FAQ: [string, string][] = [
   ['Posso pagar em dinheiro ou fazer Pix direto para o motorista?', 'Não. Para acabar com golpes de troco, cobrança por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se alguém pedir pagamento por fora, não pague e avise o Atendimento.'],
   ['Como o motorista recebe e tira o dinheiro?', 'O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no próprio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. Só os ganhos podem ir para Pix; saldo de recarga é para usar no app.'],
   ['E se o motorista não aparecer?', 'Se ninguém aceitar no tempo limite, o pedido é cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila.'],
+  ['Posso cancelar a corrida?', 'Pode. Antes de algum motorista aceitar, e até 1 minuto depois do aceite, é grátis. Entre 1 e 2 minutos, 50% do valor vai para o motorista. Depois de 2 minutos, ou com o motorista já no embarque, ele recebe 100%. Se o motorista atrasar mais de 10 minutos além do previsto, ou desistir, você não paga nada.'],
+  ['O motorista chegou e eu demorei. Pago a mais?', 'Quando o motorista chega, aparece um aviso na sua tela com um contador. O primeiro minuto é grátis. Depois: +10% com 1 minuto, +30% com 2 minutos e +50% a partir de 3 minutos. Com 5 minutos, o motorista pode encerrar como "passageiro não apareceu" e recebe 100%.'],
   ['Como funciona o controle de qualidade?', 'Documentos conferidos por pessoas, CNH e veículo dentro da validade e da idade permitida, avaliação dos dois lados e revisão de quem fica com nota baixa.'],
   ['Em emergência, o que faço?', 'Ligue 190 (Polícia) ou 192 (SAMU). No app, toque em SOS: a central Froc recebe sua localização e os dados da viagem.'],
 ];

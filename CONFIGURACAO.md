@@ -207,6 +207,9 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 | Motorista usa o saldo | Pode pagar corridas, caronas, fretes e entregas no próprio app |
 | Transferir por Pix | Só os **ganhos** (mín. R$ 20), para qualquer chave Pix. O valor sai do saldo na hora; você faz o Pix e marca "Já paguei" no Admin |
 | Recarga de cartão | Fica para usar no app e **não vira Pix** (bloqueia o golpe cartão roubado → recarga → saque) |
+| Passageiro cancela | Grátis antes do aceite e até 1 min depois; 1 a 2 min: 50% vai para o motorista; mais de 2 min ou motorista no embarque: 100%. Motorista atrasado (+10 min) ou que desiste: grátis |
+| Motorista chega ("Cheguei", só a até 300 m do embarque) | O passageiro recebe um aviso na tela com contador: 1º minuto grátis; +10% (1 min), +30% (2 min), +50% (3 min ou mais), cobrado ao confirmar o PIN |
+| Passageiro não aparece | Com 5 min de espera, o motorista encerra e recebe 100% |
 | Corridas antigas em dinheiro | As poucas criadas antes da mudança ainda finalizam normalmente |
 
 ## O que o Admin faz
@@ -218,7 +221,7 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 99 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 116 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

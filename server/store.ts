@@ -74,7 +74,11 @@ export class MemoryStore implements Store {
     const run = async () => {
       const writes: Array<() => void> = [];
       const tx: Tx = {
-        get: (c, id) => this.get(c, id),
+        // Igual ao Firestore: depois de gravar, não pode mais ler na mesma transação.
+        get: (c, id) => {
+          if (writes.length) throw new Error(`Leitura depois de escrita na transação (${c}/${id}): o Firestore recusa isso.`);
+          return this.get(c, id);
+        },
         set: (c, id, d) => {
           writes.push(() => this.col(c).set(id, clone(d)));
         },

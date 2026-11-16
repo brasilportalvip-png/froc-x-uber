@@ -9,6 +9,7 @@ import { CARGO_VEHICLES } from '../../src/data/cargoVehicles.ts';
 import type { PlatformSettings } from '../settings.ts';
 import { REDEEM_VALUE_CENTS } from '../settings.ts';
 import { legalKnowledgeText } from '../../src/data/legal.ts';
+import { policyKnowledgeText } from '../../src/data/ridePolicy.ts';
 
 export const FROC_VOICE = `
 [VOZ DA MARCA FROC — vale para todos os agentes]
@@ -80,5 +81,7 @@ SEGURANÇA
 ADMINISTRAÇÃO (só para a equipe)
 - Painel Admin: Pendências (cadastros e saques), SOS, Usuários (bloquear/desbloquear), Relatórios, Configurações (comissão ${cfg.commissionPercent}%, tarifa dinâmica, tempos, pontos), Equipe IA, Atendimento e Blog.
 - Prazos automáticos rodam pelo agendador (cron) a cada 5 min.
-${legalKnowledgeText(cfg.maxVehicleAgeYears)}`;
+${legalKnowledgeText(cfg.maxVehicleAgeYears)}
+- ${policyKnowledgeText()} Ao explicar ao passageiro, seja educado e mostre que a regra protege o tempo do motorista; ao motorista, explique o botão "Passageiro não apareceu" (libera com 5 min de espera).
+`;
 }
