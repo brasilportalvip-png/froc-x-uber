@@ -10,6 +10,7 @@ import type { SupportDesk } from '../support.ts';
 import type { BlogService } from '../blog.ts';
 import { brDate } from '../blog.ts';
 import type { GeminiContent, LlmClient } from './gemini.ts';
+import { LlmUnavailableError } from './gemini.ts';
 import { AGENT_BY_ID, AGENTS } from './agents.ts';
 import type { AgentDef } from './agents.ts';
 import { FROC_VOICE, platformKnowledge } from './persona.ts';
@@ -165,7 +166,14 @@ ${platformKnowledge(cfg)}`;
     if (saved && saved.adminUid !== admin.uid) throw new AppError(403, 'forbidden', 'Conversa de outro administrador.');
     const history = trimHistory((saved?.contents as GeminiContent[]) || []);
     history.push({ role: 'user', parts: [{ text }] });
-    const result = await this.run(agent, history, this.ctx(agent, admin.email));
+    let result: Awaited<ReturnType<AiTeam['run']>>;
+    try {
+      result = await this.run(agent, history, this.ctx(agent, admin.email));
+    } catch (e) {
+      if (e instanceof LlmUnavailableError)
+        throw new AppError(503, 'ai_unavailable', `A IA está instável agora (todos os modelos 3.8, 3.7 e 3.6 foram tentados). Tente de novo em 1 minuto. Detalhe: ${e.message.slice(0, 200)}`);
+      throw e;
+    }
     const messages = [...((saved?.messages as Doc[]) || []), { from: 'admin', text, at: now() }, { from: 'agent', agent: agent.id, text: result.reply, actions: result.actions, at: now() }].slice(-100);
     await this.d.store.set('ai_chats', convId, {
       id: convId,
@@ -277,6 +285,7 @@ ${platformKnowledge(cfg)}`;
     let flagged = false;
     let reply = '';
     const contents = [...history];
+    try {
     for (let step = 0; step < 3; step++) {
       const out = await this.d.llm.generate({
         system,
@@ -301,6 +310,13 @@ ${platformKnowledge(cfg)}`;
       }
       contents.push({ role: 'user', parts: out.functionCalls.map((c) => ({ functionResponse: { name: c.name, response: { ok: true, equipeAvisada: true } } })) });
     }
+    } catch (e) {
+      // Anti-queda: se a IA cair de vez, a pessoa NUNCA fica sem resposta — a equipe assume.
+      console.error('Atendimento sem IA (queda do Gemini):', e);
+      flagged = true;
+      reply = 'Estou com uma instabilidade agora, mas sua mensagem já está com a equipe Froc. A resposta chega aqui mesmo. Em emergência, ligue 190 ou use o botão SOS.';
+      await this.d.support.flagHuman(user.uid, `IA indisponível — mensagem: ${text.slice(0, 200)}`);
+    }
     const final = await this.d.support.append(
       { uid: user.uid },
       'froc',
@@ -320,10 +336,13 @@ ${platformKnowledge(cfg)}`;
     const day = brDate();
     const markerId = `daily-${day}`;
     if (!force) {
+      // Roda 1x por dia; se a IA falhar, tenta de novo no próximo agendamento (até 4 vezes, a cada 15 min).
       const claimed = await this.d.store.transaction(async (tx) => {
         const m = await tx.get<Doc>('jobs', markerId);
-        if (m) return false;
-        tx.set('jobs', markerId, { id: markerId, startedAt: now() });
+        if (m?.done) return false;
+        const attempts = Number(m?.attempts || 0);
+        if (m && (attempts >= 4 || Date.now() - Date.parse(String(m.lastAttemptAt || 0)) < 15 * 60_000)) return false;
+        tx.set('jobs', markerId, { id: markerId, startedAt: m?.startedAt || now(), lastAttemptAt: now(), attempts: attempts + 1, done: false });
         return true;
       });
       if (!claimed) return { skipped: true, day };
@@ -351,8 +370,27 @@ ${platformKnowledge(cfg)}`;
     } catch (e) {
       result.relatorioErro = e instanceof Error ? e.message : String(e);
     }
-    await this.d.store.update('jobs', markerId, { finishedAt: now(), result: JSON.parse(JSON.stringify(result)) }).catch(() => undefined);
+    const done = !result.postErro && !result.relatorioErro;
+    await this.d.store.update('jobs', markerId, { finishedAt: now(), done, result: JSON.parse(JSON.stringify(result)) }).catch(() => undefined);
     return result;
+  }
+
+  /** Estado do anti-queda: cada modelo (3.8, 3.7, 3.6...) e cada chave. */
+  aiHealth(admin: AuthUser) {
+    this.requireAdmin(admin);
+    return this.d.llm.health?.() ?? { configured: this.configured, keys: 0, keysCooling: 0, activeModel: null, models: [] };
+  }
+
+  /** Teste rápido: pede um "OK" à IA e mostra qual modelo respondeu e em quanto tempo. */
+  async aiPing(admin: AuthUser) {
+    this.requireAdmin(admin);
+    const started = Date.now();
+    try {
+      const out = await this.d.llm.generate({ system: 'Responda apenas: OK', contents: [{ role: 'user', parts: [{ text: 'Teste de conexão.' }] }], temperature: 0, maxOutputTokens: 20, deadlineMs: 25_000 });
+      return { ok: true, model: out.model, attempts: out.attempts ?? 1, ms: Date.now() - started, health: this.d.llm.health?.() };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), ms: Date.now() - started, health: this.d.llm.health?.() };
+    }
   }
 
   async reports(admin: AuthUser) {

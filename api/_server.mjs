@@ -1984,17 +1984,116 @@ function verifyMercadoPagoSignature(input) {
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // server/ai/gemini.ts
-var DEFAULT_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
+var DEFAULT_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
+var LlmUnavailableError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.code = "ai_unavailable";
+  }
+};
+var TRANSIENT_STATUS = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
+function classifyFailure(status, detail) {
+  if (status === 0) return "transient";
+  if (status === 404) return "model_missing";
+  if (status === 401 || status === 403 || status === 400 && /api key|API_KEY_INVALID/i.test(detail)) return "key_problem";
+  if (status === 400 && /model|not found|unsupported/i.test(detail)) return "model_missing";
+  if (status === 429 && /quota|exhausted|billing/i.test(detail)) return "key_problem";
+  if (TRANSIENT_STATUS.has(status)) return "transient";
+  return "fatal";
+}
+function parseRetryAfter(value, detail = "") {
+  if (value) {
+    const s = Number(value);
+    if (Number.isFinite(s)) return Math.min(3e4, s * 1e3);
+  }
+  const m = /retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s/i.exec(detail);
+  if (m) return Math.min(3e4, Number(m[1]) * 1e3);
+  return void 0;
+}
 function createGemini(options) {
-  const apiKey = options.apiKey || "";
-  const models = [...new Set([options.model, ...DEFAULT_MODELS].filter(Boolean))];
+  const keys = (Array.isArray(options.apiKey) ? options.apiKey : [options.apiKey]).map((k) => String(k || "").trim()).filter(Boolean);
+  const models = [...new Set([options.model, ...options.models ?? DEFAULT_MODELS].filter(Boolean))];
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
-  const timeoutMs = options.timeoutMs ?? 45e3;
+  const timeoutMs = options.timeoutMs ?? 3e4;
+  const retries = options.retriesPerModel ?? 2;
+  const threshold = options.breakerThreshold ?? 3;
+  const cooldown = options.breakerCooldownMs ?? 6e4;
+  const base = options.backoffBaseMs ?? 600;
+  const sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now3 = options.now ?? (() => Date.now());
+  const random = options.random ?? Math.random;
+  const stats = /* @__PURE__ */ new Map();
+  for (const m of models) stats.set(m, { consecutive: 0, successes: 0, failures: 0, openUntil: 0, missingUntil: 0, latencyTotal: 0 });
+  const keyCoolUntil = /* @__PURE__ */ new Map();
   let workingModel = null;
+  const st = (m) => stats.get(m);
+  const recordFailure = (m, f) => {
+    const s = st(m);
+    s.failures++;
+    s.lastError = `${f.status || "rede"} ${f.message}`.slice(0, 200);
+    s.lastErrorAt = now3();
+    if (f.kind === "model_missing") {
+      s.missingUntil = now3() + 30 * 6e4;
+      if (workingModel === m) workingModel = null;
+      return;
+    }
+    s.consecutive++;
+    if (s.consecutive >= threshold) {
+      s.openUntil = now3() + cooldown;
+      if (workingModel === m) workingModel = null;
+    }
+  };
+  const recordSuccess = (m, latency) => {
+    const s = st(m);
+    s.consecutive = 0;
+    s.openUntil = 0;
+    s.successes++;
+    s.latencyTotal += latency;
+    s.lastSuccessAt = now3();
+    workingModel = m;
+  };
+  const available = (m) => st(m).missingUntil <= now3() && st(m).openUntil <= now3();
+  const pickKey = () => keys.find((k) => (keyCoolUntil.get(k) ?? 0) <= now3()) ?? null;
+  async function attempt(model, key, body, budgetMs) {
+    const started = now3();
+    let res;
+    try {
+      res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body,
+        signal: AbortSignal.timeout(Math.max(1e3, Math.min(timeoutMs, budgetMs)))
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { kind: "transient", status: 0, message: /abort|timeout/i.test(msg) ? "tempo esgotado" : `rede: ${msg}` };
+    }
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 400);
+      return { kind: classifyFailure(res.status, detail), status: res.status, message: detail, retryAfterMs: parseRetryAfter(res.headers?.get?.("retry-after"), detail) };
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      return { kind: "transient", status: 502, message: "resposta inv\xE1lida" };
+    }
+    if (data.promptFeedback?.blockReason) return { kind: "fatal", status: 400, message: `bloqueado: ${data.promptFeedback.blockReason}` };
+    const cand = data.candidates?.[0];
+    const content = cand?.content ?? { role: "model", parts: [] };
+    if (!content.role) content.role = "model";
+    content.parts ??= [];
+    const text2 = content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim();
+    const functionCalls = content.parts.filter((p) => p.functionCall).map((p) => ({ name: p.functionCall.name, args: p.functionCall.args || {} }));
+    if (!text2 && !functionCalls.length) return { kind: "transient", status: 502, message: `resposta vazia (${cand?.finishReason || "sem motivo"})` };
+    recordSuccess(model, now3() - started);
+    return { content, model, text: text2, functionCalls };
+  }
   return {
-    configured: Boolean(apiKey),
+    configured: keys.length > 0,
     async generate(input) {
-      if (!apiKey) throw new Error("GEMINI_API_KEY n\xE3o configurada.");
+      if (!keys.length) throw new LlmUnavailableError("GEMINI_API_KEY n\xE3o configurada.");
+      const deadline = now3() + (input.deadlineMs ?? 5e4);
       const body = JSON.stringify({
         systemInstruction: { parts: [{ text: input.system }] },
         contents: input.contents,
@@ -2005,36 +2104,67 @@ function createGemini(options) {
           ...input.json ? { responseMimeType: "application/json" } : {}
         }
       });
-      const order = workingModel ? [workingModel, ...models.filter((m) => m !== workingModel)] : models;
-      let lastError = "";
+      const ordered = workingModel ? [workingModel, ...models.filter((m) => m !== workingModel)] : [...models];
+      const order = [...ordered.filter(available), ...ordered.filter((m) => !available(m) && st(m).missingUntil <= now3())];
+      const errors = [];
+      let attempts = 0;
       for (const model of order) {
-        const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body,
-          signal: AbortSignal.timeout(timeoutMs)
-        });
-        if (!res.ok) {
-          const detail = (await res.text().catch(() => "")).slice(0, 300);
-          lastError = `${model}: ${res.status} ${detail}`;
-          if (res.status === 404 || res.status === 400 && /model/i.test(detail) || res.status === 503 || res.status === 429) continue;
-          throw new Error(`Gemini recusou (${lastError})`);
+        let tries = 0;
+        while (tries <= retries) {
+          const remaining = deadline - now3();
+          if (remaining < 1500) throw new LlmUnavailableError(`Tempo esgotado tentando a IA (${errors.slice(-3).join(" | ") || "sem resposta"}).`);
+          const key = pickKey();
+          if (!key) throw new LlmUnavailableError(`Todas as chaves do Gemini est\xE3o sem cota ou recusadas agora (${errors.slice(-2).join(" | ")}).`);
+          attempts++;
+          const out = await attempt(model, key, body, remaining);
+          if ("content" in out) return { ...out, attempts };
+          errors.push(`${model}: ${out.status || "rede"} ${out.message.slice(0, 80)}`);
+          if (out.kind === "key_problem") {
+            keyCoolUntil.set(key, now3() + (out.status === 429 ? out.retryAfterMs ?? 6e4 : 10 * 6e4));
+            if (!pickKey()) throw new LlmUnavailableError(`Chaves do Gemini sem cota ou recusadas (${out.status}). Confira a cobran\xE7a no Google AI Studio.`);
+            continue;
+          }
+          recordFailure(model, out);
+          tries++;
+          if (out.kind === "model_missing" || out.kind === "fatal") break;
+          if (!available(model)) break;
+          if (tries <= retries) {
+            const wait = out.retryAfterMs ?? Math.min(8e3, base * 2 ** (tries - 1)) * (0.6 + random() * 0.8);
+            if (now3() + wait > deadline - 1500) break;
+            await sleep(wait);
+          }
         }
-        const data = await res.json();
-        const content = data.candidates?.[0]?.content ?? { role: "model", parts: [] };
-        if (!content.role) content.role = "model";
-        content.parts ??= [];
-        workingModel = model;
-        return {
-          content,
-          model,
-          text: content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim(),
-          functionCalls: content.parts.filter((p) => p.functionCall).map((p) => ({ name: p.functionCall.name, args: p.functionCall.args || {} }))
-        };
       }
-      throw new Error(`Nenhum modelo do Gemini respondeu (${lastError})`);
+      throw new LlmUnavailableError(`Nenhum modelo do Gemini respondeu (${errors.slice(-4).join(" | ")}).`);
+    },
+    health() {
+      const t = now3();
+      return {
+        configured: keys.length > 0,
+        keys: keys.length,
+        keysCooling: keys.filter((k) => (keyCoolUntil.get(k) ?? 0) > t).length,
+        activeModel: workingModel,
+        models: models.map((m) => {
+          const s = st(m);
+          const state = s.missingUntil > t ? "indisponivel" : s.openUntil > t ? "desligado" : s.consecutive > 0 ? "instavel" : "ok";
+          return {
+            model: m,
+            state,
+            consecutiveFailures: s.consecutive,
+            successes: s.successes,
+            failures: s.failures,
+            ...s.lastError ? { lastError: s.lastError, lastErrorAt: new Date(s.lastErrorAt).toISOString() } : {},
+            ...s.lastSuccessAt ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {},
+            ...s.openUntil > t ? { retryAfter: new Date(s.openUntil).toISOString() } : s.missingUntil > t ? { retryAfter: new Date(s.missingUntil).toISOString() } : {},
+            ...s.successes ? { avgLatencyMs: Math.round(s.latencyTotal / s.successes) } : {}
+          };
+        })
+      };
     }
   };
+}
+function geminiKeysFromEnv(env) {
+  return [env.GEMINI_API_KEY, env.GEMINI_API_KEY_2, env.GEMINI_API_KEY_3].map((k) => String(k || "").trim()).filter(Boolean);
 }
 function parseJsonLoose(text2) {
   const cleaned = text2.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
@@ -2863,6 +2993,8 @@ function createApp(options) {
     await quota(req, "ai-admin", 400, 864e5, "Limite di\xE1rio de mensagens para a Equipe IA atingido (protege sua conta do Gemini).");
     return p.team.chat(a(req), req.body?.agentId, req.body?.message, req.body?.conversationId);
   }));
+  api.get("/admin/ai/health", wrap(async (req) => (await admin(req)).team.aiHealth(a(req))));
+  api.post("/admin/ai/ping", wrap(async (req) => (await admin(req)).team.aiPing(a(req))));
   api.get("/admin/ai/conversations/:id", wrap(async (req) => (await admin(req)).team.conversation(a(req), id(req))));
   api.get("/admin/ai/proposals", wrap(async (req) => (await admin(req)).team.proposals(a(req), String(req.query.status || "pending"))));
   api.post("/admin/ai/proposals/:id", wrap(async (req) => (await admin(req)).team.decide(a(req), id(req), req.body?.decision)));
@@ -3734,7 +3866,14 @@ ${platformKnowledge(cfg)}`;
     if (saved && saved.adminUid !== admin.uid) throw new AppError(403, "forbidden", "Conversa de outro administrador.");
     const history = trimHistory(saved?.contents || []);
     history.push({ role: "user", parts: [{ text: text2 }] });
-    const result = await this.run(agent, history, this.ctx(agent, admin.email));
+    let result;
+    try {
+      result = await this.run(agent, history, this.ctx(agent, admin.email));
+    } catch (e) {
+      if (e instanceof LlmUnavailableError)
+        throw new AppError(503, "ai_unavailable", `A IA est\xE1 inst\xE1vel agora (todos os modelos 3.8, 3.7 e 3.6 foram tentados). Tente de novo em 1 minuto. Detalhe: ${e.message.slice(0, 200)}`);
+      throw e;
+    }
     const messages = [...saved?.messages || [], { from: "admin", text: text2, at: now2() }, { from: "agent", agent: agent.id, text: result.reply, actions: result.actions, at: now2() }].slice(-100);
     await this.d.store.set("ai_chats", convId, {
       id: convId,
@@ -3838,29 +3977,36 @@ ${platformKnowledge(cfg)}`;
     let flagged = false;
     let reply = "";
     const contents = [...history];
-    for (let step = 0; step < 3; step++) {
-      const out = await this.d.llm.generate({
-        system,
-        contents,
-        temperature: 0.5,
-        tools: [
-          {
-            name: "chamar_equipe",
-            description: "Chama um atendente humano da equipe Froc para esta conversa (dinheiro, reclama\xE7\xE3o s\xE9ria, pedido de falar com algu\xE9m, problema que voc\xEA n\xE3o resolve).",
-            parameters: { type: "OBJECT", properties: { motivo: { type: "STRING", description: "Resumo do problema para a equipe." } }, required: ["motivo"] }
-          }
-        ]
-      });
-      contents.push(out.content);
-      if (!out.functionCalls.length) {
-        reply = out.text;
-        break;
+    try {
+      for (let step = 0; step < 3; step++) {
+        const out = await this.d.llm.generate({
+          system,
+          contents,
+          temperature: 0.5,
+          tools: [
+            {
+              name: "chamar_equipe",
+              description: "Chama um atendente humano da equipe Froc para esta conversa (dinheiro, reclama\xE7\xE3o s\xE9ria, pedido de falar com algu\xE9m, problema que voc\xEA n\xE3o resolve).",
+              parameters: { type: "OBJECT", properties: { motivo: { type: "STRING", description: "Resumo do problema para a equipe." } }, required: ["motivo"] }
+            }
+          ]
+        });
+        contents.push(out.content);
+        if (!out.functionCalls.length) {
+          reply = out.text;
+          break;
+        }
+        for (const call of out.functionCalls) if (call.name === "chamar_equipe") {
+          flagged = true;
+          await this.d.support.flagHuman(user.uid, String(call.args.motivo || "pedido de ajuda"));
+        }
+        contents.push({ role: "user", parts: out.functionCalls.map((c) => ({ functionResponse: { name: c.name, response: { ok: true, equipeAvisada: true } } })) });
       }
-      for (const call of out.functionCalls) if (call.name === "chamar_equipe") {
-        flagged = true;
-        await this.d.support.flagHuman(user.uid, String(call.args.motivo || "pedido de ajuda"));
-      }
-      contents.push({ role: "user", parts: out.functionCalls.map((c) => ({ functionResponse: { name: c.name, response: { ok: true, equipeAvisada: true } } })) });
+    } catch (e) {
+      console.error("Atendimento sem IA (queda do Gemini):", e);
+      flagged = true;
+      reply = "Estou com uma instabilidade agora, mas sua mensagem j\xE1 est\xE1 com a equipe Froc. A resposta chega aqui mesmo. Em emerg\xEAncia, ligue 190 ou use o bot\xE3o SOS.";
+      await this.d.support.flagHuman(user.uid, `IA indispon\xEDvel \u2014 mensagem: ${text2.slice(0, 200)}`);
     }
     const final = await this.d.support.append(
       { uid: user.uid },
@@ -3881,8 +4027,10 @@ ${platformKnowledge(cfg)}`;
     if (!force) {
       const claimed = await this.d.store.transaction(async (tx) => {
         const m = await tx.get("jobs", markerId);
-        if (m) return false;
-        tx.set("jobs", markerId, { id: markerId, startedAt: now2() });
+        if (m?.done) return false;
+        const attempts = Number(m?.attempts || 0);
+        if (m && (attempts >= 4 || Date.now() - Date.parse(String(m.lastAttemptAt || 0)) < 15 * 6e4)) return false;
+        tx.set("jobs", markerId, { id: markerId, startedAt: m?.startedAt || now2(), lastAttemptAt: now2(), attempts: attempts + 1, done: false });
         return true;
       });
       if (!claimed) return { skipped: true, day };
@@ -3910,8 +4058,25 @@ ${platformKnowledge(cfg)}`;
     } catch (e) {
       result.relatorioErro = e instanceof Error ? e.message : String(e);
     }
-    await this.d.store.update("jobs", markerId, { finishedAt: now2(), result: JSON.parse(JSON.stringify(result)) }).catch(() => void 0);
+    const done = !result.postErro && !result.relatorioErro;
+    await this.d.store.update("jobs", markerId, { finishedAt: now2(), done, result: JSON.parse(JSON.stringify(result)) }).catch(() => void 0);
     return result;
+  }
+  /** Estado do anti-queda: cada modelo (3.8, 3.7, 3.6...) e cada chave. */
+  aiHealth(admin) {
+    this.requireAdmin(admin);
+    return this.d.llm.health?.() ?? { configured: this.configured, keys: 0, keysCooling: 0, activeModel: null, models: [] };
+  }
+  /** Teste rápido: pede um "OK" à IA e mostra qual modelo respondeu e em quanto tempo. */
+  async aiPing(admin) {
+    this.requireAdmin(admin);
+    const started = Date.now();
+    try {
+      const out = await this.d.llm.generate({ system: "Responda apenas: OK", contents: [{ role: "user", parts: [{ text: "Teste de conex\xE3o." }] }], temperature: 0, maxOutputTokens: 20, deadlineMs: 25e3 });
+      return { ok: true, model: out.model, attempts: out.attempts ?? 1, ms: Date.now() - started, health: this.d.llm.health?.() };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), ms: Date.now() - started, health: this.d.llm.health?.() };
+    }
   }
   async reports(admin) {
     this.requireAdmin(admin);
@@ -3940,12 +4105,17 @@ function publicSiteUrl() {
 }
 var COLLECTION_PREFIX = process.env.FIRESTORE_COLLECTION_PREFIX ?? "froc_";
 var servicePromise = null;
+var llmClient = null;
+function getLlm() {
+  llmClient ??= createGemini({ apiKey: geminiKeysFromEnv(process.env), model: process.env.GEMINI_MODEL || void 0 });
+  return llmClient;
+}
 var platformPromise = null;
 var sharedStore = null;
 function getPlatform() {
   platformPromise ??= getService().then((service) => {
     const store = sharedStore;
-    const llm = createGemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL });
+    const llm = getLlm();
     const support = new SupportDesk(store);
     const blog = new BlogService(store, { llm, siteUrl: publicSiteUrl, indexNow: createIndexNow(publicSiteUrl) });
     const team = new AiTeam({ store, service, support, blog, llm, configStatus });
@@ -4009,7 +4179,9 @@ function configStatus() {
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
     cron: Boolean(process.env.CRON_SECRET),
-    ai: Boolean(process.env.GEMINI_API_KEY),
+    ai: geminiKeysFromEnv(process.env).length > 0,
+    aiKeys: geminiKeysFromEnv(process.env).length,
+    aiFailover: getLlm().health?.(),
     aiModel: process.env.GEMINI_MODEL || "autom\xE1tico",
     firestoreDatabase: process.env.FIRESTORE_DATABASE_ID || "(default)",
     collectionPrefix: COLLECTION_PREFIX
