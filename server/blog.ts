@@ -106,22 +106,75 @@ export function escapeHtml(text: unknown) {
 }
 
 /** Confere se o post está no padrão de SEO antes de publicar. Devolve a lista de problemas. */
-export function seoProblems(p: Pick<BlogPost, 'title' | 'description' | 'keyword' | 'h1' | 'intro' | 'sections' | 'faq' | 'slug'>) {
-  const problems: string[] = [];
+type SeoFields = Pick<BlogPost, 'title' | 'description' | 'keyword' | 'h1' | 'intro' | 'sections' | 'faq' | 'slug'>;
+
+const plain = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+/** A palavra-chave "aparece" se o radical da palavra principal aparece (frete/fretes, mudança/mudancas). */
+function hasKeyword(text: string, keyword: string) {
+  const main = plain(keyword)
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .sort((a, b) => b.length - a.length)[0];
+  if (!main) return true;
+  return plain(text).includes(main.slice(0, Math.max(4, main.length - 2)));
+}
+
+/**
+ * Problemas GRAVES impedem a publicação (texto sem conteúdo). Os demais são AVISOS:
+ * o post é publicado e o aviso aparece no Admin.
+ */
+export function seoReview(p: SeoFields) {
+  const hard: string[] = [];
+  const soft: string[] = [];
   const words = [p.intro, ...p.sections.flatMap((s) => s.paragraphs)].join(' ').split(/\s+/).filter(Boolean).length;
-  if (p.title.length < 30 || p.title.length > 65) problems.push(`título com ${p.title.length} caracteres (ideal 30–65)`);
-  if (p.description.length < 110 || p.description.length > 160) problems.push(`descrição com ${p.description.length} caracteres (ideal 110–160)`);
-  const kw = p.keyword.toLowerCase();
-  if (!kw) problems.push('sem palavra-chave');
+  if (!p.title) hard.push('sem título');
+  if (p.sections.length < 2) hard.push('menos de 2 seções');
+  if (words < 350) hard.push(`texto curto demais (${words} palavras)`);
+  if (!p.slug) hard.push('sem endereço (slug)');
+  if (p.title.length < 30 || p.title.length > 65) soft.push(`título com ${p.title.length} caracteres (ideal 30–65)`);
+  if (p.description.length < 110 || p.description.length > 160) soft.push(`descrição com ${p.description.length} caracteres (ideal 110–160)`);
+  if (!p.keyword) soft.push('sem palavra-chave');
   else {
-    if (!p.title.toLowerCase().includes(kw.split(' ')[0])) problems.push('palavra-chave fora do título');
-    if (!p.intro.toLowerCase().includes(kw.split(' ')[0])) problems.push('palavra-chave fora do primeiro parágrafo');
+    if (!hasKeyword(p.title, p.keyword)) soft.push('palavra-chave fora do título');
+    if (!hasKeyword(p.intro, p.keyword)) soft.push('palavra-chave fora do primeiro parágrafo');
   }
-  if (p.sections.length < 3) problems.push('menos de 3 seções');
-  if (p.faq.length < 3) problems.push('menos de 3 perguntas frequentes');
-  if (words < 600) problems.push(`texto curto (${words} palavras; mínimo 600)`);
-  if (!p.slug) problems.push('sem endereço (slug)');
-  return problems;
+  if (p.sections.length < 3) soft.push('menos de 3 seções');
+  if (p.faq.length < 3) soft.push('menos de 3 perguntas frequentes');
+  if (words < 600) soft.push(`texto com ${words} palavras (ideal 600+)`);
+  return { hard, soft };
+}
+
+/** Compatível com o nome antigo: todos os problemas (graves + avisos). */
+export function seoProblems(p: SeoFields) {
+  const r = seoReview(p);
+  return [...r.hard, ...r.soft];
+}
+
+/** Ajusta sozinho o que dá para ajustar: tamanho do título e da descrição. */
+export function autoFixSeo<T extends SeoFields>(p: T): T {
+  let title = p.title.trim();
+  if (title.length > 65) {
+    const beforeColon = title.split(/[:|–-]/)[0].trim();
+    title = beforeColon.length >= 30 && beforeColon.length <= 65 ? beforeColon : title.slice(0, 63).replace(/\s+\S*$/, '');
+  }
+  if (title.length < 30) title = `${title} | ${SITE_NAME}`.slice(0, 65);
+  let description = p.description.trim().replace(/\s+/g, ' ');
+  if (description.length > 160) {
+    description = description.slice(0, 157).replace(/\s+\S*$/, '').replace(/[,;:.\s]+$/, '') + '.';
+  }
+  if (description.length < 110) {
+    for (const extra of [`Veja dicas práticas e crie sua conta grátis no ${SITE_NAME}.`, 'Corridas, caronas e fretes em todo o Brasil.']) {
+      if (description.length >= 110) break;
+      description = `${description.replace(/[.\s]+$/, '')}. ${extra}`;
+    }
+    if (description.length > 160) description = description.slice(0, 157).replace(/\s+\S*$/, '').replace(/[,;:.\s]+$/, '') + '.';
+  }
+  return { ...p, title, description };
 }
 
 const POST_PROMPT = (topic: string, existingTitles: string[]) => `
@@ -216,9 +269,12 @@ export class BlogService {
       let slug = post.slug;
       for (let n = 2; existing.some((p) => p.slug === slug); n++) slug = `${post.slug}-${n}`;
       post.slug = slug;
-      lastProblems = seoProblems(post);
-      if (lastProblems.length && attempt === 0) continue;
-      post.published = opts.publish !== false && lastProblems.length === 0;
+      Object.assign(post, autoFixSeo(post));
+      const review = seoReview(post);
+      lastProblems = [...review.hard, ...review.soft];
+      // 1ª tentativa com problema GRAVE: pede de novo. Avisos leves não seguram a publicação.
+      if (review.hard.length && attempt === 0) continue;
+      post.published = opts.publish !== false && review.hard.length === 0;
       post.publishedAt = post.published ? now.toISOString() : '';
       await this.store.set('blog', post.id, post);
       if (post.published) await this.ping([this.url(post.slug), `${this.deps.siteUrl()}/blog`]);

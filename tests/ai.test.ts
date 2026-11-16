@@ -257,3 +257,18 @@ test('Limite persistente bloqueia depois do máximo', async () => {
   await assert.rejects(consumeQuota(store, 'x:u1', 2, 60_000), (e: unknown) => e instanceof AppError && e.status === 429);
   await consumeQuota(store, 'x:u2', 2, 60_000);
 });
+
+test('Blog: título/descrição fora do tamanho são ajustados sozinhos e o post é PUBLICADO', async () => {
+  const longish = {
+    ...POST_JSON,
+    keyword: 'fretes baratos em recife',
+    title: 'Frete barato em Recife: o guia definitivo e completo para economizar muito na sua mudança residencial',
+    description: 'Curta demais.',
+  };
+  const { blog } = setup([{ text: JSON.stringify(longish) }]);
+  const { post, problems } = await blog.generate({ topic: 'frete Recife' });
+  assert.equal(post.published, true, problems.join('; '));
+  assert.ok(post.title.length <= 65 && post.title.length >= 30, post.title);
+  assert.ok(post.description.length >= 110 && post.description.length <= 160, post.description);
+  assert.ok(!problems.some((p) => /palavra-chave fora do título/.test(p)), 'fretes/frete contam como a mesma palavra');
+});
