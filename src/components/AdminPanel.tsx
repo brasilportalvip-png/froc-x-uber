@@ -247,7 +247,11 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
               <div>
                 Chave Pix{w.pixKeyType ? ` (${w.pixKeyType})` : ''}: <strong className="font-mono-num select-all">{w.pixKey}</strong>
               </div>
-              <div className="text-slate-500">Faça o Pix pelo banco e depois marque como pago.</div>
+              <div className={w.status === 'approved' ? 'text-emerald-600 font-semibold' : 'text-slate-500'}>
+                {w.status === 'approved'
+                  ? 'Liberado pela Equipe IA (regras conferidas). Falta só o Pix: ligue o envio automático do Mercado Pago para nem isso precisar.'
+                  : 'Em análise pelo Financeiro da Equipe IA (fora das regras de liberação automática).'}
+              </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => act(() => api(`/api/admin/withdrawals/${w.id}`, { body: { decision: 'paid' } }), 'Saque marcado como pago.')} className="flex-1 min-h-[38px] rounded-lg bg-emerald-600 text-white font-bold cursor-pointer">
                   Já paguei
@@ -457,6 +461,10 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
               ['pointsPerReal', 'Pontos por R$ 1 gasto', 0, 10, 1],
               ['pointsPerRedeem', 'Pontos para R$ 5 de crédito', 20, 10000, 1],
               ['maxVehicleAgeYears', 'Idade máxima do veículo (anos; a cidade mais rígida prevalece)', 3, 25, 1],
+              ['platformFeeMin', 'Ganho mínimo da Froc por corrida (R$)', 0, 20, 0.5],
+              ['platformFeeMax', 'Ganho máximo da Froc por corrida (R$)', 1, 40, 0.5],
+              ['platformFeeMaxPct', 'Froc nunca fica com mais que (% da corrida)', 5, 50, 1],
+              ['autoPayoutLimit', 'Equipe IA libera saque sozinha até (R$)', 0, 20000, 50],
             ] as [keyof PlatformSettingsView, string, number, number, number][]
           ).map(([key, label, min, max, step]) => (
             <label key={key} className="flex items-center justify-between gap-3">
@@ -476,12 +484,91 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
             <span>Preço dinâmico por região (H3) ligado</span>
             <input type="checkbox" checked={settings.surgeEnabled} onChange={(e) => setSettings({ ...settings, surgeEnabled: e.target.checked })} className="w-5 h-5" />
           </label>
+          <label className="flex items-center justify-between gap-3">
+            <span>Dinâmico por horário (madrugada, picos, almoço, noite, fim de semana)</span>
+            <input type="checkbox" checked={settings.timeSurgeEnabled} onChange={(e) => setSettings({ ...settings, timeSurgeEnabled: e.target.checked })} className="w-5 h-5" />
+          </label>
+          <label className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 p-2">
+            <span>
+              <strong>Autonomia total da Equipe IA</strong>: pagar, aprovar, verificar, bloquear e configurar sozinha (tudo fica na Auditoria)
+            </span>
+            <input type="checkbox" checked={settings.agentAutonomy} onChange={(e) => setSettings({ ...settings, agentAutonomy: e.target.checked })} className="w-5 h-5" />
+          </label>
           <button type="submit" className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold cursor-pointer">
             Salvar configurações
           </button>
-          <p className="text-slate-500">A comissão nova vale para os próximos pagamentos; os já concluídos não mudam.</p>
+          <p className="text-slate-500">
+            Corridas, negociação e entregas: a Froc fica com um valor fixo entre o mínimo e o máximo acima. A comissão % vale para caronas e fretes. Mudanças valem para os próximos pedidos.
+          </p>
         </form>
       )}
+      {tab === 'config' && <RiskZonesBox onToast={onToast} />}
+    </div>
+  );
+};
+
+/** Áreas de risco: acréscimo que vai todo para o motorista (a Equipe IA também cadastra). */
+const RiskZonesBox: React.FC<{ onToast: (m: string) => void }> = ({ onToast }) => {
+  const [zones, setZones] = useState<{ id: string; name: string; lat: number; lng: number; radiusKm: number; surchargePct: number; when: string; active: boolean }[]>([]);
+  const [form, setForm] = useState({ name: '', lat: '', lng: '', radiusKm: '1', surchargePct: '15', when: 'sempre' });
+  const load = () => {
+    void api<{ zones: typeof zones }>('/api/admin/risk-zones').then((r) => setZones(r.zones), () => undefined);
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  const save = async (body: Record<string, unknown>, msg: string) => {
+    try {
+      await api('/api/admin/risk-zones', { body });
+      onToast(msg);
+      load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : 'Erro.');
+    }
+  };
+  const field = 'min-h-[36px] rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent px-2';
+  return (
+    <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2 text-xs mt-3">
+      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Áreas de risco</h4>
+      <p className="text-slate-500">Corridas que começam ou terminam aqui custam mais (o acréscimo vai todo para o motorista) e a taxa da Froc sobe R$ 1.</p>
+      {zones.length === 0 && <div className="text-slate-500">Nenhuma área cadastrada.</div>}
+      {zones.map((z) => (
+        <div key={z.id} className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 py-1.5">
+          <span className={z.active ? '' : 'line-through text-slate-400'}>
+            {z.name} · raio {z.radiusKm} km · +{z.surchargePct}% · {z.when}
+          </span>
+          <button type="button" onClick={() => void save({ ...z, active: !z.active }, z.active ? 'Área desativada.' : 'Área ativada.')} className="underline font-semibold cursor-pointer">
+            {z.active ? 'Desativar' : 'Ativar'}
+          </button>
+        </div>
+      ))}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+        <input placeholder="Nome da área" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${field} col-span-2 sm:col-span-3`} />
+        <input placeholder="Latitude" value={form.lat} onChange={(e) => setForm({ ...form, lat: e.target.value })} className={field} />
+        <input placeholder="Longitude" value={form.lng} onChange={(e) => setForm({ ...form, lng: e.target.value })} className={field} />
+        <button
+          type="button"
+          onClick={() =>
+            navigator.geolocation?.getCurrentPosition((p) => setForm((f) => ({ ...f, lat: p.coords.latitude.toFixed(5), lng: p.coords.longitude.toFixed(5) })))
+          }
+          className={`${field} font-semibold cursor-pointer`}
+        >
+          Usar onde estou
+        </button>
+        <input placeholder="Raio (km)" value={form.radiusKm} onChange={(e) => setForm({ ...form, radiusKm: e.target.value })} className={field} />
+        <input placeholder="Acréscimo %" value={form.surchargePct} onChange={(e) => setForm({ ...form, surchargePct: e.target.value })} className={field} />
+        <select value={form.when} onChange={(e) => setForm({ ...form, when: e.target.value })} className={`${field} bg-slate-50 dark:bg-slate-900`}>
+          <option value="sempre">O dia todo</option>
+          <option value="noite">Só à noite (19h–6h)</option>
+        </select>
+      </div>
+      <button
+        type="button"
+        onClick={() => void save({ ...form, lat: Number(form.lat), lng: Number(form.lng), radiusKm: Number(form.radiusKm), surchargePct: Number(form.surchargePct) }, 'Área de risco salva.')}
+        className="w-full min-h-[38px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold cursor-pointer"
+      >
+        Salvar área
+      </button>
     </div>
   );
 };

@@ -112,8 +112,8 @@ describe('cancelamento do passageiro', () => {
     assert.equal(r.cancellationFeePercent, 50);
     const fee = Math.round(cents(ride.price) / 2);
     assert.equal(cents(await balance(ana)), 10000 - fee);
-    assert.equal(cents(await balance(caio)), Math.round(fee * 0.88), 'motorista recebe a taxa menos a comissão');
-    assert.equal((await svc.bootstrap(caio)).profile.withdrawableBalance, Math.round(fee * 0.88) / 100, 'taxa é ganho: pode ir para Pix');
+    assert.equal(cents(await balance(caio)), fee, 'taxa de cancelamento é toda do motorista');
+    assert.equal((await svc.bootstrap(caio)).profile.withdrawableBalance, fee / 100, 'taxa é ganho: pode ir para Pix');
   });
 
   test('depois de 2 min: 100% vai para o motorista', async () => {
@@ -121,7 +121,7 @@ describe('cancelamento do passageiro', () => {
     sec(130);
     await svc.rideAction(ana, ride.id, { action: 'cancel' });
     assert.equal(cents(await balance(ana)), 10000 - cents(ride.price));
-    assert.equal(cents(await balance(caio)), Math.round(cents(ride.price) * 0.88));
+    assert.equal(cents(await balance(caio)), cents(ride.price));
   });
 
   test('motorista já no embarque: 100% mesmo antes de 2 min', async () => {
@@ -178,7 +178,7 @@ describe('tempo de espera no embarque', () => {
       await svc.rideAction(caio, ride.id, { action: 'complete' });
       const extra = Math.round((cents(ride.price) * pct) / 100);
       assert.equal(cents(await balance(ana)), 10000 - cents(ride.price) - extra);
-      assert.equal(cents(await balance(caio)), Math.round((cents(ride.price) + extra) * 0.88), 'acréscimo vai para o motorista');
+      assert.equal(cents(await balance(caio)), cents(ride.price) + extra - cents(ride.pricing!.platformFee), 'acréscimo vai todo para o motorista');
       const done = (await svc.bootstrap(ana)).rides.find((r) => r.id === ride.id)!;
       assert.equal(done.waitingFeePercent ?? 0, pct);
     });
@@ -194,7 +194,7 @@ describe('tempo de espera no embarque', () => {
     const r = await svc.rideAction(caio, ride.id, { action: 'no_show' });
     assert.equal(r.status, 'cancelled');
     assert.equal(r.cancelledBy, 'no_show');
-    assert.equal(cents(await balance(caio)), Math.round(cents(ride.price) * 0.88));
+    assert.equal(cents(await balance(caio)), cents(ride.price));
     assert.equal(cents(await balance(ana)), 10000 - cents(ride.price));
   });
 
@@ -214,6 +214,6 @@ describe('negociação (inDrive)', () => {
     sec(150);
     await svc.cancelInDrive(ana, req.id);
     assert.equal(await balance(ana), 70);
-    assert.equal(cents(await balance(caio)), Math.round(3000 * 0.88));
+    assert.equal(cents(await balance(caio)), 3000);
   });
 });

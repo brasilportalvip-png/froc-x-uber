@@ -85,6 +85,31 @@ export function verifyWebhookSignature(secret: string, body: string, header: str
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * Consulta pública de CNPJ (BrasilAPI, dados abertos da Receita) para a Equipe IA aprovar lojas
+ * sozinha: situação "ATIVA" aprova; baixada, inapta, suspensa ou nula recusa. Fora do ar: espera.
+ */
+export function createCnpjLookup(fetchImpl: typeof fetch = fetch) {
+  return async (cnpj: string) => {
+    const d = cnpj.replace(/\D/g, '');
+    if (d.length !== 14) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetchImpl(`https://brasilapi.com.br/api/cnpj/v1/${d}`, { signal: controller.signal, headers: { Accept: 'application/json' } });
+      if (res.status === 404) return { active: false, name: '', situation: 'não encontrado' };
+      if (!res.ok) return null;
+      const j = (await res.json()) as Record<string, unknown>;
+      const situation = String(j.descricao_situacao_cadastral || j.situacao_cadastral || '');
+      return { active: /ativa/i.test(situation), name: String(j.razao_social || j.nome_fantasia || ''), situation: situation || 'desconhecida' };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
 // ------------------------------------------------------------- chaves de API
 
 export interface ApiKeyView {

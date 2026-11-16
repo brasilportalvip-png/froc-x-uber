@@ -278,12 +278,13 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'pagar_ou_recusar_saque',
     level: 'confirmar',
-    description: 'Prepara o pagamento (já feito por Pix) ou a recusa de um saque. Só acontece quando o administrador aprovar.',
-    parameters: obj({ id: S('id do saque.'), decisao: S('"paid" (pago) ou "rejected" (recusado, devolve o valor).'), observacao: S('Contexto para o administrador.') }, [
+    description:
+      'Libera ("approved": envia o Pix automático, se ligado; senão fica "Pix a enviar"), marca como pago ("paid", só se o Pix já foi feito) ou recusa ("rejected", devolve o valor) um saque. Com autonomia ligada, executa na hora.',
+    parameters: obj({ id: S('id do saque.'), decisao: S('"approved" (liberar), "paid" (pago) ou "rejected" (recusar e devolver).'), observacao: S('Motivo/contexto.') }, [
       'id',
       'decisao',
     ]),
-    summarize: (a) => `${a.decisao === 'paid' ? 'Marcar como PAGO' : 'Recusar e devolver'} o saque ${a.id}${a.observacao ? ` — ${a.observacao}` : ''}`,
+    summarize: (a) => `${a.decisao === 'paid' ? 'Marcar como PAGO' : a.decisao === 'approved' ? 'Liberar (enviar Pix)' : 'Recusar e devolver'} o saque ${a.id}${a.observacao ? ` — ${a.observacao}` : ''}`,
     execute: (s, admin, a) => s.resolveWithdrawal(admin, a.id, a.decisao),
     run: async () => ({}),
   },
@@ -300,9 +301,15 @@ export const TOOLS: ToolDef[] = [
     name: 'alterar_configuracoes',
     level: 'confirmar',
     description:
-      'Prepara mudança nas configurações: commissionPercent (0–40), surgeEnabled, maxSurge (1–3), rideSearchTimeoutMin (3–60), indriveOpenTimeoutMin (5–240), pointsPerReal (0–10), pointsPerRedeem (20–10000). Só acontece quando o administrador aprovar.',
+      'Muda configurações: platformFeeMin e platformFeeMax (ganho da Froc por corrida, R$; padrão 2 a 8), platformFeeMaxPct (teto % da corrida), timeSurgeEnabled (dinâmico por horário), surgeEnabled (dinâmico por demanda), maxSurge (1–3), commissionPercent (caronas e fretes, 0–40), autoPayoutLimit (saque liberado sozinho até R$), rideSearchTimeoutMin, indriveOpenTimeoutMin, pointsPerReal, pointsPerRedeem, maxVehicleAgeYears. A autonomia da equipe só o dono muda.',
     parameters: obj({
-      commissionPercent: N('Comissão %'),
+      platformFeeMin: N('Ganho mínimo da Froc por corrida (R$)'),
+      platformFeeMax: N('Ganho máximo da Froc por corrida (R$)'),
+      platformFeeMaxPct: N('Teto do ganho da Froc em % da corrida'),
+      timeSurgeEnabled: B('Dinâmico por horário ligado'),
+      autoPayoutLimit: N('Saque liberado sozinho até (R$)'),
+      maxVehicleAgeYears: N('Idade máxima do veículo (anos)'),
+      commissionPercent: N('Comissão % (caronas e fretes)'),
       surgeEnabled: B('Tarifa dinâmica ligada'),
       maxSurge: N('Multiplicador máximo'),
       rideSearchTimeoutMin: N('Minutos procurando motorista'),
@@ -318,10 +325,37 @@ export const TOOLS: ToolDef[] = [
         .join(', ')}${justificativa ? ` — ${justificativa}` : ''}`;
     },
     execute: (s, admin, a) => {
-      const { justificativa: _j, ...rest } = a;
+      // A autonomia da equipe é decisão do dono: nenhum agente liga ou desliga.
+      const { justificativa: _j, agentAutonomy: _a, ...rest } = a;
       return s.updateSettings(admin, rest);
     },
     run: async () => ({}),
+  },
+  {
+    name: 'area_de_risco',
+    level: 'agir',
+    description:
+      'Cria ou atualiza uma área de risco (círculo no mapa). Corridas que começam ou terminam nela têm acréscimo (10–30%) que vai TODO para o motorista, e a taxa da Froc sobe R$ 1. Use dados reais (SOS, ocorrências relatadas, horários). Para desativar, active=false.',
+    parameters: obj(
+      {
+        id: S('id para atualizar (vazio para criar)'),
+        name: S('Nome da área'),
+        lat: N('Latitude do centro'),
+        lng: N('Longitude do centro'),
+        radiusKm: N('Raio em km (0,2 a 10)'),
+        surchargePct: N('Acréscimo % (0 a 50; normal 10 a 30)'),
+        when: S('"sempre" ou "noite" (19h–6h)'),
+        active: B('Ativa'),
+      },
+      ['name', 'lat', 'lng'],
+    ),
+    run: async (ctx, a) => ctx.service.saveRiskZone(ctx.auth, a),
+  },
+  {
+    name: 'areas_de_risco',
+    level: 'ler',
+    description: 'Lista as áreas de risco cadastradas.',
+    run: async (ctx) => ctx.service.listRiskZones(ctx.auth),
   },
 ];
 

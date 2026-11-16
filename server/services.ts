@@ -15,6 +15,8 @@
 import { CARGO_VEHICLE_TYPES } from '../src/data/cargoVehicles.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
+import { platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
+import type { PriceBreakdown, RiskZoneLike } from '../src/data/pricing.ts';
 import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, cancelFeePercent, waitingFeePercent } from '../src/data/ridePolicy.ts';
 import { formatCnpj, isValidCnpj, newWebhookSecret, validateWebhookUrl } from './merchants.ts';
 import type { WebhookDispatcher } from './merchants.ts';
@@ -182,7 +184,18 @@ export interface ServiceDeps {
    * Em produção required=true; os testes antigos ligam só quando testam isso.
    */
   identity?: { required?: boolean; verify?: CpfVerifier };
+  /** Envio automático de Pix (saques). Sem ele, a Equipe IA aprova e o Pix fica "a enviar". */
+  payouts?: PayoutGateway;
+  /** Consulta pública de CNPJ (aprovação automática de lojas). */
+  cnpjLookup?: (cnpj: string) => Promise<{ active: boolean; name: string; situation: string } | null>;
 }
+
+export interface PayoutGateway {
+  send(w: { id: string; amountCents: number; pixKey: string; pixKeyType: string; name: string }): Promise<{ ok: boolean; externalId?: string; error?: string }>;
+}
+
+/** Identidade de um agente da Equipe IA agindo pelas rotinas automáticas (vale como administração). */
+export const agentAuth = (id: string, name: string): AuthUser => ({ uid: `ia:${id}`, email: `ia+${id}@froc`, emailVerified: true, agent: name });
 
 /** Localização do motorista é considerada "fresca" por 3 minutos. */
 const LOCATION_FRESH_MS = 3 * 60 * 1000;
@@ -354,6 +367,7 @@ export class FrocService {
   private cfgLoadedAt = 0;
   private lastSweep = 0;
   private onlineCache: { at: number; users: UserDoc[] } = { at: 0, users: [] };
+  private riskCache: { at: number; zones: RiskZoneLike[] } = { at: 0, zones: [] };
 
   constructor(store: Store, deps: ServiceDeps = {}) {
     this.store = store;
@@ -636,8 +650,22 @@ export class FrocService {
   }
 
   /** Paga o prestador (100% menos a comissão) e registra o serviço concluído para os dois lados. */
-  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida') {
+  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida', fixedFeeCents?: number) {
     const pct = this.cfg.commissionPercent;
+    if (method === 'froc_pay' && escrowCents > 0 && typeof fixedFeeCents === 'number') {
+      // Modelo novo: a Froc fica com um valor fixo (R$ 2 a 8); o motorista com todo o resto.
+      const fee = Math.min(escrowCents, Math.max(0, fixedFeeCents));
+      this.creditEarning(tx, provider, escrowCents - fee, `Ganho · ${title} (taxa Froc ${brl(fee / 100)})`);
+      this.platformRevenue(tx, kind, escrowCents, fee);
+      provider.completedTrips += 1;
+      tx.update('users', provider.uid, { completedTrips: provider.completedTrips });
+      if (client && client.uid !== provider.uid) {
+        client.completedTrips += 1;
+        tx.update('users', client.uid, { completedTrips: client.completedTrips });
+        this.awardPoints(tx, client, escrowCents);
+      }
+      return;
+    }
     if (method === 'froc_pay' && escrowCents > 0) {
       this.creditEarning(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`);
     } else if (method === 'cash' && escrowCents > 0 && pct > 0) {
@@ -1087,7 +1115,10 @@ export class FrocService {
       this.store.query<UserDoc>('users', [['driverStatus', '==', 'pending']], 100),
       this.store.query<UserDoc>('users', [['truckerStatus', '==', 'pending']], 100),
       this.store.query<UserDoc>('users', [['merchantStatus', '==', 'pending']], 100),
-      this.store.query<Doc>('withdrawals', [['status', '==', 'pending']], 100),
+      Promise.all([
+        this.store.query<Doc>('withdrawals', [['status', '==', 'pending']], 100),
+        this.store.query<Doc>('withdrawals', [['status', '==', 'approved']], 100),
+      ]).then(([a, b]) => [...a, ...b]),
       this.store.count('users', []),
       this.store.query<Doc>('sos', [['status', '==', 'open']], 100),
       this.settings(),
@@ -1157,7 +1188,7 @@ export class FrocService {
         amount: toReais(Number(w.amountCents)),
         pixKey: String(w.pixKey),
         pixKeyType: String(w.pixKeyType || ''),
-        status: w.status as 'pending',
+        status: w.status as 'pending' | 'approved',
         createdAt: String(w.createdAt),
       })),
       totals: { users, pendingApplications: applications.length, pendingWithdrawals: withdrawals.length, openSos: sos.length },
@@ -1187,22 +1218,92 @@ export class FrocService {
     return { ok: true };
   }
 
+  /**
+   * Saque: "approved" (liberado: envia o Pix pelo gateway, se houver; senão fica "Pix a enviar"),
+   * "paid" (Pix feito) ou "rejected" (recusado: o valor volta). Agente não pode dizer que pagou
+   * sem gateway (só a pessoa que fez o Pix pode marcar como pago).
+   */
   async resolveWithdrawal(auth: AuthUser, id: unknown, decision: unknown) {
     this.requireAdmin(auth);
-    if (decision !== 'paid' && decision !== 'rejected') return fail(400, 'invalid_decision', 'Decisão inválida.');
+    let d = String(decision);
+    if (d !== 'paid' && d !== 'rejected' && d !== 'approved') return fail(400, 'invalid_decision', 'Decisão inválida.');
+    if (auth.agent && d === 'paid' && !this.deps.payouts) d = 'approved';
+    const w0 = (await this.store.get<Doc>('withdrawals', String(id))) ?? fail(404, 'not_found', 'Saque não encontrado.');
+    if (d !== 'rejected' && !['pending', 'approved'].includes(String(w0.status))) fail(409, 'not_pending', 'Este saque já foi resolvido.');
+    if (d === 'rejected' && w0.status !== 'pending' && w0.status !== 'approved') fail(409, 'not_pending', 'Este saque já foi resolvido.');
+    // Liberado e com gateway: envia o Pix de verdade agora.
+    let payout: { ok: boolean; externalId?: string; error?: string } | null = null;
+    if (d === 'approved' && this.deps.payouts) {
+      payout = await this.deps.payouts
+        .send({ id: String(w0.id), amountCents: Number(w0.amountCents), pixKey: String(w0.pixKey), pixKeyType: String(w0.pixKeyType || ''), name: String(w0.name) })
+        .catch((e) => ({ ok: false, error: String(e?.message || e) }));
+      if (payout.ok) d = 'paid';
+    }
     await this.store.transaction(async (tx) => {
       const w = await this.mustGet<Doc>(tx, 'withdrawals', String(id), 'Saque');
-      if (w.status !== 'pending') fail(409, 'not_pending', 'Este saque já foi resolvido.');
+      if (!['pending', 'approved'].includes(String(w.status))) fail(409, 'not_pending', 'Este saque já foi resolvido.');
       const user = await this.mustGet<UserDoc>(tx, 'users', String(w.uid), 'Usuário');
-      tx.update('withdrawals', String(id), { status: decision, resolvedBy: auth.email, resolvedAt: this.iso() });
-      if (decision === 'rejected') {
+      tx.update('withdrawals', String(id), {
+        status: d,
+        resolvedBy: auth.email,
+        resolvedAt: this.iso(),
+        ...(payout ? { payoutId: payout.externalId || '', payoutError: payout.error || '' } : {}),
+      });
+      if (d === 'rejected') {
         this.credit(tx, user, Number(w.amountCents), 'Saque recusado · valor devolvido', 'estorno');
         // Devolve também ao "pode sacar" (era ganho).
         tx.update('users', user.uid, { earnedCents: (user.earnedCents ?? 0) + Number(w.amountCents) });
       }
     });
-    await this.audit(auth, decision === 'paid' ? 'saque_pago' : 'saque_recusado', String(id));
-    return { ok: true };
+    await this.audit(auth, d === 'paid' ? 'saque_pago' : d === 'approved' ? 'saque_liberado' : 'saque_recusado', String(id), payout ? { gateway: payout } : {});
+    return { ok: true, status: d };
+  }
+
+  // ------------------------------------------------ Equipe IA no comando (rotinas)
+
+  /**
+   * Saques que a Equipe IA libera sozinha (regras fixas no código, a IA não decide no escuro):
+   * conta não bloqueada, CPF verificado, sem alerta de multiconta e valor até o limite.
+   * O resto fica para o agente Financeiro analisar.
+   */
+  async autoProcessWithdrawals(limit = 20) {
+    const cfg = await this.settings();
+    if (!cfg.agentAutonomy) return { liberados: 0, motivo: 'autonomia desligada' };
+    const ia = agentAuth('financeiro', 'Financeiro');
+    const pending = byNewest(await this.store.query<Doc>('withdrawals', [['status', '==', 'pending']], 200)).reverse().slice(0, limit);
+    let ok = 0;
+    const analise: string[] = [];
+    for (const w of pending) {
+      const user = await this.store.get<UserDoc>('users', String(w.uid));
+      const why: string[] = [];
+      if (!user || user.blocked) why.push('conta bloqueada');
+      if (user && user.cpfStatus !== 'verified') why.push('CPF não verificado');
+      if (user?.multiAccountFlag) why.push('alerta de multiconta');
+      if (Number(w.amountCents) > cfg.autoPayoutLimit * 100) why.push(`acima de ${brl(cfg.autoPayoutLimit)}`);
+      if (why.length) {
+        analise.push(`${w.id}: ${why.join(', ')}`);
+        continue;
+      }
+      await this.resolveWithdrawal(ia, w.id, 'approved').then(() => ok++).catch((e) => analise.push(`${w.id}: ${e.message}`));
+    }
+    return { liberados: ok, paraAnalise: analise };
+  }
+
+  /** Lojas: CNPJ ativo na consulta pública → aprovada; baixada/inapta/suspensa → recusada. */
+  async autoReviewMerchants(limit = 5) {
+    const cfg = await this.settings();
+    if (!cfg.agentAutonomy || !this.deps.cnpjLookup) return { conferidas: 0 };
+    const ia = agentAuth('cadastros', 'Analista de Cadastros');
+    const pending = (await this.store.query<UserDoc>('users', [['merchantStatus', '==', 'pending']], 50)).slice(0, limit);
+    let n = 0;
+    for (const u of pending) {
+      const r = await this.deps.cnpjLookup(String(u.merchantCnpj || '')).catch(() => null);
+      if (!r) continue;
+      n++;
+      if (r.active) await this.reviewApplication(ia, u.uid, 'merchant', 'approved', '');
+      else await this.reviewApplication(ia, u.uid, 'merchant', 'rejected', `CNPJ com situação "${r.situation}" na Receita. Regularize e envie de novo.`);
+    }
+    return { conferidas: n };
   }
 
   // ------------------------------------------------------- 1) corrida Uber/99
@@ -1222,8 +1323,9 @@ export class FrocService {
   }
 
   /** Taxa de cancelamento/não comparecimento vai para o motorista como ganho (menos a comissão). */
-  private payCancellation(tx: Tx, driver: UserDoc, feeCents: number, pct: number, label: string, kind: string, noShow = false) {
-    const cut = this.providerCut(feeCents);
+  private payCancellation(tx: Tx, driver: UserDoc, feeCents: number, pct: number, label: string, kind: string, noShow = false, fixedModel = false) {
+    // Modelo de taxa fixa: a taxa de cancelamento/não comparecimento é 100% do motorista.
+    const cut = fixedModel ? feeCents : this.providerCut(feeCents);
     this.creditEarning(tx, driver, cut, noShow ? `Passageiro não apareceu · ${label} (100%)` : `Taxa de cancelamento ${pct}% · ${label}`);
     this.platformRevenue(tx, `cancelamento_${kind}`, feeCents, feeCents - cut);
   }
@@ -1265,10 +1367,11 @@ export class FrocService {
     const method = paymentMethod(body.paymentMethod);
     const distanceKm = calculateDistanceKm(origin, destination);
     if (distanceKm > 300) fail(400, 'too_far', 'Para viagens longas, use Caronas.');
-    const durationMin = estimateDurationMin(distanceKm, category.id === 'froc_moto' ? 'moto' : 'urban');
-    const surge = await this.surgeAt(origin.lat, origin.lng);
-    const basePrice = Math.max(7.5, round2(category.baseFare + distanceKm * category.perKm + durationMin * category.perMin));
-    const price = round2(basePrice * surge);
+    // Preço estilo Uber: tarifa × (faixa de horário × demanda) + área de risco; a Froc fica com R$ 2–8.
+    const pricing = await this.priceFor(category.id, origin, destination);
+    const { durationMin } = pricing;
+    const surge = pricing.multiplier;
+    const price = pricing.total;
     const priceCents = toCents(price);
     const active = await this.store.query<Doc>('rides', [['passengerId', '==', auth.uid]], 200);
     if (active.some((r) => !r.delivery && ACTIVE_RIDE.includes(String(r.status))))
@@ -1295,6 +1398,9 @@ export class FrocService {
         priceCents,
         discountApplied: 0,
         surgeMultiplier: surge,
+        pricing: JSON.parse(JSON.stringify(pricing)),
+        platformFeeCents: toCents(pricing.platformFee),
+        driverEarning: pricing.driverEarning,
         originCell: this.geo.cellOf(origin.lat, origin.lng),
         paymentMethod: method,
         pinCode: String(randomInt(1000, 10000)),
@@ -1412,7 +1518,16 @@ export class FrocService {
           const passenger = await tx.get<UserDoc>('users', String(ride.passengerId));
           const amount = ride.paymentMethod === 'froc_pay' ? Number(ride.escrowCents) : Number(ride.priceCents);
           set({ status: 'completed', etaMin: 0, completedAt: this.iso(), escrowCents: 0 });
-          this.payProvider(tx, driver, passenger, amount, ride.paymentMethod as PaymentMethod, String(ride.categoryLabel), ride.delivery ? 'entrega' : 'corrida');
+          this.payProvider(
+            tx,
+            driver,
+            passenger,
+            amount,
+            ride.paymentMethod as PaymentMethod,
+            String(ride.categoryLabel),
+            ride.delivery ? 'entrega' : 'corrida',
+            typeof ride.platformFeeCents === 'number' ? Number(ride.platformFeeCents) : undefined,
+          );
           return { ride };
         }
         case 'cancel': {
@@ -1426,7 +1541,7 @@ export class FrocService {
             const driver = fee > 0 ? await this.mustGet<UserDoc>(tx, 'users', String(ride.driverId), 'Motorista') : null;
             set({ status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'passenger', cancellationFeePercent: pct, cancellationFee: toReais(fee) });
             if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · ${ride.categoryLabel} cancelada (taxa ${pct}%)` : `Estorno · ${ride.categoryLabel} cancelada`, 'estorno');
-            if (driver) this.payCancellation(tx, driver, fee, pct, String(ride.categoryLabel), ride.delivery ? 'entrega' : 'corrida');
+            if (driver) this.payCancellation(tx, driver, fee, pct, String(ride.categoryLabel), ride.delivery ? 'entrega' : 'corrida', false, typeof ride.platformFeeCents === 'number');
             return { ride };
           }
           if (isDriver) {
@@ -1455,7 +1570,7 @@ export class FrocService {
           const escrow = Number(ride.escrowCents || 0);
           const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
           set({ status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'no_show', cancellationFeePercent: 100, cancellationFee: toReais(escrow) });
-          if (escrow > 0) this.payCancellation(tx, driver, escrow, 100, String(ride.categoryLabel), 'corrida', true);
+          if (escrow > 0) this.payCancellation(tx, driver, escrow, 100, String(ride.categoryLabel), 'corrida', true, typeof ride.platformFeeCents === 'number');
           return { ride };
         }
         case 'message': {
@@ -1585,6 +1700,10 @@ export class FrocService {
   }
 
   async acceptInDriveOffer(auth: AuthUser, id: string, offerId: unknown) {
+    // Ganho da Froc no preço combinado (mesmo "leilão" de R$ 2–8 das corridas).
+    const pre = (await this.store.get<Doc>('indrive', id)) ?? fail(404, 'not_found', 'Pedido não encontrado.');
+    const chosen = ((pre.offers as Doc[]) || []).find((o) => o.id === offerId);
+    const feeInfo = await this.feeForAgreedPrice(Number(chosen?.offeredPrice || pre.passengerOffer || 0), pre.origin as GeoPoint, Number(pre.distanceKm || 0));
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
       if (r.passengerId !== auth.uid) fail(403, 'forbidden', 'Só quem fez o pedido pode aceitar.');
@@ -1593,6 +1712,8 @@ export class FrocService {
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
       const cents = toCents(Number(offer.offeredPrice));
       const patch: Doc = {
+        platformFeeCents: toCents(feeInfo.fee),
+        driverEarning: round2(Number(offer.offeredPrice) - feeInfo.fee),
         status: 'matched',
         acceptedOfferId: offer.id,
         driverId: offer.driverId,
@@ -1622,7 +1743,7 @@ export class FrocService {
       const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso() };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Corrida negociada', 'indrive');
+      this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Corrida negociada', 'indrive', typeof r.platformFeeCents === 'number' ? Number(r.platformFeeCents) : undefined);
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -1643,7 +1764,7 @@ export class FrocService {
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
       if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · negociação cancelada (taxa ${pct}%)` : 'Estorno · negociação cancelada', 'estorno');
-      if (driver) this.payCancellation(tx, driver, fee, pct, 'Corrida negociada', 'indrive');
+      if (driver) this.payCancellation(tx, driver, fee, pct, 'Corrida negociada', 'indrive', false, typeof r.platformFeeCents === 'number');
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -2066,19 +2187,91 @@ export class FrocService {
     return Math.min(cfg.maxSurge, Math.round(mult * 10) / 10);
   }
 
+  // ------------------------------------------- preço (estilo Uber) e ganho da Froc
+
+  private feeLimits() {
+    return { feeMin: this.cfg.platformFeeMin, feeMax: Math.max(this.cfg.platformFeeMin, this.cfg.platformFeeMax), feeMaxPct: this.cfg.platformFeeMaxPct };
+  }
+
+  async riskZones(): Promise<RiskZoneLike[]> {
+    if (Date.now() - this.riskCache.at > 60_000) {
+      const zones = (await this.store.query<Doc>('risk_zones', [], 500)).map((z) => z as unknown as RiskZoneLike);
+      this.riskCache = { at: Date.now(), zones };
+    }
+    return this.riskCache.zones;
+  }
+
+  /** Preço completo de uma categoria: tarifa, dinâmico (horário × demanda), área de risco e ganho da Froc. */
+  async priceFor(categoryId: string, origin: GeoPoint, destination: GeoPoint, demand?: number): Promise<PriceBreakdown & { distanceKm: number; durationMin: number }> {
+    const cfg = await this.settings();
+    const category = RIDE_CATEGORIES.find((c) => c.id === categoryId) ?? fail(400, 'invalid_category', 'Categoria inválida.');
+    const distanceKm = calculateDistanceKm(origin, destination);
+    const durationMin = estimateDurationMin(distanceKm, category.id === 'froc_moto' || category.id === 'froc_delivery' ? 'moto' : 'urban');
+    const base = category.baseFare + distanceKm * category.perKm + durationMin * category.perMin;
+    const risk = riskZoneFor([origin, destination], await this.riskZones(), this.now());
+    const p = priceRide({
+      base,
+      minimum: 7.5,
+      date: this.now(),
+      demand: demand ?? (await this.surgeAt(origin.lat, origin.lng)),
+      maxSurge: cfg.maxSurge,
+      timeSurgeEnabled: cfg.timeSurgeEnabled,
+      risk,
+      distanceKm,
+      limits: this.feeLimits(),
+    });
+    return { ...p, distanceKm, durationMin };
+  }
+
+  /** Ganho da Froc numa corrida com preço já definido (negociação e entregas). */
+  private async feeForAgreedPrice(price: number, origin: GeoPoint, distanceKm: number) {
+    await this.settings();
+    const risk = riskZoneFor([origin], await this.riskZones(), this.now());
+    const demand = await this.surgeAt(origin.lat, origin.lng);
+    return platformFee({ fare: price, band: timeBandAt(this.now()), demand, riskZone: Boolean(risk), distanceKm }, this.feeLimits());
+  }
+
+  /** Áreas de risco (agentes de segurança e preços cuidam delas). */
+  async saveRiskZone(auth: AuthUser, body: Record<string, unknown>) {
+    this.requireAdmin(auth);
+    const id = text(body.id, 60) || randomUUID();
+    const name = text(body.name, 80);
+    if (name.length < 3) fail(400, 'invalid_name', 'Dê um nome para a área (ex.: Comunidade X, zona norte).');
+    const zone: RiskZoneLike = {
+      id,
+      name,
+      lat: num(body.lat, -34.5, 5.9, 'latitude'),
+      lng: num(body.lng, -74.5, -28.5, 'longitude'),
+      radiusKm: round2(num(body.radiusKm ?? 1, 0.2, 10, 'raio')),
+      surchargePct: Math.round(num(body.surchargePct ?? 15, 0, 50, 'acréscimo')),
+      when: body.when === 'noite' ? 'noite' : 'sempre',
+      active: body.active !== false,
+    };
+    await this.store.set('risk_zones', id, { ...zone, updatedBy: auth.email, updatedAt: this.iso() });
+    this.riskCache.at = 0;
+    await this.audit(auth, 'area_de_risco_salva', id, zone as unknown as Record<string, unknown>);
+    return zone;
+  }
+
+  async listRiskZones(auth: AuthUser) {
+    this.requireAdmin(auth);
+    return { zones: await this.store.query<Doc>('risk_zones', [], 500) };
+  }
+
   async quoteRide(auth: AuthUser, body: Record<string, unknown>) {
     await this.ensureUser(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
-    const distanceKm = calculateDistanceKm(origin, destination);
     const surge = await this.surgeAt(origin.lat, origin.lng);
+    const quotes = await Promise.all(RIDE_CATEGORIES.map(async (c) => ({ categoryId: c.id, ...(await this.priceFor(c.id, origin, destination, surge)) })));
+    const first = quotes[0];
     return {
-      surge,
-      distanceKm,
-      prices: RIDE_CATEGORIES.map((c) => {
-        const durationMin = estimateDurationMin(distanceKm, c.id === 'froc_moto' ? 'moto' : 'urban');
-        return { categoryId: c.id, price: round2(Math.max(7.5, round2(c.baseFare + distanceKm * c.perKm + durationMin * c.perMin)) * surge) };
-      }),
+      surge: first.multiplier,
+      demand: surge,
+      band: first.band,
+      risk: first.risk,
+      distanceKm: first.distanceKm,
+      prices: quotes.map((q) => ({ categoryId: q.categoryId, price: q.total, platformFee: q.platformFee, driverEarning: q.driverEarning, breakdown: q })),
     };
   }
 
@@ -2147,7 +2340,10 @@ export class FrocService {
       deals++;
     }
     const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
-    return { ridesCancelled: rides, requestsExpired: deals, webhooks };
+    // Equipe IA no comando: saques dentro das regras e lojas com CNPJ ativo, sem esperar o dono.
+    const saques = await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) }));
+    const lojas = await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) }));
+    return { ridesCancelled: rides, requestsExpired: deals, webhooks, saques, lojas };
   }
 
   // ------------------------------------------------------------- SOS e pontos
@@ -2544,6 +2740,7 @@ export class FrocService {
     const vehicle = body.vehicle === 'moto' || body.vehicle === 'carro' ? body.vehicle : 'qualquer';
     const route = await this.deliveryRoute(merchant, body);
     const priceCents = toCents(route.price);
+    const deliveryFee = await this.feeForAgreedPrice(route.price, route.pickup, route.distanceKm);
     const id = randomUUID();
     const nowIso = this.iso();
     const share = { token: randomBytes(18).toString('base64url') };
@@ -2570,6 +2767,8 @@ export class FrocService {
         surgeMultiplier: route.surge,
         originCell: this.geo.cellOf(route.pickup.lat, route.pickup.lng),
         paymentMethod: 'froc_pay',
+        platformFeeCents: toCents(deliveryFee.fee),
+        driverEarning: round2(route.price - deliveryFee.fee),
         pinCode: '',
         deliveryPin: String(randomInt(1000, 10000)),
         trackToken: share.token,

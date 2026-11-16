@@ -15,6 +15,7 @@ import {
   SHARE_RULES,
 } from '../src/data/legal.ts';
 import { RIDE_POLICY_TEXT } from '../src/data/ridePolicy.ts';
+import { PRICING_TEXT } from '../src/data/pricing.ts';
 
 const EXTRA_STYLE = `<style>
 table{width:100%;border-collapse:collapse;margin:12px 0;font-size:15px}td,th{border:1px solid rgba(255,255,255,.12);padding:8px 10px;text-align:left}th{color:#f2c14e}
@@ -87,6 +88,7 @@ export function renderHowItWorks(site: string) {
 <h1>Como funciona a ${SITE_NAME}</h1>
 <p class="lead">Um app só para corridas, negociar o preço, caronas entre cidades, fretes e mudanças — e entregas para lojas. Em todo o Brasil.</p>
 ${HOW_IT_WORKS.map((h) => `<h2>${e(h.title)}</h2>${list(h.steps, true)}`).join('')}
+<h2>Quanto custa e quanto fica com cada um</h2>${list(PRICING_TEXT)}
 <h2>Segurança em toda viagem</h2>
 ${list([
   'Mapa ao vivo: veja os carros por perto antes de pedir e o seu motorista se movendo até você.',

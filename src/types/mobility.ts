@@ -59,6 +59,10 @@ export interface RideOrder {
   vehiclePlate?: string;
   etaMin?: number;
   createdAt: string;
+  /** Como o preço foi formado (tarifa, horário, demanda, área de risco) e quanto fica com a Froc e com o motorista. */
+  pricing?: import('../data/pricing.ts').PriceBreakdown;
+  /** Quanto o motorista recebe nesta corrida. */
+  driverEarning?: number;
   /** Selo do passageiro para o motorista: 'verificado' (CPF conferido) ou 'cpf' (cadastrado). */
   passengerVerified?: 'verificado' | 'cpf' | '';
   /** 'froc' = aviso automático da plataforma (ex.: motorista chegou). */
@@ -410,7 +414,8 @@ export interface WithdrawalView {
   amount: number;
   pixKey: string;
   pixKeyType?: string;
-  status: 'pending' | 'paid' | 'rejected';
+  /** approved = liberado pela Equipe IA, Pix a enviar (quando não há envio automático). */
+  status: 'pending' | 'approved' | 'paid' | 'rejected';
   createdAt: string;
 }
 
@@ -436,6 +441,12 @@ export interface PlatformSettingsView {
   pointsPerReal: number;
   pointsPerRedeem: number;
   maxVehicleAgeYears: number;
+  timeSurgeEnabled: boolean;
+  platformFeeMin: number;
+  platformFeeMax: number;
+  platformFeeMaxPct: number;
+  agentAutonomy: boolean;
+  autoPayoutLimit: number;
 }
 
 export interface AdminOverview {

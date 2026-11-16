@@ -52,6 +52,15 @@ interface Uber99PanelProps {
   onNeedTopUp?: () => void;
 }
 
+/** Cotação oficial do servidor: preço por categoria, faixa de horário, área de risco e divisão do valor. */
+interface Quote {
+  surge: number;
+  demand?: number;
+  band?: { id: string; label: string; pct: number };
+  risk?: { name: string; pct: number; amount: number } | null;
+  prices: { categoryId: string; price: number; platformFee?: number; driverEarning?: number }[];
+}
+
 // Importadas pelo Vite: o caminho /src/... não existe no site publicado.
 const FLEET_IMAGES: Record<RideCategoryId, string> = {
   froc_x: sedanImg,
@@ -85,7 +94,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const [stops, setStops] = useState<string[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [quote, setQuote] = useState<{ surge: number; prices: { categoryId: string; price: number }[] } | null>(null);
+  const [quote, setQuote] = useState<Quote | null>(null);
 
   // Preço oficial do servidor (inclui o preço dinâmico da região, calculado com H3).
   const needsDestination = isUnsetDestination(destination);
@@ -98,7 +107,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
     }
     let alive = true;
     const t = setTimeout(() => {
-      api<{ surge: number; prices: { categoryId: string; price: number }[] }>('/api/rides/quote', {
+      api<Quote>('/api/rides/quote', {
         body: { originPoint: origin, destinationPoint: destination, originId: origin.id, destinationId: destination.id },
       })
         .then((q) => alive && setQuote(q))
@@ -170,8 +179,8 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             </div>
           </div>
           <div className="text-right shrink-0">
-            <div className="text-[11px] text-slate-400">Repasse Uber/99</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono-num">{100 - (profile.commissionPercent ?? 12)}% líquido</div>
+            <div className="text-[11px] text-slate-400">Taxa Froc por corrida</div>
+            <div className="text-sm font-bold text-emerald-400 font-mono-num">R$ 2 a R$ 8 · o resto é seu</div>
           </div>
         </div>
 
@@ -415,7 +424,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono-num">{formatBRL(ride.price)}</div>
-                    <div className="text-[11px] text-slate-500 font-mono-num">Você recebe {formatBRL(ride.price * (1 - (profile.commissionPercent ?? 12) / 100))}</div>
+                    <div className="text-[11px] text-slate-500 font-mono-num">
+                      Você recebe {formatBRL(ride.driverEarning ?? ride.price * (1 - (profile.commissionPercent ?? 12) / 100))}
+                      {ride.pricing ? ` · taxa Froc ${formatBRL(ride.pricing.platformFee)}` : ''}
+                    </div>
+                    {ride.pricing?.risk && <div className="text-[11px] font-semibold text-amber-600">Área de risco: +{formatBRL(ride.pricing.risk.amount)} para você</div>}
                   </div>
                 </div>
                 <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
@@ -649,11 +662,25 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               <span className="font-semibold text-slate-900 dark:text-white">Escolha sua categoria</span>
               <span className="font-mono-num">{distanceKm} km estimados</span>
             </div>
-            {quote && quote.surge > 1 && (
-              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                Alta demanda na sua região: preço {quote.surge.toFixed(1)}x. Ele volta ao normal quando mais motoristas ficam disponíveis.
+            {quote && (quote.surge > 1 || quote.risk) && (
+              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                {quote.band && quote.band.pct > 0 && (
+                  <div>
+                    {quote.band.label}: +{quote.band.pct}% no preço.
+                  </div>
+                )}
+                {(quote.demand ?? 1) > 1 && <div>Muita procura na sua região agora ({(quote.demand ?? 1).toFixed(1)}x). O preço volta ao normal quando mais motoristas ficam livres.</div>}
+                {quote.risk && <div>Área com acréscimo de segurança: +{quote.risk.pct}%, que vai inteiro para o motorista.</div>}
               </div>
             )}
+            {quote && (() => {
+              const q = quote.prices.find((p) => p.categoryId === selectedCat);
+              return q?.platformFee != null && q.driverEarning != null ? (
+                <div className="text-[11px] text-slate-500">
+                  Desta corrida: motorista recebe <strong className="font-mono-num">{formatBRL(q.driverEarning)}</strong> · Froc fica com <strong className="font-mono-num">{formatBRL(q.platformFee)}</strong>.
+                </div>
+              ) : null;
+            })()}
 
             <div className="space-y-2">
               {RIDE_CATEGORIES.map((cat) => {
