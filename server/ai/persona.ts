@@ -8,6 +8,7 @@ import { RIDE_CATEGORIES } from '../../src/data/locations.ts';
 import { CARGO_VEHICLES } from '../../src/data/cargoVehicles.ts';
 import type { PlatformSettings } from '../settings.ts';
 import { REDEEM_VALUE_CENTS } from '../settings.ts';
+import { legalKnowledgeText } from '../../src/data/legal.ts';
 
 export const FROC_VOICE = `
 [VOZ DA MARCA FROC — vale para todos os agentes]
@@ -62,8 +63,10 @@ CARTEIRA E PAGAMENTOS
 
 CADASTRO E CONTA
 - Entrar com Google ou e-mail e senha. Confirmar o e-mail pelo link (botão "Enviar link de confirmação" na aba Conta).
-- Motorista: envia CNH e CRLV, modelo/cor e placa; fica "em análise" até a equipe aprovar.
-- Transportador: CNH, CRLV, comprovante ANTT e número do RNTRC, tipo de veículo e placa.
+- Motorista (carro ou moto): envia CNH com EAR, CRLV e certidão negativa de antecedentes criminais; informa modelo/cor, ano de fabricação, placa, cidade/UF de trabalho e validade da CNH; marca as declarações legais (EAR, INSS, seguro APP e, para moto, Lei 12.009). Fica "em análise" até a equipe aprovar. Ano do veículo é conferido automaticamente pela regra da cidade (padrão Froc: até ${cfg.maxVehicleAgeYears} anos).
+- Transportador: CNH com EAR, CRLV, comprovante ANTT, certidão de antecedentes, número do RNTRC, tipo de veículo e placa; declara conhecer o CIOT e o piso mínimo de frete da ANTT.
+- Loja (Froc Entregas): Conta > Froc para lojas; CNPJ (MEI aceito), telefone, categoria e endereço de coleta. Aprovada, chama entregas pelo painel ou pela API (/desenvolvedores).
+- CNH vencida: o motorista não consegue ficar online até enviar a nova pelo Atendimento.
 - Fotos grandes são reduzidas automaticamente; PDF até 3 MB.
 
 SEGURANÇA
@@ -74,5 +77,5 @@ SEGURANÇA
 ADMINISTRAÇÃO (só para a equipe)
 - Painel Admin: Pendências (cadastros e saques), SOS, Usuários (bloquear/desbloquear), Relatórios, Configurações (comissão ${cfg.commissionPercent}%, tarifa dinâmica, tempos, pontos), Equipe IA, Atendimento e Blog.
 - Prazos automáticos rodam pelo agendador (cron) a cada 5 min.
-`;
+${legalKnowledgeText(cfg.maxVehicleAgeYears)}`;
 }

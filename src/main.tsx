@@ -1,9 +1,12 @@
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { TrackPage } from './components/TrackPage.tsx';
 import { ErrorBoundary, installGlobalErrorReporting, reportClientError } from './components/ErrorBoundary.tsx';
 import './index.css';
 
 installGlobalErrorReporting();
+
+const trackToken = /^\/acompanhar\/([A-Za-z0-9_-]{20,40})\/?$/.exec(window.location.pathname)?.[1] || '';
 
 createRoot(document.getElementById('root')!, {
   // Erros que o React pega fora da tela (efeitos, limpeza) também vão para a equipe.
@@ -18,6 +21,7 @@ createRoot(document.getElementById('root')!, {
   },
 }).render(
   <ErrorBoundary>
-    <App />
+    {/* Link público de acompanhamento (/acompanhar/:token): abre sem login. */}
+    {trackToken ? <TrackPage token={trackToken} /> : <App />}
   </ErrorBoundary>,
 );

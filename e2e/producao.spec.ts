@@ -49,7 +49,7 @@ test.describe('Produção', () => {
   });
 
   test('páginas de serviço e blog têm título, descrição, canonical e dados estruturados', async ({ page }) => {
-    for (const path of ['/corridas-por-aplicativo', '/caronas-intermunicipais', '/fretes-e-mudancas', '/seja-motorista', '/blog']) {
+    for (const path of ['/corridas-por-aplicativo', '/caronas-intermunicipais', '/fretes-e-mudancas', '/seja-motorista', '/blog', '/como-funciona', '/regras-e-requisitos', '/perguntas-frequentes', '/desenvolvedores']) {
       await page.goto(path);
       await expect(page.locator('h1')).toHaveCount(1);
       expect((await page.title()).length).toBeGreaterThan(20);
@@ -59,6 +59,28 @@ test.describe('Produção', () => {
     }
     const rss = await page.request.get('/rss.xml');
     expect(await rss.text()).toContain('<rss');
+  });
+
+  test('regras e leis: EAR, ano do veículo e lojas aparecem para o público', async ({ page }) => {
+    await page.goto('/regras-e-requisitos');
+    await expect(page.getByText(/EAR/).first()).toBeVisible();
+    await expect(page.getByText(/até 8 anos/).first()).toBeVisible();
+    await page.goto('/perguntas-frequentes');
+    expect(await page.locator('details').count()).toBeGreaterThan(8);
+  });
+
+  test('API de lojas e acompanhamento por link: protegidos', async ({ request, page }) => {
+    const noKey = await request.post('/api/v1/deliveries', { data: {} });
+    expect(noKey.status()).toBe(401);
+    expect((await noKey.json()).code).toBe('invalid_api_key');
+    const badKey = await request.get('/api/v1/me', { headers: { Authorization: 'Bearer froc_live_chave_inventada_para_teste_123456' } });
+    expect(badKey.status()).toBe(401);
+    const track = await request.get('/api/track/token-que-nao-existe-123456789');
+    expect([404, 410]).toContain(track.status());
+    expect(track.headers()['cache-control']).toContain('no-store');
+    for (const path of ['/api/drivers/nearby?lat=-23.5&lng=-46.6', '/api/merchant/keys']) expect((await request.get(path)).status(), path).toBe(401);
+    await page.goto('/acompanhar/token-que-nao-existe-123456789');
+    await expect(page.getByText(/expirou|inválido/i)).toBeVisible({ timeout: 15_000 });
   });
 
   test('login real com conta de teste e atendimento (opcional)', async ({ page }) => {

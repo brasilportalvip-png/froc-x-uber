@@ -17,7 +17,396 @@ var CARGO_VEHICLES = [
 var CARGO_VEHICLE_TYPES = CARGO_VEHICLES.map((v) => v.type);
 
 // server/services.ts
-import { randomUUID, randomInt } from "node:crypto";
+import { createHash as createHash2, randomBytes as randomBytes2, randomUUID as randomUUID2, randomInt } from "node:crypto";
+
+// src/data/legal.ts
+var LEGAL_UPDATED = "2026-11-16";
+var DEFAULT_MAX_VEHICLE_AGE = 10;
+var CITY_VEHICLE_AGE = [
+  { city: "S\xE3o Paulo", state: "SP", maxYears: 8, note: "Secretaria Municipal de Mobilidade e Tr\xE2nsito (SMT): at\xE9 8 anos de fabrica\xE7\xE3o." },
+  { city: "Campinas", state: "SP", maxYears: 10, note: "Regra municipal: at\xE9 10 anos de fabrica\xE7\xE3o." },
+  { city: "Fortaleza", state: "CE", maxYears: 10, note: "Regra municipal: at\xE9 10 anos de fabrica\xE7\xE3o." }
+];
+var norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+function vehicleAgeLimit(city, state, frocDefault = DEFAULT_MAX_VEHICLE_AGE) {
+  const rule = CITY_VEHICLE_AGE.find((c) => norm(c.city) === norm(city) && (!state || norm(c.state) === norm(state)));
+  if (rule && rule.maxYears < frocDefault) return { maxYears: rule.maxYears, source: rule.note };
+  return { maxYears: frocDefault, source: rule ? rule.note : `Padr\xE3o Froc: at\xE9 ${frocDefault} anos de fabrica\xE7\xE3o.` };
+}
+function minVehicleYear(maxYears, now3 = /* @__PURE__ */ new Date()) {
+  return now3.getFullYear() - maxYears;
+}
+var REQUIREMENTS = [
+  {
+    id: "motorista",
+    title: "Motorista de aplicativo (corridas, negocia\xE7\xE3o e caronas)",
+    summary: "A lei federal do transporte remunerado privado individual de passageiros exige CNH com EAR, ve\xEDculo dentro das regras da cidade, CRLV em dia e certid\xE3o negativa de antecedentes criminais.",
+    items: [
+      'CNH categoria B ou superior com a observa\xE7\xE3o EAR ("exerce atividade remunerada") impressa no documento. Sem EAR, o cadastro \xE9 recusado. A EAR \xE9 inclu\xEDda no Detran do seu estado, com exame psicol\xF3gico.',
+      "CNH dentro da validade. Quando a CNH vence, o app deixa voc\xEA offline at\xE9 enviar a nova.",
+      "Ve\xEDculo com idade m\xE1xima permitida na sua cidade. Regra geral da Froc: at\xE9 10 anos de fabrica\xE7\xE3o. Onde a prefeitura \xE9 mais r\xEDgida, vale a regra dela (ex.: S\xE3o Paulo, at\xE9 8 anos).",
+      "CRLV (documento do ve\xEDculo) emitido e em dia, com licenciamento do ano.",
+      "Certid\xE3o negativa de antecedentes criminais (emitida gr\xE1tis pela internet: Pol\xEDcia Federal e Tribunal de Justi\xE7a do seu estado).",
+      "Inscri\xE7\xE3o no INSS como contribuinte individual (ou MEI, quando a atividade permitir). \xC9 exig\xEAncia da lei para quem dirige por aplicativo.",
+      "Seguro de Acidentes Pessoais a Passageiros (APP), conforme exigido pela prefeitura.",
+      "Cadastro municipal, curso ou vistoria quando a sua cidade exigir (algumas capitais exigem). Confira na prefeitura.",
+      "Padr\xE3o de qualidade Froc: carro com 4 portas, 5 lugares, ar-condicionado funcionando, sem avarias aparentes e limpo."
+    ],
+    sources: [
+      "Lei 12.587/2012 (Pol\xEDtica Nacional de Mobilidade Urbana), arts. 11-A e 11-B, inclu\xEDdos pela Lei 13.640/2018",
+      "C\xF3digo de Tr\xE2nsito Brasileiro (Lei 9.503/1997), art. 147, \xA75\xBA (observa\xE7\xE3o EAR na CNH)",
+      "Decretos e portarias de cada munic\xEDpio sobre transporte por aplicativo"
+    ]
+  },
+  {
+    id: "moto",
+    title: "Mototaxista e motoboy (Froc Moto e entregas)",
+    summary: "Transporte de passageiro ou de entrega em moto segue a Lei 12.009/2009 e as normas do CONTRAN, al\xE9m da autoriza\xE7\xE3o da prefeitura.",
+    items: [
+      "Idade m\xEDnima de 21 anos.",
+      "Habilita\xE7\xE3o na categoria A h\xE1 pelo menos 2 anos, com EAR.",
+      "Aprova\xE7\xE3o no curso especializado de mototaxista/motofretista reconhecido pelo Detran.",
+      "Colete de seguran\xE7a com faixas refletivas e capacete com faixas refletivas (e capacete extra higienizado para o passageiro).",
+      'Moto com protetor de motor ("mata-cachorro") e antena corta-pipa, e registro na categoria exigida pela prefeitura (em muitas cidades, placa de aluguel).',
+      "Em algumas cidades o motot\xE1xi por aplicativo \xE9 proibido ou depende de autoriza\xE7\xE3o municipal. A Froc s\xF3 libera a categoria Froc Moto onde for permitido.",
+      "Moto n\xE3o leva carga acima de 20 kg nem volumes que atrapalhem a pilotagem."
+    ],
+    sources: ["Lei 12.009/2009 (mototaxista e motofretista)", "Resolu\xE7\xF5es do CONTRAN sobre motot\xE1xi e motofrete", "Lei e decreto do munic\xEDpio"]
+  },
+  {
+    id: "carga",
+    title: "Transportador de carga (fretes, mudan\xE7as e retorno vazio)",
+    summary: "Transporte remunerado de carga de terceiros exige registro na ANTT (RNTRC), CIOT antes de cada viagem e respeito ao piso m\xEDnimo de frete da ANTT.",
+    items: [
+      "CNH compat\xEDvel com o ve\xEDculo (B para utilit\xE1rio e pick-up; C, D ou E para caminh\xF5es, conforme o peso), com EAR.",
+      "RNTRC (Registro Nacional de Transportadores Rodovi\xE1rios de Cargas) ativo na ANTT, obrigat\xF3rio para frete pago de carga de terceiros. Quem leva a pr\xF3pria carga n\xE3o precisa.",
+      "CRLV em dia. Para frete remunerado o ve\xEDculo deve estar no nome do transportador (ou com contrato registrado) e na categoria exigida.",
+      "CIOT (C\xF3digo Identificador da Opera\xE7\xE3o de Transporte) gerado antes de cada viagem contratada, quando a lei exigir.",
+      "Piso m\xEDnimo de frete da ANTT: nenhum frete pode ser contratado abaixo dele. Pela Lei 15.485/2026, plataformas e intermediadores que ofertam frete abaixo do piso tamb\xE9m respondem. A Froc mostra o piso e bloqueia lances abaixo do m\xEDnimo da plataforma.",
+      "Vale-ped\xE1gio: em frete rodovi\xE1rio, o ped\xE1gio \xE9 pago pelo contratante (embarcador), \xE0 parte do frete.",
+      "Certid\xE3o negativa de antecedentes criminais (padr\xE3o de seguran\xE7a Froc para quem entra na casa do cliente em mudan\xE7as).",
+      "Proibido transportar produto perigoso sem a licen\xE7a e o curso espec\xEDfico (MOPP), animais vivos sem documento sanit\xE1rio e qualquer carga ilegal."
+    ],
+    sources: [
+      "Lei 11.442/2007 (transporte rodovi\xE1rio de cargas e RNTRC)",
+      "Lei 13.703/2018 (Pol\xEDtica Nacional de Pisos M\xEDnimos do Frete)",
+      "Lei 15.485/2026 (piso m\xEDnimo obrigat\xF3rio, CIOT e responsabilidade de plataformas)",
+      "Lei 10.209/2001 (vale-ped\xE1gio obrigat\xF3rio)",
+      "Resolu\xE7\xF5es da ANTT"
+    ]
+  },
+  {
+    id: "lojista",
+    title: "Lojas, restaurantes e lanchonetes (Froc Entregas)",
+    summary: "Qualquer com\xE9rcio com CNPJ (inclusive MEI) pode integrar o sistema e chamar entregadores da Froc automaticamente.",
+    items: [
+      "CNPJ ativo (MEI aceito). A equipe Froc confere antes de liberar.",
+      "Endere\xE7o de coleta real (onde o entregador retira o pedido).",
+      "A loja \xE9 respons\xE1vel pelo conte\xFAdo, embalagem e nota fiscal do pedido.",
+      "Proibido enviar armas, muni\xE7\xE3o, drogas, explosivos, inflam\xE1veis, animais e qualquer item ilegal.",
+      "Bebida alco\xF3lica e cigarro s\xF3 podem ser entregues a maiores de 18 anos: o entregador pode pedir documento e devolver o pedido se n\xE3o houver comprova\xE7\xE3o.",
+      "At\xE9 20 kg por entrega de moto; acima disso, use Cargas.",
+      "A entrega \xE9 paga pela carteira da loja: o valor fica retido e s\xF3 vai para o entregador quando o cliente informa o c\xF3digo de entrega."
+    ],
+    sources: ["Estatuto da Crian\xE7a e do Adolescente, art. 243 (venda de bebida a menores)", "C\xF3digo de Defesa do Consumidor", "Termos de uso Froc"]
+  },
+  {
+    id: "passageiro",
+    title: "Passageiros e clientes",
+    summary: "Conta pessoal, maior de 18 anos, com respeito ao motorista e \xE0s regras de tr\xE2nsito.",
+    items: [
+      "Ter 18 anos ou mais para criar conta. Menores s\xF3 viajam acompanhados de um adulto respons\xE1vel.",
+      "Usar cinto de seguran\xE7a (obrigat\xF3rio para todos no ve\xEDculo).",
+      "Informar o PIN de embarque s\xF3 depois de entrar no carro certo (confira placa, modelo e foto).",
+      "N\xE3o levar objetos ilegais ou perigosos. Animais de estima\xE7\xE3o s\xF3 com combina\xE7\xE3o pr\xE9via com o motorista (c\xE3o-guia \xE9 sempre aceito, por lei).",
+      "Respeito: ass\xE9dio, discrimina\xE7\xE3o ou viol\xEAncia geram bloqueio imediato e registro na pol\xEDcia."
+    ],
+    sources: ["C\xF3digo de Tr\xE2nsito Brasileiro, art. 65 (cinto)", "Lei 11.126/2005 (c\xE3o-guia)", "Termos de uso Froc"]
+  }
+];
+var RECORDING_RULES = {
+  title: "Gravar a viagem (\xE1udio ou v\xEDdeo pelo pr\xF3prio celular)",
+  items: [
+    "Passageiro e motorista podem gravar o \xE1udio ou filmar a viagem pelo pr\xF3prio celular, direto no app, com um toque.",
+    "A grava\xE7\xE3o fica S\xD3 no seu celular. A Froc n\xE3o recebe, n\xE3o guarda e n\xE3o v\xEA o arquivo.",
+    "Quando algu\xE9m come\xE7a a gravar, a outra pessoa recebe um aviso no app. Transpar\xEAncia evita conflito.",
+    "No Brasil, a grava\xE7\xE3o feita por quem participa da conversa \xE9 prova v\xE1lida (STF, RE 583.937). Use para sua seguran\xE7a e para se defender.",
+    "N\xE3o publique a grava\xE7\xE3o em redes sociais nem exponha a outra pessoa: isso pode violar o direito de imagem e a LGPD. Entregue \xE0 pol\xEDcia ou \xE0 Froc (no Atendimento) quando houver ocorr\xEAncia.",
+    "O navegador s\xF3 grava com o app aberto na tela. Mantenha o celular desbloqueado e com bateria; o app evita que a tela apague durante a grava\xE7\xE3o."
+  ]
+};
+var SHARE_RULES = {
+  title: "Compartilhar a viagem com algu\xE9m de confian\xE7a",
+  items: [
+    'Durante a corrida, toque em "Compartilhar viagem" e envie o link pelo WhatsApp ou SMS.',
+    "Quem recebe o link acompanha o carro no mapa em tempo real, sem precisar baixar nada nem criar conta.",
+    "O link mostra: situa\xE7\xE3o da viagem, partida, destino, primeiro nome do motorista, modelo, cor e placa do carro. Nunca mostra telefones, e-mails ou valores.",
+    "O link para de mostrar a localiza\xE7\xE3o quando a viagem termina e expira em at\xE9 24 horas."
+  ]
+};
+var QUALITY_CONTROL = [
+  "Todo motorista, motoboy e transportador passa por an\xE1lise manual de documentos antes de ser liberado (CNH com EAR, CRLV, antecedentes e, em cargas, RNTRC).",
+  "Ano do ve\xEDculo conferido no cadastro conforme a regra da cidade.",
+  "CNH com validade: vencida, o motorista fica offline at\xE9 atualizar.",
+  "Avalia\xE7\xE3o dos dois lados em toda viagem. Motorista com m\xE9dia abaixo de 4,5 depois de 20 avalia\xE7\xF5es entra em revis\xE3o pela equipe.",
+  "PIN de embarque: a viagem s\xF3 come\xE7a com o c\xF3digo que o passageiro informa no carro certo.",
+  "Bot\xE3o SOS com localiza\xE7\xE3o para a central, liga\xE7\xE3o para o 190 e compartilhamento da viagem.",
+  "Grava\xE7\xE3o de \xE1udio e v\xEDdeo pelo pr\xF3prio celular, com aviso \xE0 outra parte.",
+  "Valores pagos pela carteira ficam retidos at\xE9 o servi\xE7o terminar; cancelamento devolve.",
+  "Registro de auditoria de toda a\xE7\xE3o da equipe e dos agentes de IA."
+];
+var HOW_IT_WORKS = [
+  {
+    title: "Corridas (como Uber e 99)",
+    steps: [
+      "Abra o app: a partida j\xE1 vem com o seu endere\xE7o atual.",
+      "Digite o destino, escolha a categoria e veja o pre\xE7o antes de pedir.",
+      "Pague com a carteira Froc (Pix ou cart\xE3o) ou em dinheiro.",
+      "Acompanhe o carro chegando no mapa, confira placa e modelo e informe o PIN ao motorista.",
+      "Durante a viagem: chat, SOS, grava\xE7\xE3o e link para a fam\xEDlia acompanhar.",
+      "No fim, avalie o motorista. O valor s\xF3 \xE9 liberado para ele quando a corrida termina."
+    ]
+  },
+  {
+    title: "Negociar (como inDrive)",
+    steps: [
+      "Informe partida, destino e quanto quer pagar (h\xE1 um piso que cobre combust\xEDvel e tempo).",
+      "Motoristas pr\xF3ximos mandam propostas; voc\xEA escolhe a melhor.",
+      "Depois do acordo, tudo funciona como uma corrida: mapa ao vivo, SOS e compartilhamento."
+    ]
+  },
+  {
+    title: "Caronas (como BlaBlaCar)",
+    steps: [
+      "Motoristas aprovados publicam viagens entre cidades com data, hor\xE1rio, vagas e pre\xE7o por vaga.",
+      "Voc\xEA reserva pagando pela carteira; o valor fica retido.",
+      "Viagem feita, o motorista recebe. Cancelou, o dinheiro volta."
+    ]
+  },
+  {
+    title: "Cargas (fretes, mudan\xE7as e retorno vazio)",
+    steps: [
+      "Descreva a carga (a calculadora de cubagem sugere o ve\xEDculo) e o or\xE7amento.",
+      "Transportadores com RNTRC d\xE3o lances; voc\xEA escolhe.",
+      "Ou reserve um caminh\xE3o que volta vazio na sua rota, mais barato.",
+      "O pagamento fica retido at\xE9 a entrega confirmada."
+    ]
+  },
+  {
+    title: "Froc Entregas para lojas",
+    steps: [
+      "A loja cria a conta, envia o CNPJ e o endere\xE7o de coleta.",
+      "Liberada, chama entregas pelo painel ou integra o sistema dela pela API (com aviso autom\xE1tico de status por webhook).",
+      "O cliente recebe um link para acompanhar o entregador e um c\xF3digo de entrega.",
+      "O entregador s\xF3 conclui com o c\xF3digo; o valor sai da carteira da loja e vai para ele."
+    ]
+  }
+];
+var FAQ = [
+  ["Preciso ter EAR na CNH para dirigir na Froc?", "Sim. A lei exige a observa\xE7\xE3o EAR (exerce atividade remunerada) na CNH de quem transporta passageiros ou carga por dinheiro. Sem EAR o cadastro \xE9 recusado. Voc\xEA inclui a EAR no Detran do seu estado."],
+  ["Qual o ano m\xEDnimo do carro?", `A regra geral da Froc \xE9 at\xE9 ${DEFAULT_MAX_VEHICLE_AGE} anos de fabrica\xE7\xE3o. Se a sua cidade for mais r\xEDgida, vale a regra dela: em S\xE3o Paulo, por exemplo, at\xE9 8 anos. O app confere no cadastro.`],
+  ["Que documentos o motorista envia?", "CNH com EAR (foto ou PDF), CRLV do ve\xEDculo e certid\xE3o negativa de antecedentes criminais, al\xE9m de modelo, cor, ano e placa. Tamb\xE9m declara a inscri\xE7\xE3o no INSS e o seguro APP exigidos por lei."],
+  ["Moto pode rodar na Froc?", "Sim, como Froc Moto (passageiro) ou entregas, seguindo a Lei 12.009/2009: 21 anos ou mais, 2 anos de habilita\xE7\xE3o na categoria A, curso de mototaxista/motofretista e equipamentos obrigat\xF3rios. Onde a prefeitura pro\xEDbe motot\xE1xi, s\xF3 entregas."],
+  ["Transportador de carga precisa de qu\xEA?", "CNH compat\xEDvel com EAR, CRLV, RNTRC ativo na ANTT, CIOT antes de cada viagem e respeitar o piso m\xEDnimo de frete da ANTT."],
+  ["Posso gravar a viagem?", "Pode. Passageiro e motorista gravam \xE1udio ou v\xEDdeo pelo pr\xF3prio celular, direto no app. O arquivo fica s\xF3 no seu aparelho e a outra parte recebe um aviso. N\xE3o publique em redes sociais."],
+  ["Como minha fam\xEDlia acompanha a viagem?", 'Toque em "Compartilhar viagem" durante a corrida e mande o link. A pessoa v\xEA o carro no mapa em tempo real, sem baixar nada. O link expira quando a viagem acaba.'],
+  ["O mapa mostra os carros andando?", "Sim. Antes de pedir, voc\xEA v\xEA os motoristas online perto de voc\xEA (posi\xE7\xE3o aproximada, por privacidade). Depois do aceite, v\xEA o carro do seu motorista se movendo at\xE9 voc\xEA e durante a viagem."],
+  ["Minha loja pode usar a entrega da Froc?", "Pode. Crie a conta, envie o CNPJ na aba Conta > Froc para lojas e, depois de aprovado, chame entregas pelo painel ou integre seu sistema pela API (veja /desenvolvedores)."],
+  ["Quanto a Froc cobra?", "A comiss\xE3o aparece no app e \xE9 definida pela administra\xE7\xE3o. O prestador v\xEA exatamente quanto vai receber antes de aceitar."],
+  ["Como funciona o pagamento?", "Pela carteira Froc (recarga por Pix ou cart\xE3o via Mercado Pago) ou em dinheiro nas corridas. Pela carteira, o valor fica retido e s\xF3 \xE9 liberado quando o servi\xE7o termina."],
+  ["E se o motorista n\xE3o aparecer?", "Se ningu\xE9m aceitar no tempo limite, o pedido \xE9 cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila."],
+  ["Como funciona o controle de qualidade?", "Documentos conferidos por pessoas, CNH e ve\xEDculo dentro da validade e da idade permitida, avalia\xE7\xE3o dos dois lados e revis\xE3o de quem fica com nota baixa."],
+  ["Em emerg\xEAncia, o que fa\xE7o?", "Ligue 190 (Pol\xEDcia) ou 192 (SAMU). No app, toque em SOS: a central Froc recebe sua localiza\xE7\xE3o e os dados da viagem."]
+];
+function legalKnowledgeText(maxVehicleAgeYears = DEFAULT_MAX_VEHICLE_AGE) {
+  const req = REQUIREMENTS.map((s) => `- ${s.title}: ${s.summary}
+${s.items.map((i) => `  \u2022 ${i}`).join("\n")}
+  Base legal: ${s.sources.join("; ")}.`).join("\n");
+  const cities = CITY_VEHICLE_AGE.map((c) => `${c.city}/${c.state}: at\xE9 ${c.maxYears} anos`).join("; ");
+  return `
+[REGRAS, LEIS E EXIG\xCANCIAS \u2014 atualizado em ${LEGAL_UPDATED}; p\xE1ginas p\xFAblicas: /regras-e-requisitos, /como-funciona, /perguntas-frequentes, /desenvolvedores]
+${req}
+- Idade do ve\xEDculo: padr\xE3o Froc atual at\xE9 ${maxVehicleAgeYears} anos de fabrica\xE7\xE3o; vale a regra da cidade quando mais r\xEDgida (${cities}). Para cidades n\xE3o listadas, oriente conferir na prefeitura; n\xE3o invente a regra de uma cidade.
+- DPVAT/SPVAT: n\xE3o existe mais cobran\xE7a (o seguro obrigat\xF3rio foi extinto em 2024). N\xE3o pe\xE7a DPVAT.
+- ${RECORDING_RULES.title}: ${RECORDING_RULES.items.join(" ")}
+- ${SHARE_RULES.title}: ${SHARE_RULES.items.join(" ")}
+- Controle de qualidade: ${QUALITY_CONTROL.join(" ")}
+- Mapa: antes de pedir, mostra motoristas online pr\xF3ximos com posi\xE7\xE3o aproximada (privacidade); ap\xF3s o aceite, o carro do motorista se move ao vivo (posi\xE7\xE3o enviada pelo celular dele a cada poucos segundos).
+- Froc Entregas: lojas com CNPJ aprovado chamam entregas pelo painel (Conta > Froc para lojas) ou por API REST (/api/v1, chave "froc_live_...", webhooks assinados com HMAC). Documenta\xE7\xE3o em /desenvolvedores.
+- Voc\xEA N\xC3O \xE9 advogado: em d\xFAvida jur\xEDdica espec\xEDfica, explique a regra geral, cite a lei e recomende confirmar com a prefeitura, o Detran, a ANTT ou um advogado.
+`;
+}
+
+// server/merchants.ts
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+var API_KEY_PREFIX = "froc_live_";
+var MAX_ACTIVE_KEYS = 5;
+var RETRY_MINUTES = [1, 5, 15, 60, 180, 720];
+var fail = (status, code2, message) => {
+  throw new AppError(status, code2, message);
+};
+var sha256 = (s) => createHash("sha256").update(s).digest("hex");
+function isValidCnpj(value) {
+  const d = String(value ?? "").replace(/\D/g, "");
+  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const calc = (len) => {
+    const weights = len === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    const sum = weights.reduce((acc, w, i) => acc + Number(d[i]) * w, 0);
+    const r = sum % 11;
+    return r < 2 ? 0 : 11 - r;
+  };
+  return calc(12) === Number(d[12]) && calc(13) === Number(d[13]);
+}
+var formatCnpj = (value) => {
+  const d = value.replace(/\D/g, "");
+  return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : value;
+};
+function validateWebhookUrl(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return "";
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return fail(400, "invalid_webhook", "Endere\xE7o do webhook inv\xE1lido.");
+  }
+  if (url.protocol !== "https:") fail(400, "invalid_webhook", "O webhook precisa usar https://.");
+  if (url.username || url.password) fail(400, "invalid_webhook", "N\xE3o coloque usu\xE1rio e senha no endere\xE7o do webhook.");
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const privateHost = host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".") || /^(0|10|127)\./.test(host) || /^169\.254\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) || host.includes(":");
+  if (privateHost) fail(400, "invalid_webhook", "Use um endere\xE7o p\xFAblico (dom\xEDnio na internet) para o webhook.");
+  if (url.port && !["443", "8443"].includes(url.port)) fail(400, "invalid_webhook", "Use a porta padr\xE3o do https (443).");
+  return url.toString().slice(0, 500);
+}
+function signWebhook(secret, body, timestamp = Math.floor(Date.now() / 1e3)) {
+  const v1 = createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+  return `t=${timestamp},v1=${v1}`;
+}
+async function createApiKey(store, uid, label, now3 = /* @__PURE__ */ new Date()) {
+  const active = (await store.query("api_keys", [["uid", "==", uid]], 100)).filter((k) => !k.revoked);
+  if (active.length >= MAX_ACTIVE_KEYS) fail(409, "too_many_keys", `Limite de ${MAX_ACTIVE_KEYS} chaves ativas. Revogue uma antes de criar outra.`);
+  const key = API_KEY_PREFIX + randomBytes(24).toString("base64url");
+  const id = sha256(key);
+  const doc = {
+    id,
+    uid,
+    label: String(label ?? "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 60) || "Minha integra\xE7\xE3o",
+    prefix: key.slice(0, API_KEY_PREFIX.length + 6),
+    createdAt: now3.toISOString(),
+    lastUsedAt: "",
+    revoked: false
+  };
+  await store.set("api_keys", id, doc);
+  return { key, ...toKeyView(doc) };
+}
+var toKeyView = (k) => ({
+  id: String(k.id),
+  label: String(k.label || ""),
+  prefix: String(k.prefix || ""),
+  createdAt: String(k.createdAt || ""),
+  lastUsedAt: String(k.lastUsedAt || ""),
+  revoked: Boolean(k.revoked)
+});
+async function listApiKeys(store, uid) {
+  return (await store.query("api_keys", [["uid", "==", uid]], 100)).map(toKeyView).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function revokeApiKey(store, uid, id, now3 = /* @__PURE__ */ new Date()) {
+  const key = await store.get("api_keys", id);
+  if (!key || key.uid !== uid) fail(404, "not_found", "Chave n\xE3o encontrada.");
+  await store.update("api_keys", id, { revoked: true, revokedAt: now3.toISOString() });
+  return { ok: true };
+}
+async function authenticateApiKey(store, header, now3 = /* @__PURE__ */ new Date()) {
+  const raw = String(header ?? "");
+  const key = raw.startsWith("Bearer ") ? raw.slice(7).trim() : raw.trim();
+  if (!key.startsWith(API_KEY_PREFIX) || key.length < 30 || key.length > 80)
+    fail(401, "invalid_api_key", "Chave de API ausente ou inv\xE1lida. Envie o cabe\xE7alho Authorization: Bearer froc_live_...");
+  const id = sha256(key);
+  const doc = await store.get("api_keys", id);
+  if (!doc || doc.revoked) fail(401, "invalid_api_key", "Chave de API inv\xE1lida ou revogada.");
+  if (!doc.lastUsedAt || now3.getTime() - Date.parse(String(doc.lastUsedAt)) > 5 * 6e4)
+    await store.update("api_keys", id, { lastUsedAt: now3.toISOString() }).catch(() => void 0);
+  return { uid: String(doc.uid), keyId: id };
+}
+var newWebhookSecret = () => "whsec_" + randomBytes(24).toString("base64url");
+function createWebhookDispatcher(store, fetchImpl = fetch, now3 = () => /* @__PURE__ */ new Date()) {
+  const target = async (uid) => {
+    const user = await store.get("users", uid);
+    const m = user?.merchant || {};
+    return { url: String(m.webhookUrl || ""), secret: String(m.webhookSecret || "") };
+  };
+  const send = async (url, secret, body, event, id) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5e3);
+    try {
+      const res = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "FrocWebhooks/1.0",
+          "X-Froc-Event": event,
+          "X-Froc-Delivery-Id": id,
+          "X-Froc-Signature": signWebhook(secret, body, Math.floor(now3().getTime() / 1e3))
+        },
+        body,
+        redirect: "manual",
+        signal: controller.signal
+      });
+      return { ok: res.status >= 200 && res.status < 300, status: res.status };
+    } catch (e) {
+      return { ok: false, status: 0, error: e?.name === "AbortError" ? "tempo esgotado (5 s)" : String(e?.message || e).slice(0, 200) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const attempt = async (job) => {
+    const { url, secret } = await target(String(job.merchantUid));
+    const attempts = Number(job.attempts || 0) + 1;
+    if (!url || !secret) {
+      await store.update("webhook_jobs", String(job.id), { status: "skipped", attempts, lastError: "loja sem webhook configurado" });
+      return false;
+    }
+    const r = await send(url, secret, String(job.body), String(job.event), String(job.id));
+    if (r.ok) {
+      await store.update("webhook_jobs", String(job.id), { status: "delivered", attempts, deliveredAt: now3().toISOString(), lastStatus: r.status });
+      return true;
+    }
+    const wait = RETRY_MINUTES[attempts - 1];
+    await store.update("webhook_jobs", String(job.id), {
+      status: wait ? "pending" : "failed",
+      attempts,
+      lastStatus: r.status,
+      lastError: r.error || `HTTP ${r.status}`,
+      nextAt: wait ? new Date(now3().getTime() + wait * 6e4).toISOString() : ""
+    });
+    return false;
+  };
+  return {
+    async emit(merchantUid, event, data) {
+      const { url } = await target(merchantUid);
+      if (!url) return;
+      const id = randomUUID();
+      const body = JSON.stringify({ id, type: event, createdAt: now3().toISOString(), data });
+      const job = { id, merchantUid, event, body, status: "pending", attempts: 0, nextAt: now3().toISOString(), createdAt: now3().toISOString() };
+      await store.set("webhook_jobs", id, job);
+      await attempt(job).catch((e) => console.warn("Webhook falhou:", e));
+    },
+    async retryDue(limit = 25) {
+      const due = (await store.query("webhook_jobs", [["status", "==", "pending"]], 300)).filter((j) => String(j.nextAt || "") <= now3().toISOString()).slice(0, limit);
+      let sent = 0;
+      let failed = 0;
+      for (const job of due) await attempt(job).catch(() => false) ? sent++ : failed++;
+      return { sent, failed };
+    },
+    async test(merchantUid) {
+      const { url, secret } = await target(merchantUid);
+      if (!url || !secret) return { ok: false, status: 0, error: "Configure o endere\xE7o do webhook primeiro." };
+      const id = randomUUID();
+      const body = JSON.stringify({ id, type: "webhook.test", createdAt: now3().toISOString(), data: { message: "Teste do Froc Entregas. Se voc\xEA recebeu, est\xE1 tudo certo." } });
+      return send(url, secret, body, "webhook.test", id);
+    }
+  };
+}
 
 // src/data/locations.ts
 var BRAZIL_LOCATIONS = [
@@ -334,7 +723,8 @@ var DEFAULT_SETTINGS = {
   rideSearchTimeoutMin: 10,
   indriveOpenTimeoutMin: 30,
   pointsPerReal: 1,
-  pointsPerRedeem: 100
+  pointsPerRedeem: 100,
+  maxVehicleAgeYears: 10
 };
 var SETTINGS_LIMITS = {
   commissionPercent: [0, 40],
@@ -343,7 +733,8 @@ var SETTINGS_LIMITS = {
   rideSearchTimeoutMin: [3, 60],
   indriveOpenTimeoutMin: [5, 240],
   pointsPerReal: [0, 10],
-  pointsPerRedeem: [20, 1e4]
+  pointsPerRedeem: [20, 1e4],
+  maxVehicleAgeYears: [3, 25]
 };
 var REDEEM_VALUE_CENTS = 500;
 
@@ -372,18 +763,53 @@ function createGridGeo(step = 6e-3) {
 
 // server/services.ts
 var AppError = class extends Error {
-  constructor(status, code, message) {
+  constructor(status, code2, message) {
     super(message);
     this.status = status;
-    this.code = code;
+    this.code = code2;
   }
 };
-var fail = (status, code, message) => {
-  throw new AppError(status, code, message);
+var fail2 = (status, code2, message) => {
+  throw new AppError(status, code2, message);
 };
 var MIN_WITHDRAWAL_CENTS = 2e3;
 var TRUCK_TYPES = [...CARGO_VEHICLE_TYPES];
-var DOC_TYPES = { driver: ["cnh", "crlv"], trucker: ["cnh", "crlv", "antt"] };
+var DOC_TYPES = { driver: ["cnh", "crlv", "antecedentes"], trucker: ["cnh", "crlv", "antt", "antecedentes"] };
+var DECLARATIONS = {
+  driver: ["ear", "inss", "seguroApp", "veracidade"],
+  moto: ["ear", "inss", "seguroApp", "lei12009", "veracidade"],
+  trucker: ["ear", "rntrc", "ciotPiso", "veracidade"],
+  merchant: ["responsavel", "proibidos", "veracidade"]
+};
+var MERCHANT_CATEGORIES = ["lanchonete", "restaurante", "pastelaria", "pizzaria", "padaria", "mercado", "farmacia", "loja", "pet", "outro"];
+var DELIVERY_SEARCH_MIN = 20;
+var SHARE_TTL_MS = 24 * 36e5;
+var SHARE_AFTER_END_MS = 2 * 36e5;
+var ACTIVE_RIDE = ["searching", "accepted", "arriving", "in_progress"];
+var DELIVERY_STATUS = {
+  searching: ["procurando_entregador", "Procurando entregador"],
+  accepted: ["entregador_a_caminho", "Entregador a caminho da loja"],
+  arriving: ["entregador_na_loja", "Entregador chegou na loja"],
+  in_progress: ["saiu_para_entrega", "Saiu para entrega"],
+  completed: ["entregue", "Entregue"],
+  cancelled: ["cancelada", "Cancelada"]
+};
+var firstName = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+function bearing(a, b) {
+  const toRad = (d) => d * Math.PI / 180;
+  const y = Math.sin(toRad(b.lng - a.lng)) * Math.cos(toRad(b.lat));
+  const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) - Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lng - a.lng));
+  return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+}
+function straightKm(a, b) {
+  const toRad = (d) => d * Math.PI / 180;
+  const h = Math.sin(toRad(b.lat - a.lat) / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(toRad(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+function parseDay(value) {
+  const v = String(value ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v + "T00:00:00Z")) ? v : "";
+}
 var ALLOWED_DOC_TYPES = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
 var MAX_DOC_BYTES = 3 * 1024 * 1024;
 var LAUNCH_AT_ISO = "2027-03-10T03:00:00.000Z";
@@ -412,12 +838,12 @@ function text(value, max, fallback = "") {
 function num(value, min, max, field) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < min || n > max)
-    fail(400, "invalid_" + field, `Valor inv\xE1lido para ${field} (entre ${min} e ${max}).`);
+    fail2(400, "invalid_" + field, `Valor inv\xE1lido para ${field} (entre ${min} e ${max}).`);
   return n;
 }
 function paymentMethod(value) {
   if (value === "froc_pay" || value === "cash") return value;
-  return fail(400, "invalid_payment", "Escolha Carteira Froc (Pix/cart\xE3o) ou dinheiro.");
+  return fail2(400, "invalid_payment", "Escolha Carteira Froc (Pix/cart\xE3o) ou dinheiro.");
 }
 function resolvePoint(point, fallbackId) {
   if (point && typeof point === "object") {
@@ -426,7 +852,7 @@ function resolvePoint(point, fallbackId) {
     const lng = Number(p.lng);
     if (Number.isFinite(lat) && Number.isFinite(lng) && typeof p.name === "string") {
       if (lat < -34.5 || lat > 5.9 || lng < -74.5 || lng > -28.5)
-        fail(400, "outside_brazil", "Escolha um local dentro do Brasil.");
+        fail2(400, "outside_brazil", "Escolha um local dentro do Brasil.");
       return {
         id: text(p.id, 80) || `ponto-${lat.toFixed(5)}-${lng.toFixed(5)}`,
         name: text(p.name, 160),
@@ -440,7 +866,7 @@ function resolvePoint(point, fallbackId) {
     }
   }
   const found = BRAZIL_LOCATIONS.find((l) => l.id === fallbackId);
-  return found ?? fail(400, "invalid_location", "Escolha um local v\xE1lido de partida e destino.");
+  return found ?? fail2(400, "invalid_location", "Escolha um local v\xE1lido de partida e destino.");
 }
 function involvement(uid, ownerId, providerId) {
   if (ownerId === uid) return "owner";
@@ -457,6 +883,7 @@ var FrocService = class {
     this.cfg = { ...DEFAULT_SETTINGS };
     this.cfgLoadedAt = 0;
     this.lastSweep = 0;
+    this.onlineCache = { at: 0, users: [] };
     this.store = store;
     this.deps = deps;
     this.geo = deps.geo ?? createGridGeo();
@@ -493,7 +920,7 @@ var FrocService = class {
   async checkAccess(auth) {
     const user = await this.store.get("users", auth.uid);
     if (user?.blocked && !this.isAdmin(auth))
-      fail(403, "blocked", "Sua conta est\xE1 bloqueada" + (user.blockedReason ? `: ${user.blockedReason}` : ".") + " Fale com o suporte.");
+      fail2(403, "blocked", "Sua conta est\xE1 bloqueada" + (user.blockedReason ? `: ${user.blockedReason}` : ".") + " Fale com o suporte.");
   }
   now() {
     return (this.deps.now ?? (() => /* @__PURE__ */ new Date()))();
@@ -507,7 +934,7 @@ var FrocService = class {
   }
   /** Registro de auditoria: quem (pessoa ou agente de IA) fez o quê, quando. */
   async audit(auth, action, target, details = {}) {
-    const id = randomUUID();
+    const id = randomUUID2();
     await this.store.set("audit", id, {
       id,
       action,
@@ -582,7 +1009,30 @@ var FrocService = class {
       commissionPercent: this.cfg.commissionPercent,
       driverDocsSent: Object.keys(user.driverDocs || {}),
       truckerDocsSent: Object.keys(user.truckerDocs || {}),
-      founder: String(user.createdAt || "") < LAUNCH_AT_ISO
+      founder: String(user.createdAt || "") < LAUNCH_AT_ISO,
+      driverVehicleType: user.driverVehicleType || "carro",
+      driverVehicleYear: user.driverVehicleYear,
+      driverCity: user.driverCity || "",
+      driverState: user.driverState || "",
+      cnhExpiry: user.cnhExpiry || "",
+      maxVehicleAgeYears: this.cfg.maxVehicleAgeYears,
+      merchantStatus: user.merchantStatus || "none",
+      merchant: this.merchantView(user)
+    };
+  }
+  merchantView(user) {
+    const m = user.merchant;
+    if (!m) return null;
+    return {
+      companyName: String(m.companyName || ""),
+      cnpj: String(m.cnpj || ""),
+      phone: String(m.phone || ""),
+      category: String(m.category || ""),
+      pickup: m.pickup || null,
+      pickupNote: String(m.pickupNote || ""),
+      webhookUrl: String(m.webhookUrl || ""),
+      hasWebhookSecret: Boolean(m.webhookSecret),
+      submittedAt: user.merchantSubmittedAt
     };
   }
   async updateProfile(auth, patch) {
@@ -593,7 +1043,9 @@ var FrocService = class {
     if ("city" in patch) next.city = text(patch.city, 80);
     if ("driverOnline" in patch) {
       if (patch.driverOnline === true && user.driverStatus !== "approved" && user.truckerStatus !== "approved")
-        fail(403, "not_approved", "Seu cadastro de motorista ainda n\xE3o foi aprovado.");
+        fail2(403, "not_approved", "Seu cadastro de motorista ainda n\xE3o foi aprovado.");
+      if (patch.driverOnline === true && user.cnhExpiry && user.cnhExpiry < this.iso().slice(0, 10))
+        fail2(403, "cnh_expired", "Sua CNH venceu. Envie a CNH nova pelo Atendimento para voltar a ficar online.");
       next.driverOnline = patch.driverOnline === true;
     }
     if (user.driverStatus !== "approved") {
@@ -613,7 +1065,7 @@ var FrocService = class {
     const user = await this.ensureUser(auth);
     const status = kind === "driver" ? user.driverStatus : user.truckerStatus;
     if (status !== "approved")
-      fail(
+      fail2(
         403,
         "not_approved",
         kind === "driver" ? "Para atuar como motorista, envie seus documentos na aba Conta e aguarde a aprova\xE7\xE3o." : "Para atuar como caminhoneiro, envie seus documentos na aba Conta e aguarde a aprova\xE7\xE3o."
@@ -623,12 +1075,12 @@ var FrocService = class {
   async anyProvider(auth) {
     const user = await this.ensureUser(auth);
     if (user.driverStatus !== "approved" && user.truckerStatus !== "approved")
-      fail(403, "not_approved", "Seu cadastro de motorista ainda n\xE3o foi aprovado.");
+      fail2(403, "not_approved", "Seu cadastro de motorista ainda n\xE3o foi aprovado.");
     return user;
   }
   // ------------------------------------------------------------- carteira
   ledger(tx, uid, title, category, cents, type) {
-    const id = randomUUID();
+    const id = randomUUID2();
     tx.set("transactions", id, { id, uid, title, category, amountCents: cents, type, createdAt: this.iso() });
   }
   moveMoney(tx, user, delta) {
@@ -637,7 +1089,7 @@ var FrocService = class {
   }
   debit(tx, user, cents, title, category, allowNegative = false) {
     if (!allowNegative && user.balanceCents < cents)
-      fail(402, "insufficient_balance", "Saldo insuficiente na carteira. Fa\xE7a uma recarga por Pix ou cart\xE3o.");
+      fail2(402, "insufficient_balance", "Saldo insuficiente na carteira. Fa\xE7a uma recarga por Pix ou cart\xE3o.");
     this.moveMoney(tx, user, -cents);
     this.ledger(tx, user.uid, title, category, cents, "debit");
   }
@@ -647,11 +1099,11 @@ var FrocService = class {
   }
   async mustGet(tx, col, id, label) {
     const doc = await tx.get(col, id);
-    return doc ?? fail(404, "not_found", `${label} n\xE3o encontrado(a).`);
+    return doc ?? fail2(404, "not_found", `${label} n\xE3o encontrado(a).`);
   }
   /** Registra a comissão da plataforma (usado nos relatórios do Admin). */
   platformRevenue(tx, kind, grossCents, feeCents) {
-    const id = randomUUID();
+    const id = randomUUID2();
     tx.set("platformLedger", id, { id, kind, grossCents, feeCents, createdAt: this.iso() });
   }
   /** Pontos de fidelidade para quem contratou o serviço. */
@@ -693,10 +1145,10 @@ var FrocService = class {
   async createTopup(auth, amountReais) {
     const payments = this.deps.payments;
     if (!payments?.configured)
-      fail(503, "payments_not_configured", "Recargas ainda n\xE3o est\xE3o dispon\xEDveis: o Mercado Pago n\xE3o foi configurado na plataforma.");
+      fail2(503, "payments_not_configured", "Recargas ainda n\xE3o est\xE3o dispon\xEDveis: o Mercado Pago n\xE3o foi configurado na plataforma.");
     const user = await this.ensureUser(auth);
     const amountCents = toCents(num(amountReais, 10, 5e3, "recarga"));
-    const id = randomUUID();
+    const id = randomUUID2();
     await this.store.set("topups", id, { id, uid: user.uid, amountCents, status: "pending", createdAt: this.iso() });
     let checkout;
     try {
@@ -709,7 +1161,7 @@ var FrocService = class {
     } catch (error) {
       console.error("Mercado Pago recusou a cria\xE7\xE3o do pagamento:", error);
       await this.store.update("topups", id, { status: "failed", error: String(error?.message || error).slice(0, 200) });
-      return fail(
+      return fail2(
         502,
         "payment_provider",
         "O Mercado Pago n\xE3o abriu o pagamento agora. Tente de novo em instantes; se continuar, o administrador deve conferir o token do Mercado Pago."
@@ -721,12 +1173,12 @@ var FrocService = class {
   /** Confere no Mercado Pago e credita UMA vez se o pagamento foi aprovado. */
   async confirmTopup(topupId, uid) {
     const topup = await this.store.get("topups", topupId);
-    if (!topup || uid && topup.uid !== uid) return fail(404, "not_found", "Recarga n\xE3o encontrada.");
+    if (!topup || uid && topup.uid !== uid) return fail2(404, "not_found", "Recarga n\xE3o encontrada.");
     if (topup.status === "approved") return { status: "approved" };
     const payment = await this.deps.payments?.findApproved(topupId);
     if (!payment) return { status: "pending" };
     if (payment.amountCents !== Number(topup.amountCents))
-      fail(409, "amount_mismatch", "O valor pago n\xE3o corresponde \xE0 recarga.");
+      fail2(409, "amount_mismatch", "O valor pago n\xE3o corresponde \xE0 recarga.");
     await this.store.transaction(async (tx) => {
       const current = await this.mustGet(tx, "topups", topupId, "Recarga");
       if (current.status === "approved") return;
@@ -749,8 +1201,8 @@ var FrocService = class {
     await this.anyProvider(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 5e4, "saque"));
     const key = text(pixKey, 120);
-    if (key.length < 5) fail(400, "invalid_pix_key", "Informe a chave Pix para receber o saque.");
-    const id = randomUUID();
+    if (key.length < 5) fail2(400, "invalid_pix_key", "Informe a chave Pix para receber o saque.");
+    const id = randomUUID2();
     await this.store.transaction(async (tx) => {
       const user = await this.mustGet(tx, "users", auth.uid, "Usu\xE1rio");
       this.debit(tx, user, amountCents, `Saque solicitado \xB7 Pix ${key}`, "saque");
@@ -760,15 +1212,15 @@ var FrocService = class {
   }
   // ------------------------------------------- cadastro de motorista/caminhoneiro
   async uploadDocument(auth, kind, docType, contentType, base64) {
-    if (kind !== "driver" && kind !== "trucker") return fail(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
-    if (!DOC_TYPES[kind].includes(String(docType))) fail(400, "invalid_doc", "Documento inv\xE1lido.");
-    if (!ALLOWED_DOC_TYPES.has(String(contentType))) fail(400, "invalid_file", "Envie foto (JPG, PNG, WEBP) ou PDF.");
-    if (!this.deps.files) fail(503, "storage_not_configured", "Envio de documentos indispon\xEDvel: armazenamento n\xE3o configurado.");
+    if (kind !== "driver" && kind !== "trucker") return fail2(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
+    if (!DOC_TYPES[kind].includes(String(docType))) fail2(400, "invalid_doc", "Documento inv\xE1lido.");
+    if (!ALLOWED_DOC_TYPES.has(String(contentType))) fail2(400, "invalid_file", "Envie foto (JPG, PNG, WEBP) ou PDF.");
+    if (!this.deps.files) fail2(503, "storage_not_configured", "Envio de documentos indispon\xEDvel: armazenamento n\xE3o configurado.");
     const bytes = Buffer.from(String(base64 || "").replace(/^data:[^,]*,/, ""), "base64");
-    if (!bytes.length || bytes.length > MAX_DOC_BYTES) fail(400, "file_size", "O arquivo deve ter at\xE9 3 MB.");
+    if (!bytes.length || bytes.length > MAX_DOC_BYTES) fail2(400, "file_size", "O arquivo deve ter at\xE9 3 MB.");
     const user = await this.ensureUser(auth);
     const status = kind === "driver" ? user.driverStatus : user.truckerStatus;
-    if (status === "approved" || status === "pending") fail(409, "already_submitted", "Seu cadastro j\xE1 foi enviado.");
+    if (status === "approved" || status === "pending") fail2(409, "already_submitted", "Seu cadastro j\xE1 foi enviado.");
     const ext = String(contentType) === "application/pdf" ? "pdf" : String(contentType).split("/")[1];
     const path = `froc-x-uber/documentos/${user.uid}/${kind}-${docType}-${this.now().getTime()}.${ext}`;
     await this.deps.files.save(path, String(contentType), new Uint8Array(bytes));
@@ -776,24 +1228,59 @@ var FrocService = class {
     await this.store.update("users", user.uid, { [field]: { ...user[field], [String(docType)]: path } });
     return { ok: true };
   }
+  /** Confere as declarações exigidas por lei para este tipo de cadastro. */
+  declarations(body, keys) {
+    const given = body.declarations && typeof body.declarations === "object" ? body.declarations : {};
+    const missing = keys.filter((k) => given[k] !== true);
+    if (missing.length)
+      fail2(400, "missing_declarations", "Marque todas as declara\xE7\xF5es obrigat\xF3rias do cadastro (exig\xEAncias da lei e da Froc).");
+    const at = this.iso();
+    return Object.fromEntries(keys.map((k) => [k, at]));
+  }
   async applyAsProvider(auth, kind, body) {
-    if (kind !== "driver" && kind !== "trucker") return fail(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
+    if (kind === "merchant") return this.applyAsMerchant(auth, body);
+    if (kind !== "driver" && kind !== "trucker") return fail2(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
+    const cfg = await this.settings();
     const user = await this.ensureUser(auth);
     const status = kind === "driver" ? user.driverStatus : user.truckerStatus;
-    if (status === "approved") fail(409, "already_approved", "Cadastro j\xE1 aprovado.");
+    if (status === "approved") fail2(409, "already_approved", "Cadastro j\xE1 aprovado.");
     const docs = (kind === "driver" ? user.driverDocs : user.truckerDocs) || {};
     const missing = DOC_TYPES[kind].filter((d) => !docs[d]);
-    if (missing.length) fail(400, "missing_documents", "Envie todos os documentos: " + missing.join(", ").toUpperCase() + ".");
+    if (missing.length)
+      fail2(400, "missing_documents", "Envie todos os documentos: " + missing.map((d) => d === "antecedentes" ? "certid\xE3o de antecedentes" : d.toUpperCase()).join(", ") + ".");
     const phone = text(body.phone, 30) || user.phone;
-    if (phone.replace(/\D/g, "").length < 10) fail(400, "invalid_phone", "Informe um telefone com DDD.");
+    if (phone.replace(/\D/g, "").length < 10) fail2(400, "invalid_phone", "Informe um telefone com DDD.");
     const vehicle = text(body.vehicle, 80);
     const plate = text(body.plate, 10).toUpperCase();
-    if (vehicle.length < 3) fail(400, "invalid_vehicle", "Informe o modelo e a cor do ve\xEDculo.");
-    if (!/^[A-Z]{3}-?[0-9][A-Z0-9][0-9]{2}$/.test(plate)) fail(400, "invalid_plate", "Placa inv\xE1lida (ex.: ABC1D23).");
-    const next = { phone, rejectionReason: "" };
-    if (kind === "driver") Object.assign(next, { driverVehicle: vehicle, driverPlate: plate, driverStatus: "pending", driverSubmittedAt: this.iso() });
-    else {
-      const truckType = TRUCK_TYPES.includes(body.truckType) ? body.truckType : fail(400, "invalid_truck", "Tipo de ve\xEDculo de carga inv\xE1lido.");
+    if (vehicle.length < 3) fail2(400, "invalid_vehicle", "Informe o modelo e a cor do ve\xEDculo.");
+    if (!/^[A-Z]{3}-?[0-9][A-Z0-9][0-9]{2}$/.test(plate)) fail2(400, "invalid_plate", "Placa inv\xE1lida (ex.: ABC1D23).");
+    const today = this.iso().slice(0, 10);
+    const cnhExpiry = parseDay(body.cnhExpiry);
+    if (!cnhExpiry) fail2(400, "invalid_cnh_expiry", "Informe a data de validade da CNH.");
+    if (cnhExpiry < today) fail2(400, "cnh_expired", "Sua CNH est\xE1 vencida. Renove no Detran antes de se cadastrar.");
+    const city = text(body.city, 80);
+    const state = text(body.state, 2).toUpperCase();
+    if (city.length < 2 || !/^[A-Z]{2}$/.test(state)) fail2(400, "invalid_city", "Informe a cidade e a UF onde voc\xEA vai trabalhar.");
+    const year = Math.round(Number(body.vehicleYear));
+    const currentYear = this.now().getFullYear();
+    if (!Number.isFinite(year) || year < 1980 || year > currentYear + 1) fail2(400, "invalid_vehicle_year", "Informe o ano de fabrica\xE7\xE3o do ve\xEDculo.");
+    const next = { phone, rejectionReason: "", cnhExpiry, driverCity: city, driverState: state, driverVehicleYear: year };
+    if (kind === "driver") {
+      const vehicleType = body.vehicleType === "moto" ? "moto" : body.vehicleType === "carro" ? "carro" : fail2(400, "invalid_vehicle_type", "Escolha carro ou moto.");
+      const rule = vehicleAgeLimit(city, state, cfg.maxVehicleAgeYears);
+      const minYear = minVehicleYear(rule.maxYears, this.now());
+      if (year < minYear)
+        fail2(400, "vehicle_too_old", `Ve\xEDculo muito antigo para ${city}/${state}: aceitamos fabrica\xE7\xE3o a partir de ${minYear} (${rule.source})`);
+      Object.assign(next, {
+        driverVehicle: vehicle,
+        driverPlate: plate,
+        driverVehicleType: vehicleType,
+        declarations: { ...user.declarations || {}, ...this.declarations(body, DECLARATIONS[vehicleType === "moto" ? "moto" : "driver"]) },
+        driverStatus: "pending",
+        driverSubmittedAt: this.iso()
+      });
+    } else {
+      const truckType = TRUCK_TYPES.includes(body.truckType) ? body.truckType : fail2(400, "invalid_truck", "Tipo de ve\xEDculo de carga inv\xE1lido.");
       Object.assign(next, {
         truckModel: vehicle,
         truckPlate: plate,
@@ -801,8 +1288,9 @@ var FrocService = class {
         companyName: text(body.companyName, 80),
         rntrc: (() => {
           const digits = String(body.rntrc ?? "").replace(/\D/g, "");
-          return digits.length >= 8 && digits.length <= 12 ? digits : fail(400, "invalid_rntrc", "Informe o n\xFAmero do RNTRC (registro na ANTT), com 8 a 12 d\xEDgitos.");
+          return digits.length >= 8 && digits.length <= 12 ? digits : fail2(400, "invalid_rntrc", "Informe o n\xFAmero do RNTRC (registro na ANTT), com 8 a 12 d\xEDgitos.");
         })(),
+        declarations: { ...user.declarations || {}, ...this.declarations(body, DECLARATIONS.trucker) },
         truckerStatus: "pending",
         truckerSubmittedAt: this.iso()
       });
@@ -810,15 +1298,72 @@ var FrocService = class {
     await this.store.update("users", user.uid, next);
     return this.profileView({ ...user, ...next }, auth);
   }
+  // --------------------------------------------------- lojas (Froc Entregas)
+  async applyAsMerchant(auth, body) {
+    const user = await this.ensureUser(auth);
+    if (user.merchantStatus === "approved") fail2(409, "already_approved", "Sua loja j\xE1 est\xE1 aprovada.");
+    if (user.merchantStatus === "pending") fail2(409, "already_submitted", "O cadastro da sua loja j\xE1 est\xE1 em an\xE1lise.");
+    const companyName = text(body.companyName, 80);
+    if (companyName.length < 2) fail2(400, "invalid_company", "Informe o nome da loja.");
+    const cnpj = String(body.cnpj ?? "").replace(/\D/g, "");
+    if (!isValidCnpj(cnpj)) fail2(400, "invalid_cnpj", "CNPJ inv\xE1lido. Confira os 14 n\xFAmeros.");
+    const taken = await this.store.query("users", [["merchantCnpj", "==", cnpj]], 5);
+    if (taken.some((u) => u.uid !== user.uid && u.merchantStatus !== "rejected")) fail2(409, "cnpj_in_use", "Este CNPJ j\xE1 est\xE1 cadastrado em outra conta.");
+    const phone = text(body.phone, 30) || user.phone;
+    if (phone.replace(/\D/g, "").length < 10) fail2(400, "invalid_phone", "Informe o telefone da loja com DDD.");
+    const category = MERCHANT_CATEGORIES.includes(String(body.category)) ? String(body.category) : "outro";
+    const pickup = resolvePoint(body.pickup, null);
+    const next = {
+      merchantStatus: "pending",
+      merchantSubmittedAt: this.iso(),
+      merchantCnpj: cnpj,
+      rejectionReason: "",
+      declarations: { ...user.declarations || {}, ...this.declarations(body, DECLARATIONS.merchant) },
+      merchant: {
+        ...user.merchant || {},
+        companyName,
+        cnpj: formatCnpj(cnpj),
+        phone,
+        category,
+        pickup,
+        pickupNote: text(body.pickupNote, 160)
+      }
+    };
+    await this.store.update("users", user.uid, next);
+    return this.profileView({ ...user, ...next }, auth);
+  }
+  /** Loja aprovada (para o painel e para a API). */
+  async approvedMerchant(uid) {
+    const user = await this.store.get("users", uid) ?? fail2(404, "not_found", "Conta n\xE3o encontrada.");
+    if (user.blocked) fail2(403, "blocked", "Conta bloqueada. Fale com o suporte.");
+    if (user.merchantStatus !== "approved") fail2(403, "merchant_not_approved", "Sua loja ainda n\xE3o foi aprovada pela equipe Froc.");
+    return user;
+  }
+  /** Endereço do webhook da loja. O segredo de assinatura aparece só quando é criado/trocado. */
+  async setMerchantWebhook(auth, url, rotate = false) {
+    const user = await this.approvedMerchant(auth.uid);
+    const webhookUrl = validateWebhookUrl(url);
+    const m = { ...user.merchant || {} };
+    let secret = "";
+    if (webhookUrl && (!m.webhookSecret || rotate)) {
+      secret = newWebhookSecret();
+      m.webhookSecret = secret;
+    }
+    m.webhookUrl = webhookUrl;
+    await this.store.update("users", user.uid, { merchant: m });
+    await this.audit(auth, "webhook_configurado", user.uid, { url: webhookUrl, novoSegredo: Boolean(secret) });
+    return { webhookUrl, secret, hasWebhookSecret: Boolean(m.webhookSecret) };
+  }
   // ---------------------------------------------------------------- admin
   requireAdmin(auth) {
-    if (!this.isAdmin(auth)) fail(403, "forbidden", "Acesso restrito \xE0 administra\xE7\xE3o.");
+    if (!this.isAdmin(auth)) fail2(403, "forbidden", "Acesso restrito \xE0 administra\xE7\xE3o.");
   }
   async adminOverview(auth) {
     this.requireAdmin(auth);
-    const [drivers, truckers, withdrawals, users, sos, settings] = await Promise.all([
+    const [drivers, truckers, merchants, withdrawals, users, sos, settings] = await Promise.all([
       this.store.query("users", [["driverStatus", "==", "pending"]], 100),
       this.store.query("users", [["truckerStatus", "==", "pending"]], 100),
+      this.store.query("users", [["merchantStatus", "==", "pending"]], 100),
       this.store.query("withdrawals", [["status", "==", "pending"]], 100),
       this.store.count("users", []),
       this.store.query("sos", [["status", "==", "open"]], 100),
@@ -831,6 +1376,7 @@ var FrocService = class {
         ...truckers.map((u) => ({ u, kind: "trucker" }))
       ].map(async ({ u, kind }) => {
         const docs = (kind === "driver" ? u.driverDocs : u.truckerDocs) || {};
+        const rule = vehicleAgeLimit(u.driverCity || "", u.driverState || "", settings.maxVehicleAgeYears);
         return {
           uid: u.uid,
           name: u.name,
@@ -839,6 +1385,14 @@ var FrocService = class {
           kind,
           vehicle: kind === "driver" ? u.driverVehicle : u.truckModel,
           plate: kind === "driver" ? u.driverPlate : u.truckPlate,
+          vehicleType: kind === "driver" ? u.driverVehicleType || "carro" : void 0,
+          vehicleYear: u.driverVehicleYear,
+          minVehicleYear: kind === "driver" ? minVehicleYear(rule.maxYears, this.now()) : void 0,
+          vehicleAgeRule: kind === "driver" ? rule.source : void 0,
+          city: u.driverCity,
+          state: u.driverState,
+          cnhExpiry: u.cnhExpiry,
+          declarations: u.declarations,
           truckType: kind === "trucker" ? u.truckType : void 0,
           companyName: kind === "trucker" ? u.companyName : void 0,
           rntrc: kind === "trucker" ? u.rntrc : void 0,
@@ -847,6 +1401,25 @@ var FrocService = class {
         };
       })
     );
+    for (const u of merchants) {
+      const m = u.merchant || {};
+      applications.push({
+        uid: u.uid,
+        name: u.name,
+        email: u.email,
+        phone: String(m.phone || u.phone),
+        kind: "merchant",
+        vehicle: "",
+        plate: "",
+        companyName: String(m.companyName || ""),
+        cnpj: String(m.cnpj || ""),
+        category: String(m.category || ""),
+        pickupAddress: String(m.pickup?.name || ""),
+        declarations: u.declarations,
+        submittedAt: String(u.merchantSubmittedAt || ""),
+        documents: []
+      });
+    }
     return {
       applications,
       withdrawals: byNewest(withdrawals).map((w) => ({
@@ -865,13 +1438,13 @@ var FrocService = class {
   }
   async reviewApplication(auth, uid, kind, decision, reason) {
     this.requireAdmin(auth);
-    if (kind !== "driver" && kind !== "trucker") return fail(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
-    if (decision !== "approved" && decision !== "rejected") return fail(400, "invalid_decision", "Decis\xE3o inv\xE1lida.");
-    const user = await this.store.get("users", String(uid)) ?? fail(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
-    const field = kind === "driver" ? "driverStatus" : "truckerStatus";
-    if (user[field] !== "pending") fail(409, "not_pending", "Este cadastro n\xE3o est\xE1 aguardando an\xE1lise.");
+    if (kind !== "driver" && kind !== "trucker" && kind !== "merchant") return fail2(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
+    if (decision !== "approved" && decision !== "rejected") return fail2(400, "invalid_decision", "Decis\xE3o inv\xE1lida.");
+    const user = await this.store.get("users", String(uid)) ?? fail2(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
+    const field = kind === "driver" ? "driverStatus" : kind === "trucker" ? "truckerStatus" : "merchantStatus";
+    if (user[field] !== "pending") fail2(409, "not_pending", "Este cadastro n\xE3o est\xE1 aguardando an\xE1lise.");
     const why = text(reason, 300);
-    if (decision === "rejected" && why.length < 5) fail(400, "reason_required", "Explique o motivo da recusa.");
+    if (decision === "rejected" && why.length < 5) fail2(400, "reason_required", "Explique o motivo da recusa.");
     await this.store.update("users", user.uid, {
       [field]: decision,
       rejectionReason: decision === "rejected" ? why : "",
@@ -883,10 +1456,10 @@ var FrocService = class {
   }
   async resolveWithdrawal(auth, id, decision) {
     this.requireAdmin(auth);
-    if (decision !== "paid" && decision !== "rejected") return fail(400, "invalid_decision", "Decis\xE3o inv\xE1lida.");
+    if (decision !== "paid" && decision !== "rejected") return fail2(400, "invalid_decision", "Decis\xE3o inv\xE1lida.");
     await this.store.transaction(async (tx) => {
       const w = await this.mustGet(tx, "withdrawals", String(id), "Saque");
-      if (w.status !== "pending") fail(409, "not_pending", "Este saque j\xE1 foi resolvido.");
+      if (w.status !== "pending") fail2(409, "not_pending", "Este saque j\xE1 foi resolvido.");
       const user = await this.mustGet(tx, "users", String(w.uid), "Usu\xE1rio");
       tx.update("withdrawals", String(id), { status: decision, resolvedBy: auth.email, resolvedAt: this.iso() });
       if (decision === "rejected") this.credit(tx, user, Number(w.amountCents), "Saque recusado \xB7 valor devolvido", "estorno");
@@ -897,29 +1470,46 @@ var FrocService = class {
   // ------------------------------------------------------- 1) corrida Uber/99
   rideView(r, uid) {
     const mine = involvement(uid, r.passengerId, r.driverId);
-    const { escrowCents: _e, priceCents: _p, ...rest } = r;
-    return {
+    const { escrowCents: _e, priceCents: _p, deliveryPin: _d, trackToken: _t, ...rest } = r;
+    const view = {
       ...rest,
       mine,
-      pinCode: mine === "owner" ? String(r.pinCode) : ""
+      pinCode: mine === "owner" ? String(r.pinCode ?? "") : ""
     };
+    if (r.delivery) {
+      const d = { ...r.delivery };
+      if (!mine) delete d.recipientPhone;
+      view.delivery = d;
+      if (mine === "owner") view.deliveryPin = String(r.deliveryPin ?? "");
+    }
+    return view;
+  }
+  /** Carro, moto ou ambos: quem pode pegar este pedido. */
+  vehicleFits(user, ride) {
+    const type = user.driverVehicleType || "carro";
+    if (ride.categoryId === "froc_moto") return type === "moto";
+    if (ride.categoryId === "froc_delivery") {
+      const wanted = ride.delivery?.vehicle;
+      return !wanted || wanted === "qualquer" || wanted === type;
+    }
+    return type === "carro";
   }
   async createRide(auth, body) {
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
-    const category = RIDE_CATEGORIES.find((c) => c.id === body.categoryId) ?? fail(400, "invalid_category", "Categoria inv\xE1lida.");
+    const category = RIDE_CATEGORIES.find((c) => c.id === body.categoryId) ?? fail2(400, "invalid_category", "Categoria inv\xE1lida.");
     const method = paymentMethod(body.paymentMethod);
     const distanceKm = calculateDistanceKm(origin, destination);
-    if (distanceKm > 300) fail(400, "too_far", "Para viagens longas, use Caronas.");
+    if (distanceKm > 300) fail2(400, "too_far", "Para viagens longas, use Caronas.");
     const durationMin = estimateDurationMin(distanceKm, category.id === "froc_moto" ? "moto" : "urban");
     const surge = await this.surgeAt(origin.lat, origin.lng);
     const basePrice = Math.max(7.5, round2(category.baseFare + distanceKm * category.perKm + durationMin * category.perMin));
     const price = round2(basePrice * surge);
     const priceCents = toCents(price);
     const active = await this.store.query("rides", [["passengerId", "==", auth.uid]], 200);
-    if (active.some((r) => ["searching", "accepted", "arriving", "in_progress"].includes(String(r.status))))
-      fail(409, "ride_in_progress", "Voc\xEA j\xE1 tem uma corrida em andamento.");
-    const id = randomUUID();
+    if (active.some((r) => !r.delivery && ACTIVE_RIDE.includes(String(r.status))))
+      fail2(409, "ride_in_progress", "Voc\xEA j\xE1 tem uma corrida em andamento.");
+    const id = randomUUID2();
     const ride = await this.store.transaction(async (tx) => {
       const user = await this.mustGet(tx, "users", auth.uid, "Usu\xE1rio");
       const doc = {
@@ -962,10 +1552,12 @@ var FrocService = class {
       await this.approvedUser(auth, "driver");
       const driving = await this.store.query("rides", [["driverId", "==", auth.uid]], 200);
       if (driving.some((r) => ["accepted", "arriving", "in_progress"].includes(String(r.status))))
-        fail(409, "driver_busy", "Finalize a corrida atual antes de aceitar outra.");
+        fail2(409, "driver_busy", "Finalize a corrida atual antes de aceitar outra.");
     }
+    let statusBefore = "";
     const result = await this.store.transaction(async (tx) => {
       const ride = await this.mustGet(tx, "rides", rideId, "Corrida");
+      statusBefore = String(ride.status);
       const isPassenger = ride.passengerId === auth.uid;
       const isDriver = ride.driverId === auth.uid;
       const status = String(ride.status);
@@ -975,10 +1567,12 @@ var FrocService = class {
       };
       switch (action) {
         case "driver_accept": {
-          if (isPassenger) fail(403, "own_ride", "Voc\xEA n\xE3o pode aceitar a pr\xF3pria corrida.");
-          if (status !== "searching") fail(409, "taken", "Esta corrida j\xE1 foi aceita por outro motorista.");
+          if (isPassenger) fail2(403, "own_ride", "Voc\xEA n\xE3o pode aceitar a pr\xF3pria corrida.");
+          if (status !== "searching") fail2(409, "taken", "Esta corrida j\xE1 foi aceita por outro motorista.");
           const driver = await this.mustGet(tx, "users", auth.uid, "Motorista");
-          if (!driver.driverOnline) fail(409, "offline", "Fique online para aceitar corridas.");
+          if (!driver.driverOnline) fail2(409, "offline", "Fique online para aceitar corridas.");
+          if (!this.vehicleFits(driver, ride))
+            fail2(409, "wrong_vehicle", ride.categoryId === "froc_moto" ? "Este pedido \xE9 para moto." : "Este pedido n\xE3o \xE9 para o seu tipo de ve\xEDculo.");
           const category = RIDE_CATEGORIES.find((c) => c.id === ride.categoryId);
           set({
             status: "accepted",
@@ -993,31 +1587,33 @@ var FrocService = class {
           return { ride };
         }
         case "arriving": {
-          if (!isDriver) fail(403, "forbidden", "S\xF3 o motorista da corrida pode fazer isso.");
-          if (status !== "accepted") fail(409, "invalid_state", "A corrida n\xE3o est\xE1 aguardando chegada.");
+          if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista da corrida pode fazer isso.");
+          if (status !== "accepted") fail2(409, "invalid_state", "A corrida n\xE3o est\xE1 aguardando chegada.");
           set({ status: "arriving", etaMin: 0 });
           return { ride };
         }
         case "start": {
-          if (!isDriver) fail(403, "forbidden", "S\xF3 o motorista da corrida pode iniciar.");
-          if (status !== "accepted" && status !== "arriving") fail(409, "invalid_state", "A corrida n\xE3o pode ser iniciada agora.");
-          if (String(body.pin || "") !== String(ride.pinCode)) fail(400, "wrong_pin", "PIN incorreto. Pe\xE7a o PIN de 4 d\xEDgitos ao passageiro.");
+          if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista da corrida pode iniciar.");
+          if (status !== "accepted" && status !== "arriving") fail2(409, "invalid_state", "A corrida n\xE3o pode ser iniciada agora.");
+          if (!ride.delivery && String(body.pin || "") !== String(ride.pinCode)) fail2(400, "wrong_pin", "PIN incorreto. Pe\xE7a o PIN de 4 d\xEDgitos ao passageiro.");
           set({ status: "in_progress", etaMin: ride.durationMin, startedAt: this.iso() });
           return { ride };
         }
         case "complete": {
-          if (!isDriver) fail(403, "forbidden", "S\xF3 o motorista pode finalizar a corrida.");
-          if (status !== "in_progress") fail(409, "invalid_state", "A corrida ainda n\xE3o foi iniciada.");
+          if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista pode finalizar a corrida.");
+          if (status !== "in_progress") fail2(409, "invalid_state", "A corrida ainda n\xE3o foi iniciada.");
+          if (ride.delivery && String(body.pin || "") !== String(ride.deliveryPin))
+            fail2(400, "wrong_pin", "C\xF3digo de entrega incorreto. Pe\xE7a ao cliente o c\xF3digo de 4 d\xEDgitos.");
           const driver = await this.mustGet(tx, "users", auth.uid, "Motorista");
           const passenger = await tx.get("users", String(ride.passengerId));
           const amount = ride.paymentMethod === "froc_pay" ? Number(ride.escrowCents) : Number(ride.priceCents);
           set({ status: "completed", etaMin: 0, completedAt: this.iso(), escrowCents: 0 });
-          this.payProvider(tx, driver, passenger, amount, ride.paymentMethod, String(ride.categoryLabel), "corrida");
+          this.payProvider(tx, driver, passenger, amount, ride.paymentMethod, String(ride.categoryLabel), ride.delivery ? "entrega" : "corrida");
           return { ride };
         }
         case "cancel": {
           if (isPassenger) {
-            if (!["searching", "accepted", "arriving"].includes(status)) fail(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
+            if (!["searching", "accepted", "arriving"].includes(status)) fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
             const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
             const escrow = Number(ride.escrowCents || 0);
             set({ status: "cancelled", escrowCents: 0, cancelledAt: this.iso(), cancelledBy: "passenger" });
@@ -1025,7 +1621,7 @@ var FrocService = class {
             return { ride };
           }
           if (isDriver) {
-            if (!["accepted", "arriving"].includes(status)) fail(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel desistir agora.");
+            if (!["accepted", "arriving"].includes(status)) fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel desistir agora.");
             set({
               status: "searching",
               driverId: null,
@@ -1037,31 +1633,32 @@ var FrocService = class {
             });
             return { ride };
           }
-          return fail(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
+          return fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
         }
         case "message": {
-          if (!isPassenger && !isDriver) fail(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
+          if (!isPassenger && !isDriver) fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta corrida.");
           const msg = text(body.message, 500);
-          if (!msg) fail(400, "empty_message", "Mensagem vazia.");
+          if (!msg) fail2(400, "empty_message", "Mensagem vazia.");
           const messages = Array.isArray(ride.messages) ? ride.messages : [];
           const time = this.now().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
           set({ messages: [...messages, { sender: isDriver ? "driver" : "passenger", text: msg, time }].slice(-200) });
           return { ride };
         }
         case "rate": {
-          if (!isPassenger) fail(403, "forbidden", "S\xF3 o passageiro avalia a corrida.");
-          if (status !== "completed" || ride.ratedByPassenger) fail(409, "invalid_state", "Esta corrida n\xE3o pode ser avaliada.");
+          if (!isPassenger) fail2(403, "forbidden", "S\xF3 o passageiro avalia a corrida.");
+          if (status !== "completed" || ride.ratedByPassenger) fail2(409, "invalid_state", "Esta corrida n\xE3o pode ser avaliada.");
           const stars = Math.round(num(body.stars, 1, 5, "nota"));
           const driver = await this.mustGet(tx, "users", String(ride.driverId), "Motorista");
           const count = Number(driver.ratingCount || 0);
           const rating = round2((driver.rating * count + stars) / (count + 1));
-          tx.update("users", driver.uid, { rating, ratingCount: count + 1 });
+          const alert = count + 1 >= 20 && rating < 4.5 ? `Nota ${rating} em ${count + 1} avalia\xE7\xF5es` : "";
+          tx.update("users", driver.uid, { rating, ratingCount: count + 1, qualityAlert: alert });
           set({ ratedByPassenger: true, passengerStars: stars });
           return { ride };
         }
         case "rate_passenger": {
-          if (!isDriver) fail(403, "forbidden", "S\xF3 o motorista avalia o passageiro.");
-          if (status !== "completed" || ride.ratedByDriver) fail(409, "invalid_state", "Esta corrida n\xE3o pode ser avaliada.");
+          if (!isDriver) fail2(403, "forbidden", "S\xF3 o motorista avalia o passageiro.");
+          if (status !== "completed" || ride.ratedByDriver) fail2(409, "invalid_state", "Esta corrida n\xE3o pode ser avaliada.");
           const stars = Math.round(num(body.stars, 1, 5, "nota"));
           const passenger = await this.mustGet(tx, "users", String(ride.passengerId), "Passageiro");
           const count = Number(passenger.passengerRatingCount || 0);
@@ -1071,9 +1668,10 @@ var FrocService = class {
           return { ride };
         }
         default:
-          return fail(400, "invalid_action", "A\xE7\xE3o inv\xE1lida.");
+          return fail2(400, "invalid_action", "A\xE7\xE3o inv\xE1lida.");
       }
     });
+    if (result.ride.delivery && String(result.ride.status) !== statusBefore) await this.deliveryEvent(result.ride);
     return this.rideView(result.ride, auth.uid);
   }
   // ------------------------------------------------- 2) negociação inDrive
@@ -1097,14 +1695,14 @@ var FrocService = class {
     const minimum = negotiationFloor(distanceKm);
     const offer = round2(num(body.passengerOffer, 8, 5e3, "oferta"));
     if (offer < minimum)
-      fail(400, "below_floor", `A oferta m\xEDnima para ${distanceKm} km \xE9 ${brl(minimum)} (cobre combust\xEDvel e tempo do motorista).`);
+      fail2(400, "below_floor", `A oferta m\xEDnima para ${distanceKm} km \xE9 ${brl(minimum)} (cobre combust\xEDvel e tempo do motorista).`);
     const user = await this.ensureUser(auth);
     if (method === "froc_pay" && user.balanceCents < toCents(offer))
-      fail(402, "insufficient_balance", "Saldo insuficiente para essa oferta. Recarregue a carteira ou escolha dinheiro.");
+      fail2(402, "insufficient_balance", "Saldo insuficiente para essa oferta. Recarregue a carteira ou escolha dinheiro.");
     const open = await this.store.query("indrive", [["passengerId", "==", auth.uid]], 200);
     if (open.some((r) => r.status === "open" || r.status === "matched"))
-      fail(409, "request_in_progress", "Voc\xEA j\xE1 tem um pedido de negocia\xE7\xE3o em andamento.");
-    const id = randomUUID();
+      fail2(409, "request_in_progress", "Voc\xEA j\xE1 tem um pedido de negocia\xE7\xE3o em andamento.");
+    const id = randomUUID2();
     const doc = {
       id,
       passengerId: user.uid,
@@ -1130,15 +1728,15 @@ var FrocService = class {
     const offeredPrice = round2(num(body.offeredPrice, 8, 5e3, "proposta"));
     const reqDoc = await this.store.get("indrive", id);
     if (reqDoc && offeredPrice < negotiationFloor(Number(reqDoc.distanceKm)))
-      fail(400, "below_floor", `A proposta m\xEDnima \xE9 ${brl(negotiationFloor(Number(reqDoc.distanceKm)))}.`);
+      fail2(400, "below_floor", `A proposta m\xEDnima \xE9 ${brl(negotiationFloor(Number(reqDoc.distanceKm)))}.`);
     const etaMin = Math.round(num(body.etaMin ?? 5, 1, 60, "tempo"));
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet(tx, "indrive", id, "Pedido");
-      if (r.passengerId === auth.uid) fail(403, "own_request", "Voc\xEA n\xE3o pode responder ao pr\xF3prio pedido.");
-      if (r.status !== "open") fail(409, "closed", "Este pedido n\xE3o est\xE1 mais aberto.");
+      if (r.passengerId === auth.uid) fail2(403, "own_request", "Voc\xEA n\xE3o pode responder ao pr\xF3prio pedido.");
+      if (r.status !== "open") fail2(409, "closed", "Este pedido n\xE3o est\xE1 mais aberto.");
       const others = (r.offers || []).filter((o) => o.driverId !== auth.uid);
       const offer = {
-        id: randomUUID(),
+        id: randomUUID2(),
         driverId: driver.uid,
         driverName: driver.name,
         driverRating: round2(driver.rating),
@@ -1159,9 +1757,9 @@ var FrocService = class {
   async acceptInDriveOffer(auth, id, offerId) {
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet(tx, "indrive", id, "Pedido");
-      if (r.passengerId !== auth.uid) fail(403, "forbidden", "S\xF3 quem fez o pedido pode aceitar.");
-      if (r.status !== "open") fail(409, "closed", "Este pedido n\xE3o est\xE1 mais aberto.");
-      const offer = (r.offers || []).find((o) => o.id === offerId) ?? fail(400, "invalid_offer", "Proposta inv\xE1lida.");
+      if (r.passengerId !== auth.uid) fail2(403, "forbidden", "S\xF3 quem fez o pedido pode aceitar.");
+      if (r.status !== "open") fail2(409, "closed", "Este pedido n\xE3o est\xE1 mais aberto.");
+      const offer = (r.offers || []).find((o) => o.id === offerId) ?? fail2(400, "invalid_offer", "Proposta inv\xE1lida.");
       const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
       const cents = toCents(Number(offer.offeredPrice));
       const patch = {
@@ -1185,8 +1783,8 @@ var FrocService = class {
     await this.settings();
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet(tx, "indrive", id, "Pedido");
-      if (r.driverId !== auth.uid) fail(403, "forbidden", "S\xF3 o motorista escolhido pode finalizar.");
-      if (r.status !== "matched") fail(409, "invalid_state", "Esta viagem n\xE3o est\xE1 em andamento.");
+      if (r.driverId !== auth.uid) fail2(403, "forbidden", "S\xF3 o motorista escolhido pode finalizar.");
+      if (r.status !== "matched") fail2(409, "invalid_state", "Esta viagem n\xE3o est\xE1 em andamento.");
       const driver = await this.mustGet(tx, "users", auth.uid, "Motorista");
       const passenger = await tx.get("users", String(r.passengerId));
       const amount = r.paymentMethod === "froc_pay" ? Number(r.escrowCents) : Number(r.agreedPriceCents);
@@ -1201,8 +1799,8 @@ var FrocService = class {
   async cancelInDrive(auth, id) {
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet(tx, "indrive", id, "Pedido");
-      if (r.passengerId !== auth.uid) fail(403, "forbidden", "S\xF3 quem fez o pedido pode cancelar.");
-      if (r.status !== "open" && r.status !== "matched") fail(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
+      if (r.passengerId !== auth.uid) fail2(403, "forbidden", "S\xF3 quem fez o pedido pode cancelar.");
+      if (r.status !== "open" && r.status !== "matched") fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
       const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
       const escrow = Number(r.escrowCents || 0);
       const patch = { status: "cancelled", escrowCents: 0, cancelledAt: this.iso() };
@@ -1231,11 +1829,11 @@ var FrocService = class {
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const distanceKm = calculateDistanceKm(origin, destination);
-    const departureTime = /^\d{2}:\d{2}$/.test(String(body.departureTime)) ? String(body.departureTime) : fail(400, "invalid_time", "Hor\xE1rio inv\xE1lido.");
+    const departureTime = /^\d{2}:\d{2}$/.test(String(body.departureTime)) ? String(body.departureTime) : fail2(400, "invalid_time", "Hor\xE1rio inv\xE1lido.");
     const [hh, mm] = departureTime.split(":").map(Number);
     const arr = (hh * 60 + mm + estimateDurationMin(distanceKm, "highway")) % 1440;
     const seats = Math.round(num(body.totalSeats, 1, 6, "vagas"));
-    const id = randomUUID();
+    const id = randomUUID2();
     const doc = {
       id,
       driverId: driver.uid,
@@ -1248,7 +1846,7 @@ var FrocService = class {
       destination,
       pickupSpot: text(body.pickupSpot, 120) || `${origin.city} \xB7 ponto combinado`,
       dropoffSpot: text(body.dropoffSpot, 120) || `${destination.city} \xB7 ponto combinado`,
-      date: text(body.date, 40) || fail(400, "invalid_date", "Informe a data da viagem."),
+      date: text(body.date, 40) || fail2(400, "invalid_date", "Informe a data da viagem."),
       departureTime,
       arrivalTime: `${String(Math.floor(arr / 60)).padStart(2, "0")}:${String(arr % 60).padStart(2, "0")}`,
       distanceKm,
@@ -1266,12 +1864,12 @@ var FrocService = class {
   }
   async bookCarpool(auth, tripId, seatsWanted) {
     const seats = Math.round(num(seatsWanted, 1, 6, "vagas"));
-    const bookingId = randomUUID();
+    const bookingId = randomUUID2();
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet(tx, "carpools", tripId, "Carona");
-      if (t.driverId === auth.uid) fail(403, "own_trip", "Voc\xEA \xE9 o motorista desta carona.");
-      if (t.status !== "open") fail(409, "closed", "Esta carona n\xE3o aceita mais reservas.");
-      if (Number(t.availableSeats) < seats) fail(409, "no_seats", "N\xE3o h\xE1 vagas suficientes.");
+      if (t.driverId === auth.uid) fail2(403, "own_trip", "Voc\xEA \xE9 o motorista desta carona.");
+      if (t.status !== "open") fail2(409, "closed", "Esta carona n\xE3o aceita mais reservas.");
+      if (Number(t.availableSeats) < seats) fail2(409, "no_seats", "N\xE3o h\xE1 vagas suficientes.");
       const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
       const cents = toCents(Number(t.pricePerSeat)) * seats;
       this.debit(tx, passenger, cents, `Carona ${t.origin.city} \u2192 ${t.destination.city} (${seats} vaga(s)) \xB7 retido`, "carona");
@@ -1297,10 +1895,10 @@ var FrocService = class {
     const mine = (await this.store.query("carpoolBookings", [["passengerId", "==", auth.uid]], 300)).filter(
       (b) => b.tripId === tripId && b.status === "paid"
     );
-    if (!mine.length) fail(404, "not_found", "Voc\xEA n\xE3o tem reserva nesta carona.");
+    if (!mine.length) fail2(404, "not_found", "Voc\xEA n\xE3o tem reserva nesta carona.");
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet(tx, "carpools", tripId, "Carona");
-      if (t.status !== "open") fail(409, "invalid_state", "Esta carona j\xE1 foi conclu\xEDda ou cancelada.");
+      if (t.status !== "open") fail2(409, "invalid_state", "Esta carona j\xE1 foi conclu\xEDda ou cancelada.");
       const passenger = await this.mustGet(tx, "users", auth.uid, "Passageiro");
       const bookings = [];
       for (const b of mine) bookings.push(await this.mustGet(tx, "carpoolBookings", String(b.id), "Reserva"));
@@ -1322,8 +1920,8 @@ var FrocService = class {
     const tripBookings = await this.store.query("carpoolBookings", [["tripId", "==", tripId]], 50);
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet(tx, "carpools", tripId, "Carona");
-      if (t.driverId !== auth.uid) fail(403, "forbidden", "S\xF3 o motorista da carona pode fazer isso.");
-      if (t.status !== "open") fail(409, "invalid_state", "Esta carona j\xE1 foi encerrada.");
+      if (t.driverId !== auth.uid) fail2(403, "forbidden", "S\xF3 o motorista da carona pode fazer isso.");
+      if (t.status !== "open") fail2(409, "invalid_state", "Esta carona j\xE1 foi encerrada.");
       const driver = await this.mustGet(tx, "users", auth.uid, "Motorista");
       const bookings = [];
       for (const b of tripBookings) bookings.push(await this.mustGet(tx, "carpoolBookings", String(b.id), "Reserva"));
@@ -1390,7 +1988,7 @@ var FrocService = class {
     const distanceKm = calculateDistanceKm(origin, destination);
     const price = round2(num(body.emptyReturnPrice, 50, 1e5, "pre\xE7o"));
     const standardPrice = Math.max(price, Math.round(distanceKm * 9.5));
-    const id = randomUUID();
+    const id = randomUUID2();
     const doc = {
       id,
       truckerId: trucker.uid,
@@ -1404,7 +2002,7 @@ var FrocService = class {
       origin,
       destination,
       distanceKm,
-      departureDate: text(body.departureDate, 60) || fail(400, "invalid_date", "Informe a data de sa\xEDda."),
+      departureDate: text(body.departureDate, 60) || fail2(400, "invalid_date", "Informe a data de sa\xEDda."),
       departureWindow: text(body.departureWindow, 120) || "Combinar hor\xE1rio pelo telefone ap\xF3s a reserva",
       direction: ["indo_vazio", "voltando_vazio", "espaco_parcial"].includes(String(body.direction)) ? body.direction : "voltando_vazio",
       availableTons: round2(num(body.availableTons, 0.1, 60, "toneladas")),
@@ -1423,8 +2021,8 @@ var FrocService = class {
   async reserveEmptyTruck(auth, id) {
     const route = await this.store.transaction(async (tx) => {
       const t = await this.mustGet(tx, "emptyTrucks", id, "Caminh\xE3o");
-      if (t.truckerId === auth.uid) fail(403, "own_route", "Esta rota \xE9 sua.");
-      if (t.status !== "available") fail(409, "taken", "Esta rota j\xE1 foi reservada.");
+      if (t.truckerId === auth.uid) fail2(403, "own_route", "Esta rota \xE9 sua.");
+      if (t.status !== "available") fail2(409, "taken", "Esta rota j\xE1 foi reservada.");
       const client = await this.mustGet(tx, "users", auth.uid, "Cliente");
       const cents = toCents(Number(t.emptyReturnPrice));
       this.debit(tx, client, cents, `Frete retorno vazio ${t.origin.city} \u2192 ${t.destination.city} \xB7 retido`, "frete");
@@ -1441,12 +2039,12 @@ var FrocService = class {
       const t = await this.mustGet(tx, "emptyTrucks", id, "Caminh\xE3o");
       const isTrucker = t.truckerId === auth.uid;
       const isClient = t.reservedById === auth.uid;
-      if (!isTrucker && !isClient) fail(403, "forbidden", "Voc\xEA n\xE3o participa deste frete.");
+      if (!isTrucker && !isClient) fail2(403, "forbidden", "Voc\xEA n\xE3o participa deste frete.");
       const escrow = Number(t.escrowCents || 0);
       const label = `${t.origin.city} \u2192 ${t.destination.city}`;
       if (action === "complete") {
-        if (!isTrucker) fail(403, "forbidden", "S\xF3 o caminhoneiro confirma a entrega.");
-        if (t.status !== "reserved") fail(409, "invalid_state", "Este frete n\xE3o est\xE1 reservado.");
+        if (!isTrucker) fail2(403, "forbidden", "S\xF3 o caminhoneiro confirma a entrega.");
+        if (t.status !== "reserved") fail2(409, "invalid_state", "Este frete n\xE3o est\xE1 reservado.");
         const trucker = await this.mustGet(tx, "users", auth.uid, "Caminhoneiro");
         const client = await tx.get("users", String(t.reservedById));
         tx.update("emptyTrucks", id, { status: "completed", escrowCents: 0, completedAt: this.iso() });
@@ -1467,7 +2065,7 @@ var FrocService = class {
         t.status = "cancelled";
         return t;
       }
-      return fail(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
+      return fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
     });
     return this.truckView(route, auth.uid);
   }
@@ -1478,8 +2076,8 @@ var FrocService = class {
     const distanceKm = calculateDistanceKm(origin, destination);
     const kinds = ["mudanca_residencial", "carreto_rapido", "carga_paletizada", "veiculo_moto"];
     if (Number(body.proposedBudget) < freightFloor(distanceKm))
-      fail(400, "below_floor", `O or\xE7amento m\xEDnimo para ${distanceKm} km \xE9 ${brl(freightFloor(distanceKm))}.`);
-    const id = randomUUID();
+      fail2(400, "below_floor", `O or\xE7amento m\xEDnimo para ${distanceKm} km \xE9 ${brl(freightFloor(distanceKm))}.`);
+    const id = randomUUID2();
     const doc = {
       id,
       clientId: client.uid,
@@ -1497,7 +2095,7 @@ var FrocService = class {
       estimatedVolumeM3: round2(num(body.estimatedVolumeM3 ?? 1, 0.1, 150, "volume")),
       minimumPrice: freightFloor(distanceKm),
       proposedBudget: round2(num(body.proposedBudget, 50, 2e5, "or\xE7amento")),
-      scheduledDate: text(body.scheduledDate, 60) || fail(400, "invalid_date", "Informe a data da coleta."),
+      scheduledDate: text(body.scheduledDate, 60) || fail2(400, "invalid_date", "Informe a data da coleta."),
       status: "open_bids",
       bids: [],
       escrowCents: 0,
@@ -1511,12 +2109,12 @@ var FrocService = class {
     const price = round2(num(body.price, 50, 2e5, "lance"));
     const item = await this.store.transaction(async (tx) => {
       const f = await this.mustGet(tx, "freights", id, "Frete");
-      if (f.clientId === auth.uid) fail(403, "own_freight", "Este pedido \xE9 seu.");
-      if (f.status !== "open_bids") fail(409, "closed", "Este frete n\xE3o recebe mais lances.");
-      if (price < freightFloor(Number(f.distanceKm))) fail(400, "below_floor", `O lance m\xEDnimo \xE9 ${brl(freightFloor(Number(f.distanceKm)))}.`);
+      if (f.clientId === auth.uid) fail2(403, "own_freight", "Este pedido \xE9 seu.");
+      if (f.status !== "open_bids") fail2(409, "closed", "Este frete n\xE3o recebe mais lances.");
+      if (price < freightFloor(Number(f.distanceKm))) fail2(400, "below_floor", `O lance m\xEDnimo \xE9 ${brl(freightFloor(Number(f.distanceKm)))}.`);
       const others = (f.bids || []).filter((b) => b.truckerId !== auth.uid);
       const bid = {
-        id: randomUUID(),
+        id: randomUUID2(),
         truckerId: trucker.uid,
         truckerName: trucker.companyName ? `${trucker.name} \xB7 ${trucker.companyName}` : trucker.name,
         truckerRating: round2(trucker.rating),
@@ -1535,9 +2133,9 @@ var FrocService = class {
   async acceptFreightBid(auth, id, bidId) {
     const item = await this.store.transaction(async (tx) => {
       const f = await this.mustGet(tx, "freights", id, "Frete");
-      if (f.clientId !== auth.uid) fail(403, "forbidden", "S\xF3 quem pediu o frete pode contratar.");
-      if (f.status !== "open_bids") fail(409, "closed", "Este frete j\xE1 foi contratado.");
-      const bid = (f.bids || []).find((b) => b.id === bidId) ?? fail(400, "invalid_bid", "Lance inv\xE1lido.");
+      if (f.clientId !== auth.uid) fail2(403, "forbidden", "S\xF3 quem pediu o frete pode contratar.");
+      if (f.status !== "open_bids") fail2(409, "closed", "Este frete j\xE1 foi contratado.");
+      const bid = (f.bids || []).find((b) => b.id === bidId) ?? fail2(400, "invalid_bid", "Lance inv\xE1lido.");
       const client = await this.mustGet(tx, "users", auth.uid, "Cliente");
       const truckerUser = await tx.get("users", String(bid.truckerId));
       const cents = toCents(Number(bid.price));
@@ -1563,8 +2161,8 @@ var FrocService = class {
       const f = await this.mustGet(tx, "freights", id, "Frete");
       const escrow = Number(f.escrowCents || 0);
       if (action === "deliver") {
-        if (f.acceptedTruckerId !== auth.uid) fail(403, "forbidden", "S\xF3 o caminhoneiro contratado confirma a entrega.");
-        if (f.status !== "booked" && f.status !== "in_transit") fail(409, "invalid_state", "Este frete n\xE3o est\xE1 em andamento.");
+        if (f.acceptedTruckerId !== auth.uid) fail2(403, "forbidden", "S\xF3 o caminhoneiro contratado confirma a entrega.");
+        if (f.status !== "booked" && f.status !== "in_transit") fail2(409, "invalid_state", "Este frete n\xE3o est\xE1 em andamento.");
         const trucker = await this.mustGet(tx, "users", auth.uid, "Caminhoneiro");
         const client2 = await tx.get("users", String(f.clientId));
         tx.update("freights", id, { status: "delivered", escrowCents: 0, deliveredAt: this.iso() });
@@ -1572,8 +2170,8 @@ var FrocService = class {
         this.payProvider(tx, trucker, client2, escrow, "froc_pay", String(f.title), "frete");
         return f;
       }
-      if (f.clientId !== auth.uid) fail(403, "forbidden", "S\xF3 quem pediu o frete pode cancelar.");
-      if (f.status !== "open_bids" && f.status !== "booked") fail(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
+      if (f.clientId !== auth.uid) fail2(403, "forbidden", "S\xF3 quem pediu o frete pode cancelar.");
+      if (f.status !== "open_bids" && f.status !== "booked") fail2(409, "invalid_state", "N\xE3o \xE9 poss\xEDvel cancelar agora.");
       const client = await this.mustGet(tx, "users", auth.uid, "Cliente");
       tx.update("freights", id, { status: "cancelled", escrowCents: 0, cancelledAt: this.iso() });
       f.status = "cancelled";
@@ -1623,8 +2221,13 @@ var FrocService = class {
     const lng = num(lngValue, -180, 180, "longitude");
     const at = this.iso();
     const cell = this.geo.cellOf(lat, lng);
-    await this.store.update("users", user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, locationAt: at });
-    const location = { lat: round6(lat), lng: round6(lng), at };
+    let heading = typeof user.driverHeading === "number" ? user.driverHeading : null;
+    if (typeof user.driverLat === "number" && typeof user.driverLng === "number") {
+      const prev = { lat: user.driverLat, lng: user.driverLng };
+      if (Math.abs(prev.lat - lat) + Math.abs(prev.lng - lng) > 15e-5) heading = bearing(prev, { lat, lng });
+    }
+    await this.store.update("users", user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, locationAt: at, ...heading !== null ? { driverHeading: heading } : {} });
+    const location = { lat: round6(lat), lng: round6(lng), at, ...heading !== null ? { heading } : {} };
     const [rides, deals] = await Promise.all([
       this.store.query("rides", [["driverId", "==", user.uid]], 100),
       this.store.query("indrive", [["driverId", "==", user.uid]], 100)
@@ -1649,7 +2252,8 @@ var FrocService = class {
     let rides = 0;
     let deals = 0;
     for (const r of await this.store.query("rides", [["status", "==", "searching"]], 300)) {
-      if (now3 - Date.parse(String(r.createdAt)) < cfg.rideSearchTimeoutMin * 6e4) continue;
+      const limitMin = r.delivery ? Math.max(cfg.rideSearchTimeoutMin, DELIVERY_SEARCH_MIN) : cfg.rideSearchTimeoutMin;
+      if (now3 - Date.parse(String(r.createdAt)) < limitMin * 6e4) continue;
       const done = await this.store.transaction(async (tx) => {
         const ride = await tx.get("rides", String(r.id));
         if (!ride || ride.status !== "searching") return false;
@@ -1659,14 +2263,18 @@ var FrocService = class {
         if (passenger && escrow > 0) this.credit(tx, passenger, escrow, "Estorno \xB7 nenhum motorista dispon\xEDvel a tempo", "estorno");
         return true;
       });
-      if (done) rides++;
+      if (done) {
+        rides++;
+        if (r.delivery) await this.deliveryEvent({ ...r, status: "cancelled", cancelledBy: "timeout" });
+      }
     }
     for (const r of await this.store.query("indrive", [["status", "==", "open"]], 300)) {
       if (now3 - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 6e4) continue;
       await this.store.update("indrive", String(r.id), { status: "cancelled", cancelledAt: this.iso(), cancelledBy: "timeout" });
       deals++;
     }
-    return { ridesCancelled: rides, requestsExpired: deals };
+    const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
+    return { ridesCancelled: rides, requestsExpired: deals, webhooks };
   }
   // ------------------------------------------------------------- SOS e pontos
   async createSos(auth, body) {
@@ -1676,11 +2284,11 @@ var FrocService = class {
     let trip = null;
     if (refId && (kind === "ride" || kind === "indrive")) {
       trip = await this.store.get(kind === "ride" ? "rides" : "indrive", refId);
-      if (!trip || trip.passengerId !== user.uid && trip.driverId !== user.uid) fail(403, "forbidden", "Voc\xEA n\xE3o participa desta viagem.");
+      if (!trip || trip.passengerId !== user.uid && trip.driverId !== user.uid) fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta viagem.");
     }
     const lat = Number(body.lat);
     const lng = Number(body.lng);
-    const id = randomUUID();
+    const id = randomUUID2();
     const doc = {
       id,
       uid: user.uid,
@@ -1708,8 +2316,8 @@ var FrocService = class {
   }
   async resolveSos(auth, id, note) {
     this.requireAdmin(auth);
-    const sos = await this.store.get("sos", String(id)) ?? fail(404, "not_found", "Alerta n\xE3o encontrado.");
-    if (sos.status !== "open") fail(409, "not_open", "Este alerta j\xE1 foi resolvido.");
+    const sos = await this.store.get("sos", String(id)) ?? fail2(404, "not_found", "Alerta n\xE3o encontrado.");
+    if (sos.status !== "open") fail2(409, "not_open", "Este alerta j\xE1 foi resolvido.");
     await this.store.update("sos", String(id), { status: "resolved", resolvedBy: auth.agent ? `IA (${auth.agent})` : auth.email, note: text(note, 300), resolvedAt: this.iso() });
     await this.audit(auth, "sos_resolvido", String(id), { note: text(note, 300) });
     return { ok: true };
@@ -1720,7 +2328,7 @@ var FrocService = class {
     await this.store.transaction(async (tx) => {
       const user = await this.mustGet(tx, "users", auth.uid, "Usu\xE1rio");
       if ((user.points || 0) < cfg.pointsPerRedeem)
-        fail(409, "not_enough_points", `Voc\xEA precisa de ${cfg.pointsPerRedeem} pontos para trocar por ${brl(REDEEM_VALUE_CENTS / 100)}.`);
+        fail2(409, "not_enough_points", `Voc\xEA precisa de ${cfg.pointsPerRedeem} pontos para trocar por ${brl(REDEEM_VALUE_CENTS / 100)}.`);
       user.points = (user.points || 0) - cfg.pointsPerRedeem;
       tx.update("users", user.uid, { points: user.points });
       this.credit(tx, user, REDEEM_VALUE_CENTS, `B\xF4nus fidelidade (${cfg.pointsPerRedeem} pontos)`, "bonus");
@@ -1746,15 +2354,17 @@ var FrocService = class {
       driverStatus: u.driverStatus,
       truckerStatus: u.truckerStatus,
       blocked: Boolean(u.blocked),
-      blockedReason: u.blockedReason || ""
+      blockedReason: u.blockedReason || "",
+      qualityAlert: u.qualityAlert || "",
+      merchantStatus: u.merchantStatus || "none"
     }));
   }
   async setBlocked(auth, uid, blocked, reason) {
     this.requireAdmin(auth);
-    if (uid === auth.uid) fail(400, "self", "Voc\xEA n\xE3o pode bloquear a pr\xF3pria conta.");
-    const user = await this.store.get("users", String(uid)) ?? fail(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
+    if (uid === auth.uid) fail2(400, "self", "Voc\xEA n\xE3o pode bloquear a pr\xF3pria conta.");
+    const user = await this.store.get("users", String(uid)) ?? fail2(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
     const why = text(reason, 200);
-    if (blocked === true && why.length < 5) fail(400, "reason_required", "Explique o motivo do bloqueio.");
+    if (blocked === true && why.length < 5) fail2(400, "reason_required", "Explique o motivo do bloqueio.");
     await this.store.update("users", user.uid, {
       blocked: blocked === true,
       blockedReason: blocked === true ? why : "",
@@ -1791,7 +2401,7 @@ var FrocService = class {
   /** Ficha completa de um usuário: dados, carteira e últimos serviços. */
   async adminUserDetail(auth, uid) {
     this.requireAdmin(auth);
-    const user = await this.store.get("users", String(uid)) ?? fail(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
+    const user = await this.store.get("users", String(uid)) ?? fail2(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
     const [tx, ridesP, ridesD, sos, withdrawals] = await Promise.all([
       this.transactions(user.uid),
       this.store.query("rides", [["passengerId", "==", user.uid]], 100),
@@ -1830,6 +2440,294 @@ var FrocService = class {
     const [rides, indrive, carpools, emptyTrucks, freights] = await Promise.all(["rides", "indrive", "carpools", "emptyTrucks", "freights"].map(pick));
     return { corridas: rides, negociacoes: indrive, caronas: carpools, veiculosVazios: emptyTrucks, fretes: freights };
   }
+  // ------------------------------------- mapa: carros por perto (estilo Uber)
+  /**
+   * Motoristas online perto de um ponto. A posição vai levemente deslocada (até ~130 m, fixa
+   * por motorista no dia) para ninguém descobrir onde um motorista mora ou para; o id também
+   * é anônimo. Uma consulta ao banco a cada 8 s serve todos os passageiros da instância.
+   */
+  async nearbyDrivers(auth, latValue, lngValue) {
+    const lat = num(latValue, -34.5, 5.9, "latitude");
+    const lng = num(lngValue, -74.5, -28.5, "longitude");
+    if (Date.now() - this.onlineCache.at > 8e3) {
+      this.onlineCache = { at: Date.now(), users: await this.store.query("users", [["driverOnline", "==", true]], 500) };
+    }
+    const nowMs = this.now().getTime();
+    const day = this.iso().slice(0, 10);
+    const drivers = this.onlineCache.users.filter(
+      (u) => u.uid !== auth.uid && !u.blocked && typeof u.driverLat === "number" && typeof u.driverLng === "number" && nowMs - Date.parse(String(u.locationAt || 0)) < LOCATION_FRESH_MS && (u.driverStatus === "approved" || u.truckerStatus === "approved")
+    ).map((u) => ({ u, km: straightKm({ lat, lng }, { lat: u.driverLat, lng: u.driverLng }) })).filter((x) => x.km <= 6).sort((a, b) => a.km - b.km).slice(0, 20).map(({ u }) => {
+      const h = createHash2("sha256").update(`${u.uid}:${day}`).digest();
+      return {
+        id: h.toString("hex").slice(0, 12),
+        lat: round6(u.driverLat + (h[0] / 255 - 0.5) * 24e-4),
+        lng: round6(u.driverLng + (h[1] / 255 - 0.5) * 24e-4),
+        heading: typeof u.driverHeading === "number" ? u.driverHeading : null,
+        kind: u.driverStatus === "approved" ? u.driverVehicleType === "moto" ? "moto" : "carro" : "carga"
+      };
+    });
+    return { drivers };
+  }
+  // ---------------------------------- compartilhar a viagem (link público)
+  async shareTrip(auth, kind, refId) {
+    if (kind !== "ride" && kind !== "indrive") return fail2(400, "invalid_kind", "Tipo de viagem inv\xE1lido.");
+    const trip = await this.store.get(kind === "ride" ? "rides" : "indrive", refId) ?? fail2(404, "not_found", "Viagem n\xE3o encontrada.");
+    if (trip.passengerId !== auth.uid && trip.driverId !== auth.uid) fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta viagem.");
+    if (["completed", "cancelled"].includes(String(trip.status))) fail2(409, "trip_ended", "Esta viagem j\xE1 terminou.");
+    const nowIso = this.iso();
+    const existing = (await this.store.query("shares", [["refId", "==", refId]], 30)).find(
+      (x) => x.createdBy === auth.uid && String(x.expiresAt) > nowIso
+    );
+    if (existing) return { token: String(existing.id), path: `/acompanhar/${existing.id}`, expiresAt: String(existing.expiresAt) };
+    return this.newShare(kind, refId, auth.uid);
+  }
+  async newShare(kind, refId, createdBy, token = randomBytes2(18).toString("base64url")) {
+    const expiresAt = new Date(this.now().getTime() + SHARE_TTL_MS).toISOString();
+    await this.store.set("shares", token, { id: token, kind, refId, createdBy, createdAt: this.iso(), expiresAt });
+    return { token, path: `/acompanhar/${token}`, expiresAt };
+  }
+  /** O que aparece para quem abriu o link (sem login): nada de telefone, e-mail ou valores. */
+  async trackShare(token) {
+    if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) fail2(404, "not_found", "Link de acompanhamento inv\xE1lido.");
+    const share = await this.store.get("shares", token);
+    const nowMs = this.now().getTime();
+    if (!share || Date.parse(String(share.expiresAt)) < nowMs) fail2(410, "expired", "Este link de acompanhamento expirou.");
+    const kind = share.kind === "indrive" ? "indrive" : "ride";
+    const trip = await this.store.get(kind === "ride" ? "rides" : "indrive", String(share.refId)) ?? fail2(404, "not_found", "Viagem n\xE3o encontrada.");
+    const status = String(trip.status);
+    const ended = status === "completed" || status === "cancelled";
+    const endedAt = Date.parse(String(trip.completedAt || trip.cancelledAt || ""));
+    if (ended && Number.isFinite(endedAt) && nowMs - endedAt > SHARE_AFTER_END_MS) fail2(410, "expired", "Esta viagem terminou e o link expirou.");
+    const delivery = trip.delivery;
+    let driver = null;
+    if (kind === "ride" && trip.driverName)
+      driver = { firstName: firstName(trip.driverName), vehicle: String(trip.vehicleModel || ""), plate: String(trip.vehiclePlate || ""), rating: Number(trip.driverRating) || null };
+    if (kind === "indrive" && trip.acceptedOfferId) {
+      const offer = (trip.offers || []).find((o) => o.id === trip.acceptedOfferId);
+      if (offer) driver = { firstName: firstName(offer.driverName), vehicle: String(offer.vehicleModel || ""), plate: String(offer.vehiclePlate || ""), rating: Number(offer.driverRating) || null };
+    }
+    const RIDE_LABEL = {
+      searching: "Procurando motorista",
+      accepted: "Motorista a caminho do embarque",
+      arriving: "Motorista no local de embarque",
+      in_progress: "Em viagem",
+      completed: "Viagem conclu\xEDda",
+      cancelled: "Viagem cancelada",
+      open: "Aguardando propostas de motoristas",
+      matched: "Motorista confirmado \xB7 a caminho ou em viagem"
+    };
+    const statusLabel = delivery ? DELIVERY_STATUS[status]?.[1] || status : RIDE_LABEL[status] || status;
+    const point = (p) => {
+      const g = p || {};
+      return { name: String(g.name || ""), lat: Number(g.lat), lng: Number(g.lng) };
+    };
+    const loc = trip.driverLocation;
+    return {
+      kind: delivery ? "delivery" : kind,
+      status,
+      statusLabel,
+      active: !ended,
+      categoryLabel: String(trip.categoryLabel || (kind === "indrive" ? "Corrida negociada" : "Corrida")),
+      origin: point(trip.origin),
+      destination: point(trip.destination),
+      passengerFirstName: delivery ? firstName(delivery.recipientName) : firstName(trip.passengerName),
+      driver,
+      location: !ended && loc ? { lat: Number(loc.lat), lng: Number(loc.lng), at: String(loc.at), ...typeof loc.heading === "number" ? { heading: loc.heading } : {} } : null,
+      merchantName: delivery ? String(delivery.merchantName || "") : void 0,
+      updatedAt: String(loc?.at || trip.updatedAt || trip.createdAt || ""),
+      expiresAt: String(share.expiresAt)
+    };
+  }
+  // ------------------------------- gravação da viagem (aviso para a outra parte)
+  async recordingNotice(auth, kind, id, mode) {
+    if (kind !== "ride" && kind !== "indrive") return fail2(400, "invalid_kind", "Tipo de viagem inv\xE1lido.");
+    const col = kind === "ride" ? "rides" : "indrive";
+    const value = mode === "audio" || mode === "video" ? { mode, at: this.iso() } : null;
+    await this.store.transaction(async (tx) => {
+      const trip = await this.mustGet(tx, col, id, "Viagem");
+      const isDriver = trip.driverId === auth.uid;
+      if (trip.passengerId !== auth.uid && !isDriver) fail2(403, "forbidden", "Voc\xEA n\xE3o participa desta viagem.");
+      if (value && ["completed", "cancelled", "searching", "open"].includes(String(trip.status))) fail2(409, "invalid_state", "S\xF3 d\xE1 para gravar durante a viagem.");
+      const who = isDriver ? "driver" : "passenger";
+      const patch = { recording: { ...trip.recording || {}, [who]: value } };
+      if (kind === "ride" && value) {
+        const messages = Array.isArray(trip.messages) ? trip.messages : [];
+        const time = this.now().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+        const textMsg = `\u{1F534} Aviso autom\xE1tico: ${isDriver ? "o motorista" : "o passageiro"} come\xE7ou a gravar ${mode === "video" ? "em v\xEDdeo" : "o \xE1udio de"} esta viagem pelo pr\xF3prio celular, por seguran\xE7a. O arquivo fica s\xF3 no aparelho dele.`;
+        patch.messages = [...messages, { sender: who, text: textMsg, time }].slice(-200);
+      }
+      tx.update(col, id, patch);
+    });
+    return { ok: true };
+  }
+  // ---------------------------------------------- Froc Entregas (lojas)
+  deliveryPrice(distanceKm, surge) {
+    const cat = RIDE_CATEGORIES.find((c) => c.id === "froc_delivery");
+    const durationMin = estimateDurationMin(distanceKm, "moto");
+    return { durationMin, price: round2(Math.max(7.5, round2(cat.baseFare + distanceKm * cat.perKm + durationMin * cat.perMin)) * surge) };
+  }
+  /** Ponto vindo da API/painel: com coordenadas, ou só endereço (se houver geocodificação). */
+  async deliveryPoint(raw, label) {
+    const p = raw && typeof raw === "object" ? raw : {};
+    const address = text(p.address ?? p.name, 160);
+    const lat = Number(p.lat ?? p.latitude);
+    const lng = Number(p.lng ?? p.longitude);
+    if (p.lat !== void 0 || p.latitude !== void 0) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) fail2(400, "invalid_coordinates", `Latitude/longitude inv\xE1lidas no ${label}.`);
+      return resolvePoint({ id: text(p.id, 80), name: address || `Ponto ${lat.toFixed(5)}, ${lng.toFixed(5)}`, city: text(p.city, 80), state: text(p.state, 2), lat, lng, kind: "avenue" }, null);
+    }
+    if (address.length < 5) fail2(400, "missing_address", `Informe o endere\xE7o do ${label}.`);
+    if (!this.deps.geocode) fail2(400, "missing_coordinates", `Envie latitude e longitude do ${label} (a busca por endere\xE7o n\xE3o est\xE1 ativada).`);
+    const g = await this.deps.geocode(address);
+    if (!g) fail2(400, "address_not_found", `N\xE3o encontrei o endere\xE7o do ${label}. Confira rua, n\xFAmero e cidade.`);
+    return resolvePoint({ name: g.name || address, city: g.city, state: g.state, lat: g.lat, lng: g.lng, kind: "avenue" }, null);
+  }
+  async deliveryRoute(merchant, body) {
+    const pickup = body.pickup ? await this.deliveryPoint(body.pickup, "endere\xE7o de coleta") : merchant.merchant?.pickup ?? fail2(400, "missing_pickup", "Cadastre o endere\xE7o de coleta da loja.");
+    const dropoff = await this.deliveryPoint(body.dropoff, "endere\xE7o de entrega");
+    const distanceKm = calculateDistanceKm(pickup, dropoff);
+    if (distanceKm > 60) fail2(400, "too_far", "Entregas de at\xE9 60 km. Para dist\xE2ncias maiores, use Cargas.");
+    const surge = await this.surgeAt(pickup.lat, pickup.lng);
+    return { pickup, dropoff, distanceKm, surge, ...this.deliveryPrice(distanceKm, surge) };
+  }
+  async quoteDelivery(uid, body) {
+    await this.settings();
+    const merchant = await this.approvedMerchant(uid);
+    const r = await this.deliveryRoute(merchant, body);
+    return { price: r.price, currency: "BRL", distanceKm: r.distanceKm, durationMin: r.durationMin, surge: r.surge, pickup: r.pickup, dropoff: r.dropoff };
+  }
+  async createDelivery(uid, body, source) {
+    await this.settings();
+    const merchant = await this.approvedMerchant(uid);
+    const orderRef = text(body.orderRef, 60);
+    if (orderRef) {
+      const mine = await this.store.query("rides", [["merchantId", "==", uid]], 500);
+      const dup = mine.find((r) => r.delivery?.orderRef === orderRef && r.status !== "cancelled");
+      if (dup) return this.deliveryView(dup);
+    }
+    const rec = body.recipient && typeof body.recipient === "object" ? body.recipient : {};
+    const recipientName = text(rec.name, 80);
+    const recipientPhone = text(rec.phone, 30);
+    if (recipientName.length < 2) fail2(400, "invalid_recipient", "Informe o nome de quem recebe.");
+    if (recipientPhone.replace(/\D/g, "").length < 10) fail2(400, "invalid_recipient_phone", "Informe o telefone de quem recebe, com DDD.");
+    const vehicle = body.vehicle === "moto" || body.vehicle === "carro" ? body.vehicle : "qualquer";
+    const route = await this.deliveryRoute(merchant, body);
+    const priceCents = toCents(route.price);
+    const id = randomUUID2();
+    const nowIso = this.iso();
+    const share = { token: randomBytes2(18).toString("base64url") };
+    const m = merchant.merchant || {};
+    const ride = await this.store.transaction(async (tx) => {
+      const payer = await this.mustGet(tx, "users", uid, "Loja");
+      this.debit(tx, payer, priceCents, `Froc Entregas \xB7 ${recipientName}${orderRef ? ` \xB7 pedido ${orderRef}` : ""} \xB7 valor retido`, "entrega");
+      const doc = {
+        id,
+        passengerId: uid,
+        merchantId: uid,
+        passengerName: String(m.companyName || merchant.name),
+        passengerRating: round2(merchant.passengerRating ?? 5),
+        origin: route.pickup,
+        destination: route.dropoff,
+        stops: [],
+        categoryId: "froc_delivery",
+        categoryLabel: "Froc Entregas",
+        distanceKm: route.distanceKm,
+        durationMin: route.durationMin,
+        price: route.price,
+        priceCents,
+        discountApplied: 0,
+        surgeMultiplier: route.surge,
+        originCell: this.geo.cellOf(route.pickup.lat, route.pickup.lng),
+        paymentMethod: "froc_pay",
+        pinCode: "",
+        deliveryPin: String(randomInt(1e3, 1e4)),
+        trackToken: share.token,
+        status: "searching",
+        escrowCents: priceCents,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        messages: [],
+        delivery: {
+          merchantName: String(m.companyName || merchant.name),
+          recipientName,
+          recipientPhone,
+          note: text(body.note, 300),
+          orderRef,
+          items: text(body.items, 300),
+          vehicle,
+          source
+        }
+      };
+      tx.set("rides", id, doc);
+      return doc;
+    });
+    await this.newShare("ride", id, uid, share.token);
+    await this.deliveryEvent(ride);
+    return this.deliveryView(ride);
+  }
+  deliveryView(r) {
+    const d = r.delivery || {};
+    const [status, statusLabel] = DELIVERY_STATUS[String(r.status)] || ["procurando_entregador", String(r.status)];
+    const point = (p) => {
+      const g = p || {};
+      return { name: String(g.name || ""), lat: Number(g.lat), lng: Number(g.lng) };
+    };
+    const active = ACTIVE_RIDE.includes(String(r.status));
+    return {
+      id: String(r.id),
+      status,
+      statusLabel,
+      price: Number(r.price),
+      distanceKm: Number(r.distanceKm),
+      deliveryCode: String(r.deliveryPin || ""),
+      trackingPath: r.trackToken ? `/acompanhar/${r.trackToken}` : "",
+      orderRef: String(d.orderRef || ""),
+      pickup: point(r.origin),
+      dropoff: point(r.destination),
+      recipient: { name: String(d.recipientName || ""), phone: String(d.recipientPhone || "") },
+      note: String(d.note || ""),
+      vehicle: d.vehicle || "qualquer",
+      courier: r.driverName ? {
+        firstName: firstName(r.driverName),
+        vehicle: String(r.vehicleModel || ""),
+        plate: String(r.vehiclePlate || ""),
+        location: active && r.driverLocation ? r.driverLocation : null
+      } : null,
+      createdAt: String(r.createdAt || ""),
+      updatedAt: String(r.completedAt || r.cancelledAt || r.startedAt || r.acceptedAt || r.updatedAt || r.createdAt || ""),
+      source: d.source === "api" ? "api" : "painel"
+    };
+  }
+  async listDeliveries(uid, status) {
+    await this.approvedMerchant(uid);
+    const all = byNewest(await this.store.query("rides", [["merchantId", "==", uid]], 500)).map((r) => this.deliveryView(r));
+    return { deliveries: (status ? all.filter((d) => d.status === status) : all).slice(0, 100) };
+  }
+  async getDelivery(uid, id) {
+    const r = await this.store.get("rides", id);
+    if (!r || r.merchantId !== uid) fail2(404, "not_found", "Entrega n\xE3o encontrada.");
+    return this.deliveryView(r);
+  }
+  async cancelDelivery(uid, id) {
+    await this.getDelivery(uid, id);
+    await this.rideAction({ uid, email: "", emailVerified: true }, id, { action: "cancel" });
+    return this.getDelivery(uid, id);
+  }
+  /** Avisa o sistema da loja (webhook) quando a entrega muda de situação. */
+  async deliveryEvent(ride) {
+    if (!this.deps.webhooks || !ride.merchantId) return;
+    const EVENTS = {
+      searching: "delivery.created",
+      accepted: "delivery.courier_assigned",
+      arriving: "delivery.courier_at_pickup",
+      in_progress: "delivery.picked_up",
+      completed: "delivery.delivered",
+      cancelled: "delivery.cancelled"
+    };
+    const event = EVENTS[String(ride.status)];
+    if (!event) return;
+    await this.deps.webhooks.emit(String(ride.merchantId), event, this.deliveryView(ride)).catch((e) => console.warn("Aviso de entrega falhou:", e));
+  }
   // ------------------------------------------------------------ visão geral
   /**
    * Despacho por região (H3): com a localização do motorista em dia, ele vê só os pedidos
@@ -1848,6 +2746,7 @@ var FrocService = class {
     const uid = auth.uid;
     const isDriver = user.driverStatus === "approved";
     const isTrucker = user.truckerStatus === "approved";
+    const isMerchant = user.merchantStatus === "approved";
     const q = (col, field, value, limit = 100) => this.store.query(col, [[field, "==", value]], limit);
     const [
       myRides,
@@ -1865,7 +2764,8 @@ var FrocService = class {
       myFreights,
       wonFreights,
       openFreights,
-      transactions
+      transactions,
+      merchantDeliveries
     ] = await Promise.all([
       q("rides", "passengerId", uid),
       isDriver ? q("rides", "driverId", uid) : [],
@@ -1882,7 +2782,8 @@ var FrocService = class {
       q("freights", "clientId", uid),
       isTrucker ? q("freights", "acceptedTruckerId", uid) : [],
       isTrucker ? q("freights", "status", "open_bids", 40) : [],
-      this.transactions(uid)
+      this.transactions(uid),
+      isMerchant ? q("rides", "merchantId", uid, 200) : []
     ]);
     const bookedTripIds = new Set(myBookings.filter((b) => b.status === "paid").map((b) => String(b.tripId)));
     const bookedTrips = (await Promise.all([...bookedTripIds].filter((id) => !openCarpools.some((c) => c.id === id)).map((id) => this.store.get("carpools", id)))).filter(Boolean);
@@ -1896,20 +2797,25 @@ var FrocService = class {
     const notOld = (i) => !["completed", "cancelled", "delivered"].includes(String(i.status)) || String(i.createdAt) > new Date(this.now().getTime() - 30 * 864e5).toISOString();
     return {
       profile: this.profileView(user, auth),
-      rides: recent([...myRides, ...drivingRides, ...this.nearby(user, queueRides).filter((r) => r.passengerId !== uid)], notOld).map((r) => this.rideView(r, uid)),
+      // Entregas da loja ficam no painel da loja (não aparecem como "minha corrida").
+      rides: recent(
+        [...myRides.filter((r) => !r.merchantId), ...drivingRides, ...this.nearby(user, queueRides).filter((r) => r.passengerId !== uid && this.vehicleFits(user, r))],
+        notOld
+      ).map((r) => this.rideView(r, uid)),
       indriveRequests: recent([...myInDrive, ...drivingInDrive, ...openInDrive.filter((r) => r.passengerId !== uid)], notOld).map((r) => this.indriveView(r, uid)),
       carpools: recent([...openCarpools, ...myCarpools, ...bookedTrips], notOld).map(
         (c) => this.carpoolView(c, uid, myBookings, driverTripBookings.get(String(c.id)))
       ),
       emptyTrucks: recent([...availableTrucks, ...myTrucks, ...reservedTrucks], notOld).map((t) => this.truckView(t, uid)),
       freights: recent([...myFreights, ...wonFreights, ...openFreights.filter((f) => f.clientId !== uid)], notOld).map((f) => this.freightView(f, uid)),
-      transactions
+      transactions,
+      ...isMerchant ? { deliveries: byNewest(merchantDeliveries).slice(0, 60).map((r) => this.deliveryView(r)) } : {}
     };
   }
 };
 
 // server/mercadoPago.ts
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function createMercadoPago(options) {
   const token = options.accessToken?.trim();
   const http = options.fetchImpl ?? fetch;
@@ -1976,12 +2882,12 @@ function verifyMercadoPagoSignature(input) {
   const tsMs = Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1e3;
   if (!Number.isFinite(tsMs) || Math.abs((input.nowMs ?? Date.now()) - tsMs) > 10 * 60 * 1e3) return false;
   const manifest = `id:${String(input.dataId).toLowerCase()};${input.requestId ? `request-id:${input.requestId};` : ""}ts:${ts};`;
-  const expected = createHmac("sha256", secret).update(manifest).digest("hex");
-  return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(v1.toLowerCase(), "hex"));
+  const expected = createHmac2("sha256", secret).update(manifest).digest("hex");
+  return timingSafeEqual2(Buffer.from(expected, "hex"), Buffer.from(v1.toLowerCase(), "hex"));
 }
 
 // server/blog.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // server/ai/gemini.ts
 var DEFAULT_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
@@ -2243,8 +3149,10 @@ CARTEIRA E PAGAMENTOS
 
 CADASTRO E CONTA
 - Entrar com Google ou e-mail e senha. Confirmar o e-mail pelo link (bot\xE3o "Enviar link de confirma\xE7\xE3o" na aba Conta).
-- Motorista: envia CNH e CRLV, modelo/cor e placa; fica "em an\xE1lise" at\xE9 a equipe aprovar.
-- Transportador: CNH, CRLV, comprovante ANTT e n\xFAmero do RNTRC, tipo de ve\xEDculo e placa.
+- Motorista (carro ou moto): envia CNH com EAR, CRLV e certid\xE3o negativa de antecedentes criminais; informa modelo/cor, ano de fabrica\xE7\xE3o, placa, cidade/UF de trabalho e validade da CNH; marca as declara\xE7\xF5es legais (EAR, INSS, seguro APP e, para moto, Lei 12.009). Fica "em an\xE1lise" at\xE9 a equipe aprovar. Ano do ve\xEDculo \xE9 conferido automaticamente pela regra da cidade (padr\xE3o Froc: at\xE9 ${cfg.maxVehicleAgeYears} anos).
+- Transportador: CNH com EAR, CRLV, comprovante ANTT, certid\xE3o de antecedentes, n\xFAmero do RNTRC, tipo de ve\xEDculo e placa; declara conhecer o CIOT e o piso m\xEDnimo de frete da ANTT.
+- Loja (Froc Entregas): Conta > Froc para lojas; CNPJ (MEI aceito), telefone, categoria e endere\xE7o de coleta. Aprovada, chama entregas pelo painel ou pela API (/desenvolvedores).
+- CNH vencida: o motorista n\xE3o consegue ficar online at\xE9 enviar a nova pelo Atendimento.
 - Fotos grandes s\xE3o reduzidas automaticamente; PDF at\xE9 3 MB.
 
 SEGURAN\xC7A
@@ -2255,7 +3163,7 @@ SEGURAN\xC7A
 ADMINISTRA\xC7\xC3O (s\xF3 para a equipe)
 - Painel Admin: Pend\xEAncias (cadastros e saques), SOS, Usu\xE1rios (bloquear/desbloquear), Relat\xF3rios, Configura\xE7\xF5es (comiss\xE3o ${cfg.commissionPercent}%, tarifa din\xE2mica, tempos, pontos), Equipe IA, Atendimento e Blog.
 - Prazos autom\xE1ticos rodam pelo agendador (cron) a cada 5 min.
-`;
+${legalKnowledgeText(cfg.maxVehicleAgeYears)}`;
 }
 
 // server/ai/images.ts
@@ -2316,6 +3224,7 @@ function coverPrompt(topic, keyword) {
 
 // server/blog.ts
 var SITE_NAME = "Froc X Uber";
+var GUIDE_SLUGS = ["como-funciona", "regras-e-requisitos", "perguntas-frequentes", "desenvolvedores"];
 var TOPIC_SERVICES = [
   "corrida por aplicativo barata",
   "negociar pre\xE7o de corrida",
@@ -2326,7 +3235,10 @@ var TOPIC_SERVICES = [
   "ser motorista de aplicativo",
   "ganhar dinheiro com van ou caminh\xE3o",
   "seguran\xE7a em corridas por aplicativo",
-  "motot\xE1xi e entregas por moto"
+  "motot\xE1xi e entregas por moto",
+  "entregador para lanchonete e restaurante",
+  "requisitos para motorista de aplicativo (EAR e ano do carro)",
+  "compartilhar a viagem com a fam\xEDlia em tempo real"
 ];
 var TOPIC_CITIES = [
   "S\xE3o Paulo",
@@ -2581,7 +3493,7 @@ A vers\xE3o anterior foi recusada por: ${lastProblems.join("; ")}. Corrija.` : "
       paragraphs: (Array.isArray(s?.paragraphs) ? s.paragraphs : []).map((p) => str2(p, 1200)).filter(Boolean).slice(0, 6)
     })).filter((s) => s.heading && s.paragraphs.length);
     return {
-      id: randomUUID2(),
+      id: randomUUID3(),
       slug: slugify(str2(raw.keyword, 80) || title || topic) || slugify(topic),
       title,
       description: str2(raw.description, 170),
@@ -2649,7 +3561,7 @@ ${o.jsonLd.map((j) => `<script type="application/ld+json">${JSON.stringify(j).re
 <body>
 <header><div class="wrap bar"><a class="logo" href="/">${SITE_NAME}</a><a class="btn" href="/#entrar">Criar conta gr\xE1tis</a></div></header>
 <main class="wrap">${o.body}</main>
-<footer><div class="wrap"><a href="/">In\xEDcio</a> \xB7 <a href="/blog">Blog</a> \xB7 <a href="/corridas-por-aplicativo">Corridas</a> \xB7 <a href="/caronas-intermunicipais">Caronas</a> \xB7 <a href="/fretes-e-mudancas">Fretes</a> \xB7 <a href="/seja-motorista">Seja motorista</a> \xB7 <a href="/legal/termos.html">Termos</a> \xB7 <a href="/legal/privacidade.html">Privacidade</a><br>\xA9 ${(/* @__PURE__ */ new Date()).getFullYear()} ${SITE_NAME}</div></footer>
+<footer><div class="wrap"><a href="/">In\xEDcio</a> \xB7 <a href="/blog">Blog</a> \xB7 <a href="/como-funciona">Como funciona</a> \xB7 <a href="/regras-e-requisitos">Regras e leis</a> \xB7 <a href="/perguntas-frequentes">Perguntas frequentes</a> \xB7 <a href="/corridas-por-aplicativo">Corridas</a> \xB7 <a href="/caronas-intermunicipais">Caronas</a> \xB7 <a href="/fretes-e-mudancas">Fretes</a> \xB7 <a href="/seja-motorista">Seja motorista</a> \xB7 <a href="/desenvolvedores">Para lojas e desenvolvedores</a> \xB7 <a href="/legal/termos.html">Termos</a> \xB7 <a href="/legal/privacidade.html">Privacidade</a><br>\xA9 ${(/* @__PURE__ */ new Date()).getFullYear()} ${SITE_NAME}</div></footer>
 </body>
 </html>`;
 }
@@ -2839,31 +3751,31 @@ var SERVICE_PAGES = [
     cta: "Cadastre-se como motorista ou transportador."
   }
 ];
-function renderServicePage(page, site, latest = []) {
-  const url = `${site}/${page.slug}`;
+function renderServicePage(page2, site, latest = []) {
+  const url = `${site}/${page2.slug}`;
   const body = `
-<nav class="crumbs"><a href="/">In\xEDcio</a> \u203A ${escapeHtml(page.h1)}</nav>
-<h1>${escapeHtml(page.h1)}</h1>
-<p class="lead">${escapeHtml(page.intro)}</p>
+<nav class="crumbs"><a href="/">In\xEDcio</a> \u203A ${escapeHtml(page2.h1)}</nav>
+<h1>${escapeHtml(page2.h1)}</h1>
+<p class="lead">${escapeHtml(page2.intro)}</p>
 <p><a class="btn" href="/#entrar">Criar conta gr\xE1tis</a> <a class="btn gold" href="/seja-motorista">Quero ser motorista</a></p>
-${page.points.map(([h, t]) => `<h2>${escapeHtml(h)}</h2><p>${escapeHtml(t)}</p>`).join("")}
-<div class="card"><h2 style="margin-top:0">Inaugura\xE7\xE3o em 10 de mar\xE7o de 2027</h2><p>Cadastre-se antes e ganhe o selo de membro fundador. ${escapeHtml(page.cta)}</p><a class="btn" href="/#entrar">Quero ser fundador</a></div>
-<h2>Perguntas frequentes</h2>${page.faq.map(([q, a]) => `<details><summary>${escapeHtml(q)}</summary><p>${escapeHtml(a)}</p></details>`).join("")}
+${page2.points.map(([h, t]) => `<h2>${escapeHtml(h)}</h2><p>${escapeHtml(t)}</p>`).join("")}
+<div class="card"><h2 style="margin-top:0">Inaugura\xE7\xE3o em 10 de mar\xE7o de 2027</h2><p>Cadastre-se antes e ganhe o selo de membro fundador. ${escapeHtml(page2.cta)}</p><a class="btn" href="/#entrar">Quero ser fundador</a></div>
+<h2>Perguntas frequentes</h2>${page2.faq.map(([q, a]) => `<details><summary>${escapeHtml(q)}</summary><p>${escapeHtml(a)}</p></details>`).join("")}
 ${latest.length ? `<h2>Do nosso blog</h2><div class="list">${latest.map((r) => `<a href="/blog/${escapeHtml(r.slug)}"><b>${escapeHtml(r.title)}</b><span>${escapeHtml(r.description)}</span></a>`).join("")}</div>` : ""}`;
   return layout({
-    title: page.title,
-    description: page.description,
+    title: page2.title,
+    description: page2.description,
     canonical: url,
     body,
     jsonLd: [
       ORG(site),
-      { "@context": "https://schema.org", "@type": "Service", name: page.h1, description: page.description, provider: { "@type": "Organization", name: SITE_NAME, url: site }, areaServed: { "@type": "Country", name: "Brasil" }, url },
-      { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: page.faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) }
+      { "@context": "https://schema.org", "@type": "Service", name: page2.h1, description: page2.description, provider: { "@type": "Organization", name: SITE_NAME, url: site }, areaServed: { "@type": "Country", name: "Brasil" }, url },
+      { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: page2.faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) }
     ]
   });
 }
 var xmlEscape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var STATIC_LASTMOD = "2026-11-15";
+var STATIC_LASTMOD = "2026-11-16";
 function sitemapIndex(site, latestBlog) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -2876,6 +3788,7 @@ function sitemapPages(site) {
   const urls = [
     { loc: `${site}/`, priority: "1.0", freq: "daily" },
     ...SERVICE_PAGES.map((p) => ({ loc: `${site}/${p.slug}`, priority: "0.9", freq: "weekly" })),
+    ...GUIDE_SLUGS.map((slug) => ({ loc: `${site}/${slug}`, priority: "0.7", freq: "monthly" })),
     { loc: `${site}/blog`, priority: "0.8", freq: "daily" },
     ...["ajuda", "seguranca", "termos", "privacidade"].map((p) => ({ loc: `${site}/legal/${p}.html`, priority: "0.3", freq: "yearly" }))
   ];
@@ -2942,6 +3855,258 @@ async function consumeQuota(store, key, max, windowMs, message) {
   });
   if (!allowed) throw new AppError(429, "rate_limited", message || "Muitas tentativas. Aguarde um pouco e tente de novo.");
 }
+
+// server/guidePages.ts
+var EXTRA_STYLE = `<style>
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:15px}td,th{border:1px solid rgba(255,255,255,.12);padding:8px 10px;text-align:left}th{color:#f2c14e}
+pre{background:#0d0d10;border:1px solid rgba(212,175,55,.3);border-radius:12px;padding:14px;overflow:auto;font-size:13px;line-height:1.5}code{font-family:ui-monospace,Menlo,Consolas,monospace;color:#ffd1e8}
+.toc a{display:inline-block;margin:4px 8px 4px 0}.note{color:#a1a1aa;font-size:14px}ol li,ul li{margin:4px 0}
+</style>`;
+var list = (items, ordered = false) => `<${ordered ? "ol" : "ul"}>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</${ordered ? "ol" : "ul"}>`;
+var crumbs = (label) => `<nav class="crumbs"><a href="/">In\xEDcio</a> \u203A ${escapeHtml(label)}</nav>`;
+var cta = `<div class="card"><h2 style="margin-top:0">Pronto para come\xE7ar?</h2><p>Crie sua conta gr\xE1tis. Inaugura\xE7\xE3o em 10 de mar\xE7o de 2027 \u2014 quem se cadastra antes ganha o selo de membro fundador.</p><a class="btn" href="/#entrar">Criar conta gr\xE1tis</a> <a class="btn gold" href="/seja-motorista">Quero ser motorista</a></div>`;
+function page(site, slug, title, description, body, jsonLd) {
+  const url = `${site}/${slug}`;
+  return layout({
+    title,
+    description,
+    canonical: url,
+    body: EXTRA_STYLE + body,
+    jsonLd: [
+      ORG(site),
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "In\xEDcio", item: `${site}/` },
+          { "@type": "ListItem", position: 2, name: title.split(" | ")[0], item: url }
+        ]
+      },
+      ...jsonLd
+    ]
+  });
+}
+function renderRules(site) {
+  const body = `${crumbs("Regras e requisitos")}
+<h1>Regras, leis e requisitos para dirigir, entregar e transportar</h1>
+<p class="lead">Tudo o que a lei brasileira e a Froc exigem de motoristas, mototaxistas, motoboys, transportadores de carga, lojas e passageiros \u2014 explicado sem juridiqu\xEAs.</p>
+<p class="note">Atualizado em ${escapeHtml(LEGAL_UPDATED.split("-").reverse().join("/"))}. N\xE3o \xE9 parecer jur\xEDdico: cada prefeitura tem decreto pr\xF3prio e, quando ela \xE9 mais r\xEDgida, vale a regra dela.</p>
+<p class="toc">${REQUIREMENTS.map((s) => `<a href="#${s.id}">${escapeHtml(s.title.split(" (")[0])}</a>`).join("")}<a href="#ano">Ano do ve\xEDculo</a><a href="#gravacao">Grava\xE7\xE3o</a><a href="#compartilhar">Compartilhar viagem</a></p>
+${REQUIREMENTS.map(
+    (s) => `<h2 id="${s.id}">${escapeHtml(s.title)}</h2><p>${escapeHtml(s.summary)}</p>${list(s.items)}<p class="note">Base legal: ${escapeHtml(s.sources.join("; "))}.</p>`
+  ).join("")}
+<h2 id="ano">Ano do ve\xEDculo: qual \xE9 aceito?</h2>
+<p>N\xE3o existe uma idade m\xE1xima \xFAnica no pa\xEDs: a lei federal manda cada cidade definir. A regra geral da Froc \xE9 <strong>at\xE9 ${DEFAULT_MAX_VEHICLE_AGE} anos de fabrica\xE7\xE3o</strong>. Onde a prefeitura \xE9 mais r\xEDgida, vale a regra dela. O app confere o ano no cadastro.</p>
+<table><thead><tr><th>Cidade</th><th>Idade m\xE1xima</th><th>Fonte</th></tr></thead><tbody>
+${CITY_VEHICLE_AGE.map((c) => `<tr><td>${escapeHtml(c.city)}/${escapeHtml(c.state)}</td><td>at\xE9 ${c.maxYears} anos</td><td>${escapeHtml(c.note)}</td></tr>`).join("")}
+<tr><td>Demais cidades</td><td>at\xE9 ${DEFAULT_MAX_VEHICLE_AGE} anos (padr\xE3o Froc)</td><td>Confira tamb\xE9m o decreto da sua prefeitura.</td></tr>
+</tbody></table>
+<h2 id="gravacao">${escapeHtml(RECORDING_RULES.title)}</h2>${list(RECORDING_RULES.items)}
+<h2 id="compartilhar">${escapeHtml(SHARE_RULES.title)}</h2>${list(SHARE_RULES.items)}
+<h2>Controle de qualidade Froc</h2>${list(QUALITY_CONTROL)}
+<p>D\xFAvidas? Veja as <a href="/perguntas-frequentes">perguntas frequentes</a> ou fale com o Atendimento dentro do app.</p>
+${cta}`;
+  return page(
+    site,
+    "regras-e-requisitos",
+    "Regras e requisitos para motorista de aplicativo, motoboy e frete | Froc X Uber",
+    "EAR na CNH, ano do ve\xEDculo aceito, antecedentes, INSS, RNTRC, CIOT, piso de frete e regras para lojas. Tudo o que a lei exige, explicado de forma simples.",
+    body,
+    [{ "@context": "https://schema.org", "@type": "WebPage", name: "Regras e requisitos", dateModified: LEGAL_UPDATED, inLanguage: "pt-BR", url: `${site}/regras-e-requisitos` }]
+  );
+}
+function renderHowItWorks(site) {
+  const body = `${crumbs("Como funciona")}
+<h1>Como funciona a ${SITE_NAME}</h1>
+<p class="lead">Um app s\xF3 para corridas, negociar o pre\xE7o, caronas entre cidades, fretes e mudan\xE7as \u2014 e entregas para lojas. Em todo o Brasil.</p>
+${HOW_IT_WORKS.map((h) => `<h2>${escapeHtml(h.title)}</h2>${list(h.steps, true)}`).join("")}
+<h2>Seguran\xE7a em toda viagem</h2>
+${list([
+    "Mapa ao vivo: veja os carros por perto antes de pedir e o seu motorista se movendo at\xE9 voc\xEA.",
+    "PIN de embarque, chat, avalia\xE7\xE3o dos dois lados e bot\xE3o SOS.",
+    "Grave \xE1udio ou v\xEDdeo da viagem pelo pr\xF3prio celular (a outra parte \xE9 avisada).",
+    "Compartilhe o link da viagem: sua fam\xEDlia acompanha o carro em tempo real."
+  ])}
+<h2>Controle de qualidade</h2>${list(QUALITY_CONTROL)}
+<p>Veja tamb\xE9m: <a href="/regras-e-requisitos">regras e leis</a> \xB7 <a href="/perguntas-frequentes">perguntas frequentes</a> \xB7 <a href="/desenvolvedores">entregas para lojas</a>.</p>
+${cta}`;
+  return page(
+    site,
+    "como-funciona",
+    "Como funciona a Froc X Uber: corridas, caronas, fretes e entregas",
+    "Passo a passo de corridas, negocia\xE7\xE3o de pre\xE7o, caronas, fretes, mudan\xE7as e entregas para lojas. Mapa ao vivo, PIN, SOS, grava\xE7\xE3o e link para a fam\xEDlia acompanhar.",
+    body,
+    HOW_IT_WORKS.map((h) => ({
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      name: h.title,
+      step: h.steps.map((s, i) => ({ "@type": "HowToStep", position: i + 1, text: s }))
+    }))
+  );
+}
+function renderFaq(site) {
+  const body = `${crumbs("Perguntas frequentes")}
+<h1>Perguntas frequentes</h1>
+<p class="lead">Respostas r\xE1pidas sobre cadastro, documentos, ano do carro, seguran\xE7a, pagamentos e entregas.</p>
+${FAQ.map(([q, a]) => `<details><summary>${escapeHtml(q)}</summary><p>${escapeHtml(a)}</p></details>`).join("")}
+<p>N\xE3o achou? Fale com o Atendimento dentro do app \u2014 ele responde na hora e chama a equipe quando precisa.</p>
+${cta}`;
+  return page(
+    site,
+    "perguntas-frequentes",
+    "Perguntas frequentes | Froc X Uber",
+    "EAR na CNH, ano m\xEDnimo do carro, documentos, grava\xE7\xE3o da viagem, link de acompanhamento, pagamentos e entregas para lojas: tire suas d\xFAvidas.",
+    body,
+    [{ "@context": "https://schema.org", "@type": "FAQPage", mainEntity: FAQ.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) }]
+  );
+}
+var code = (s) => `<pre><code>${escapeHtml(s.trim())}</code></pre>`;
+function renderDevelopers(site) {
+  const base = `${site}/api/v1`;
+  const body = `${crumbs("Para lojas e desenvolvedores")}
+<h1>Froc Entregas: integre sua loja e chame entregadores automaticamente</h1>
+<p class="lead">Pastelaria, lanchonete, restaurante, farm\xE1cia ou loja: quando entra um pedido no seu sistema, a Froc chama o entregador mais perto, o cliente acompanha pelo link e voc\xEA recebe cada mudan\xE7a de situa\xE7\xE3o no seu sistema.</p>
+<p class="toc"><a href="#comecar">Come\xE7ar</a><a href="#sem-codigo">Sem programar</a><a href="#auth">Autentica\xE7\xE3o</a><a href="#cotacao">Cota\xE7\xE3o</a><a href="#criar">Criar entrega</a><a href="#consultar">Consultar e cancelar</a><a href="#webhooks">Webhooks</a><a href="#erros">Erros e limites</a></p>
+
+<h2 id="comecar">Come\xE7ar em 5 passos</h2>
+${list(
+    [
+      "Crie a conta no app e v\xE1 em Conta \u203A Froc para lojas.",
+      "Envie o nome da loja, o CNPJ (MEI aceito), o telefone e o endere\xE7o de coleta. A equipe Froc confere e libera.",
+      "Recarregue a carteira (Pix ou cart\xE3o). Cada entrega usa o saldo: o valor fica retido e s\xF3 vai para o entregador quando o cliente informa o c\xF3digo de entrega.",
+      "No painel da loja, crie uma chave de API (ela aparece uma \xFAnica vez \u2014 guarde em local seguro, nunca no site ou no app do cliente).",
+      "Cadastre o endere\xE7o do seu webhook e teste. Pronto: seu sistema j\xE1 chama entregas sozinho."
+    ],
+    true
+  )}
+
+<h2 id="sem-codigo">Sem programar</h2>
+<p>N\xE3o tem sistema? Use o painel da loja dentro do app: digite o endere\xE7o do cliente, nome e telefone e toque em "Chamar entregador". Voc\xEA v\xEA o entregador no mapa e manda o link de acompanhamento para o cliente pelo WhatsApp.</p>
+
+<h2 id="auth">Autentica\xE7\xE3o</h2>
+<p>Todas as chamadas v\xE3o para <code>${escapeHtml(base)}</code> com o cabe\xE7alho:</p>
+${code("Authorization: Bearer froc_live_SUA_CHAVE")}
+<p>A Froc guarda s\xF3 a impress\xE3o digital (SHA-256) da chave. Se ela vazar, revogue no painel e crie outra. As chamadas s\xE3o de servidor para servidor (n\xE3o chame a API direto do navegador).</p>
+
+<h2 id="cotacao">Cota\xE7\xE3o (pre\xE7o antes de chamar)</h2>
+${code(`
+POST ${base}/deliveries/quote
+Content-Type: application/json
+
+{
+  "dropoff": { "address": "Rua das Flores, 120 - Centro, Campinas - SP", "lat": -22.9056, "lng": -47.0608 }
+}
+`)}
+<p>Resposta: <code>{ "price": 14.9, "currency": "BRL", "distanceKm": 4.3, "durationMin": 14, "surge": 1 }</code>. Sem <code>pickup</code>, a coleta \xE9 o endere\xE7o cadastrado da loja.</p>
+
+<h2 id="criar">Criar entrega</h2>
+${code(`
+POST ${base}/deliveries
+Content-Type: application/json
+
+{
+  "orderRef": "PED-1029",
+  "dropoff": { "address": "Rua das Flores, 120 - apto 32", "lat": -22.9056, "lng": -47.0608 },
+  "recipient": { "name": "Maria Souza", "phone": "19988887777" },
+  "items": "2 past\xE9is de carne, 1 caldo de cana",
+  "note": "Interfone 32. Troco n\xE3o precisa.",
+  "vehicle": "moto"
+}
+`)}
+<ul>
+<li><code>orderRef</code>: o n\xFAmero do pedido no seu sistema. Mandou duas vezes? A Froc devolve a mesma entrega (n\xE3o cobra em dobro).</li>
+<li><code>dropoff</code>: envie <code>lat</code> e <code>lng</code>. S\xF3 tem o endere\xE7o em texto? Envie <code>address</code> \u2014 a Froc localiza quando a busca de endere\xE7os est\xE1 ativada na plataforma.</li>
+<li><code>vehicle</code>: <code>moto</code>, <code>carro</code> ou <code>qualquer</code> (padr\xE3o).</li>
+<li>At\xE9 60 km e 20 kg em moto. Para cargas maiores, use o m\xF3dulo Cargas.</li>
+</ul>
+<p>Resposta <code>201</code>:</p>
+${code(`
+{
+  "delivery": {
+    "id": "8f1c...",
+    "status": "procurando_entregador",
+    "statusLabel": "Procurando entregador",
+    "price": 14.9,
+    "deliveryCode": "4821",
+    "trackingUrl": "${site}/acompanhar/Xy7...",
+    "orderRef": "PED-1029",
+    "courier": null
+  }
+}
+`)}
+<p>Envie ao cliente o <strong>link de acompanhamento</strong> e o <strong>c\xF3digo de entrega</strong>. O entregador s\xF3 conclui a entrega quando o cliente informa o c\xF3digo \u2014 \xE9 isso que libera o pagamento.</p>
+
+<h2 id="consultar">Consultar e cancelar</h2>
+${code(`
+GET  ${base}/deliveries/{id}
+GET  ${base}/deliveries?status=saiu_para_entrega
+POST ${base}/deliveries/{id}/cancel
+GET  ${base}/me
+`)}
+<p>Situa\xE7\xF5es: <code>procurando_entregador</code> \u2192 <code>entregador_a_caminho</code> \u2192 <code>entregador_na_loja</code> \u2192 <code>saiu_para_entrega</code> \u2192 <code>entregue</code> (ou <code>cancelada</code>). D\xE1 para cancelar at\xE9 o entregador coletar o pedido; o valor volta para a carteira. Sem entregador em 20 minutos, a entrega \xE9 cancelada sozinha e o valor volta.</p>
+
+<h2 id="webhooks">Webhooks (aviso autom\xE1tico no seu sistema)</h2>
+<p>A cada mudan\xE7a, a Froc faz um <code>POST</code> JSON no endere\xE7o cadastrado (precisa ser <code>https</code> p\xFAblico). Eventos: <code>delivery.created</code>, <code>delivery.courier_assigned</code>, <code>delivery.courier_at_pickup</code>, <code>delivery.picked_up</code>, <code>delivery.delivered</code>, <code>delivery.cancelled</code> e <code>webhook.test</code>.</p>
+${code(`
+POST https://seusistema.com.br/froc/webhook
+X-Froc-Event: delivery.picked_up
+X-Froc-Signature: t=1763300000,v1=5f2c...
+Content-Type: application/json
+
+{ "id": "evt...", "type": "delivery.picked_up", "createdAt": "2026-11-16T18:20:00.000Z", "data": { "id": "8f1c...", "status": "saiu_para_entrega", ... } }
+`)}
+<p>Confira a assinatura com o segredo <code>whsec_...</code> mostrado ao cadastrar o webhook (HMAC-SHA256 de <code>t + "." + corpo</code>):</p>
+${code(`
+import crypto from 'node:crypto';
+
+export function assinaturaValida(segredo, corpoBruto, cabecalho) {
+  const partes = Object.fromEntries(cabecalho.split(',').map((p) => p.split('=')));
+  if (Math.abs(Date.now() / 1000 - Number(partes.t)) > 300) return false; // mais de 5 min: recusa
+  const esperado = crypto.createHmac('sha256', segredo).update(partes.t + '.' + corpoBruto).digest('hex');
+  const a = Buffer.from(esperado), b = Buffer.from(partes.v1 || '');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+`)}
+<p>Responda com status 2xx em at\xE9 5 segundos. Se falhar, a Froc tenta de novo em 1, 5, 15 e 60 minutos, 3 h e 12 h. Use o campo <code>id</code> do evento para n\xE3o processar o mesmo aviso duas vezes.</p>
+
+<h2 id="erros">Erros e limites</h2>
+<table><thead><tr><th>Status</th><th>Quando</th></tr></thead><tbody>
+<tr><td>400</td><td>Dados inv\xE1lidos (endere\xE7o, telefone, dist\xE2ncia acima de 60 km). A mensagem explica o que corrigir.</td></tr>
+<tr><td>401</td><td>Chave ausente, inv\xE1lida ou revogada.</td></tr>
+<tr><td>402</td><td>Saldo insuficiente na carteira da loja.</td></tr>
+<tr><td>403</td><td>Loja ainda n\xE3o aprovada ou bloqueada.</td></tr>
+<tr><td>404</td><td>Entrega n\xE3o encontrada (ou de outra loja).</td></tr>
+<tr><td>409</td><td>A\xE7\xE3o imposs\xEDvel na situa\xE7\xE3o atual (ex.: cancelar depois da coleta).</td></tr>
+<tr><td>429</td><td>Mais de 300 chamadas por minuto por chave.</td></tr>
+</tbody></table>
+<p>Todas as respostas de erro t\xEAm o formato <code>{ "error": "mensagem em portugu\xEAs", "code": "codigo_curto" }</code>.</p>
+<p>Regras para lojas (CNPJ, itens proibidos, bebidas para maiores de 18): veja <a href="/regras-e-requisitos#lojista">regras e requisitos</a>.</p>
+${cta}`;
+  return page(
+    site,
+    "desenvolvedores",
+    "API de entregas para lojas e restaurantes | Froc Entregas",
+    "Integre sua loja, lanchonete ou restaurante \xE0 Froc: API REST para chamar entregadores, link de acompanhamento para o cliente e webhooks assinados.",
+    body,
+    [
+      {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        headline: "API de entregas Froc para lojas",
+        inLanguage: "pt-BR",
+        dateModified: LEGAL_UPDATED,
+        url: `${site}/desenvolvedores`,
+        author: { "@type": "Organization", name: SITE_NAME }
+      }
+    ]
+  );
+}
+var GUIDE_RENDERERS = {
+  "como-funciona": renderHowItWorks,
+  "regras-e-requisitos": renderRules,
+  "perguntas-frequentes": renderFaq,
+  desenvolvedores: renderDevelopers
+};
 
 // server/app.ts
 function rateLimit(max, windowMs) {
@@ -3116,12 +4281,61 @@ function createApp(options) {
     const related = (await blog.list({ limit: 6 })).filter((p) => p.slug !== post.slug).slice(0, 4);
     sendPage(res, "text/html", renderPost(post, site(), related), 300);
   }));
-  for (const page of SERVICE_PAGES) {
-    app.get(`/${page.slug}`, publicPage(async (_req, res) => {
+  for (const [slug, render] of Object.entries(GUIDE_RENDERERS)) {
+    app.get(`/${slug}`, publicPage(async (_req, res) => sendPage(res, "text/html", render(site()), 3600)));
+  }
+  for (const page2 of SERVICE_PAGES) {
+    app.get(`/${page2.slug}`, publicPage(async (_req, res) => {
       const latest = await (await platform()).blog.list({ limit: 3 }).catch(() => []);
-      sendPage(res, "text/html", renderServicePage(page, site(), latest), 3600);
+      sendPage(res, "text/html", renderServicePage(page2, site(), latest), 3600);
     }));
   }
+  app.get(
+    "/api/track/:token",
+    rateLimit(120, 6e4),
+    wrap(async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Robots-Tag", "noindex");
+      return (await service()).trackShare(String(req.params.token || "").slice(0, 60));
+    })
+  );
+  const v1 = express.Router();
+  v1.use(async (req, res, next) => {
+    try {
+      const { store } = await platform();
+      const { uid, keyId } = await authenticateApiKey(store, req.headers.authorization);
+      await consumeQuota(store, `apiv1:${keyId}`, 300, 6e4, "Limite de 300 chamadas por minuto atingido. Aguarde alguns segundos.");
+      req.merchantUid = uid;
+      res.setHeader("Cache-Control", "no-store");
+      return next();
+    } catch (error) {
+      if (error instanceof AppError) return res.status(error.status).json({ error: error.message, code: error.code });
+      console.error("Falha na autentica\xE7\xE3o da API de lojas:", error);
+      return res.status(503).json({ error: "Servi\xE7o indispon\xEDvel. Tente em instantes.", code: "unavailable" });
+    }
+  });
+  const mid = (req) => String(req.merchantUid);
+  const withUrl = (d) => ({ ...d, trackingUrl: d.trackingPath ? site() + d.trackingPath : "" });
+  v1.get("/me", wrap(async (req) => {
+    const svc = await service();
+    const m = await svc.approvedMerchant(mid(req));
+    const p = svc.profileView(m, { uid: m.uid, email: m.email, emailVerified: true });
+    return { merchant: p.merchant, walletBalance: p.walletBalance };
+  }));
+  v1.post("/deliveries/quote", wrap(async (req) => (await service()).quoteDelivery(mid(req), req.body || {})));
+  v1.post("/deliveries", wrap(async (req, res) => {
+    const d = await (await service()).createDelivery(mid(req), req.body || {}, "api");
+    res.status(201);
+    return { delivery: withUrl(d) };
+  }));
+  v1.get("/deliveries", wrap(async (req) => {
+    const r = await (await service()).listDeliveries(mid(req), req.query.status ? String(req.query.status) : void 0);
+    return { deliveries: r.deliveries.map(withUrl) };
+  }));
+  v1.get("/deliveries/:id", wrap(async (req) => ({ delivery: withUrl(await (await service()).getDelivery(mid(req), id(req))) })));
+  v1.post("/deliveries/:id/cancel", wrap(async (req) => ({ delivery: withUrl(await (await service()).cancelDelivery(mid(req), id(req))) })));
+  v1.use((_req, res) => res.status(404).json({ error: "Rota n\xE3o encontrada. Veja /desenvolvedores.", code: "not_found" }));
+  app.use("/api/v1", v1);
   const api = express.Router();
   api.use(requireAuth);
   const limited = rateLimit(20, 6e4);
@@ -3140,6 +4354,9 @@ function createApp(options) {
   api.get("/bootstrap", wrap(async (req) => (await service()).bootstrap(a(req))));
   api.patch("/profile", wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
   api.post("/rides/quote", wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
+  api.get("/drivers/nearby", rateLimit(40, 6e4), wrap(async (req) => (await service()).nearbyDrivers(a(req), req.query.lat, req.query.lng)));
+  api.post("/trips/:kind/:id/share", limited, wrap(async (req) => (await service()).shareTrip(a(req), req.params.kind, id(req))));
+  api.post("/trips/:kind/:id/recording", rateLimit(20, 6e4), wrap(async (req) => (await service()).recordingNotice(a(req), req.params.kind, id(req), req.body?.mode)));
   api.post("/driver/location", rateLimit(30, 6e4), wrap(async (req) => (await service()).updateLocation(a(req), req.body?.lat, req.body?.lng)));
   api.post("/sos", rateLimit(5, 6e4), guard("sos", 20, 36e5, "Muitos alertas em pouco tempo. Em emerg\xEAncia ligue 190."), wrap(async (req) => (await service()).createSos(a(req), req.body || {})));
   api.post("/wallet/redeem", limited, wrap(async (req) => (await service()).redeemPoints(a(req))));
@@ -3174,6 +4391,33 @@ function createApp(options) {
     wrap(async (req) => (await service()).uploadDocument(a(req), req.body?.kind, req.body?.docType, req.body?.contentType, req.body?.dataBase64))
   );
   api.post("/driver/apply", limited, guard("apply", 10, 864e5, "Muitas tentativas de cadastro hoje."), wrap(async (req) => (await service()).applyAsProvider(a(req), req.body?.kind, req.body || {})));
+  api.post("/merchant/apply", limited, guard("apply", 10, 864e5, "Muitas tentativas de cadastro hoje."), wrap(async (req) => (await service()).applyAsMerchant(a(req), req.body || {})));
+  const merchantStore = async (req) => {
+    await (await service()).approvedMerchant(a(req).uid);
+    return (await platform()).store;
+  };
+  api.get("/merchant/keys", wrap(async (req) => ({ keys: await listApiKeys(await merchantStore(req), a(req).uid) })));
+  api.post("/merchant/keys", limited, wrap(async (req) => {
+    const created = await createApiKey(await merchantStore(req), a(req).uid, req.body?.label);
+    await (await service()).audit(a(req), "chave_api_criada", a(req).uid, { prefixo: created.prefix });
+    return created;
+  }));
+  api.post("/merchant/keys/:id/revoke", wrap(async (req) => {
+    const r = await revokeApiKey(await merchantStore(req), a(req).uid, id(req).slice(0, 64));
+    await (await service()).audit(a(req), "chave_api_revogada", a(req).uid);
+    return r;
+  }));
+  api.post("/merchant/webhook", limited, wrap(async (req) => (await service()).setMerchantWebhook(a(req), req.body?.url, req.body?.rotate === true)));
+  api.post("/merchant/webhook/test", rateLimit(5, 6e4), wrap(async (req) => {
+    const svc = await service();
+    await svc.approvedMerchant(a(req).uid);
+    if (!svc.deps.webhooks) throw new AppError(503, "unavailable", "Webhooks indispon\xEDveis no momento.");
+    return svc.deps.webhooks.test(a(req).uid);
+  }));
+  api.post("/merchant/quote", wrap(async (req) => (await service()).quoteDelivery(a(req).uid, req.body || {})));
+  api.post("/merchant/deliveries", limited, wrap(async (req) => (await service()).createDelivery(a(req).uid, req.body || {}, "painel")));
+  api.get("/merchant/deliveries", wrap(async (req) => (await service()).listDeliveries(a(req).uid)));
+  api.post("/merchant/deliveries/:id/cancel", wrap(async (req) => (await service()).cancelDelivery(a(req).uid, id(req))));
   api.get("/admin/overview", wrap(async (req) => (await service()).adminOverview(a(req))));
   api.post(
     "/admin/applications/:id",
@@ -3262,9 +4506,9 @@ import { createPublicKey, verify } from "node:crypto";
 var CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
 var SKEW_SECONDS = 300;
 var TokenError = class extends Error {
-  constructor(code, message) {
+  constructor(code2, message) {
     super(message);
-    this.code = code;
+    this.code = code2;
   }
 };
 async function fetchGoogleCerts() {
@@ -3367,9 +4611,9 @@ async function firebaseDiagnostics() {
   };
 }
 function explainTokenError(error) {
-  const code = String(error?.code || "");
+  const code2 = String(error?.code || "");
   const msg = String(error?.message || error);
-  if (code === "auth/id-token-expired") return { status: 401, message: "Sess\xE3o expirada. Entre novamente.", reason: "expired" };
+  if (code2 === "auth/id-token-expired") return { status: 401, message: "Sess\xE3o expirada. Entre novamente.", reason: "expired" };
   if (/aud|audience|iss|issuer/i.test(msg))
     return {
       status: 503,
@@ -3382,9 +4626,9 @@ function explainTokenError(error) {
       message: "Configura\xE7\xE3o do servidor: a chave FIREBASE_SERVICE_ACCOUNT_KEY n\xE3o abriu. Abra /api/health para ver o motivo.",
       reason: "bad_key"
     };
-  if (code === "auth/id-token-revoked" || code === "auth/user-disabled" || code === "auth/user-not-found")
-    return { status: 401, message: "Sess\xE3o encerrada. Entre novamente.", reason: code };
-  return { status: 401, message: "N\xE3o foi poss\xEDvel confirmar seu login. Saia e entre novamente.", reason: code || "unknown" };
+  if (code2 === "auth/id-token-revoked" || code2 === "auth/user-disabled" || code2 === "auth/user-not-found")
+    return { status: 401, message: "Sess\xE3o encerrada. Entre novamente.", reason: code2 };
+  return { status: 401, message: "N\xE3o foi poss\xEDvel confirmar seu login. Saia e entre novamente.", reason: code2 || "unknown" };
 }
 var cached = null;
 function initFirebase() {
@@ -3555,7 +4799,7 @@ var SupportDesk = class {
 };
 
 // server/ai/team.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // server/ai/agents.ts
 var READ_ALL = [
@@ -3824,8 +5068,8 @@ var TOOLS = [
     parameters: obj({ quantidade: N("Quantos (at\xE9 100). Padr\xE3o 30.") }),
     run: async (c, a) => {
       const store = c.support.store;
-      const list = await store.query("client_errors", [], 500);
-      return list.sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt))).slice(0, Math.min(100, Number(a.quantidade) || 30));
+      const list2 = await store.query("client_errors", [], 500);
+      return list2.sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt))).slice(0, Math.min(100, Number(a.quantidade) || 30));
     }
   },
   {
@@ -3926,13 +5170,13 @@ var TOOLS = [
     parameters: obj(
       {
         uid: S("uid do usu\xE1rio."),
-        tipo: S('"driver" (motorista) ou "trucker" (transportador).'),
+        tipo: S('"driver" (motorista), "trucker" (transportador) ou "merchant" (loja do Froc Entregas).'),
         decisao: S('"approved" ou "rejected".'),
         motivo: S("Obrigat\xF3rio na recusa: o que est\xE1 errado.")
       },
       ["uid", "tipo", "decisao"]
     ),
-    summarize: (a) => `${a.decisao === "approved" ? "Aprovar" : "Recusar"} cadastro de ${a.tipo === "trucker" ? "transportador" : "motorista"} (${a.uid})${a.motivo ? ` \u2014 ${a.motivo}` : ""}`,
+    summarize: (a) => `${a.decisao === "approved" ? "Aprovar" : "Recusar"} cadastro de ${a.tipo === "trucker" ? "transportador" : a.tipo === "merchant" ? "loja" : "motorista"} (${a.uid})${a.motivo ? ` \u2014 ${a.motivo}` : ""}`,
     execute: (s, admin, a) => s.reviewApplication(admin, a.uid, a.tipo, a.decisao, a.motivo ?? ""),
     run: async () => ({})
   },
@@ -4082,7 +5326,7 @@ ${platformKnowledge(cfg)}`;
       requestedBy,
       configStatus: this.d.configStatus,
       propose: async (tool, args, summary) => {
-        const id = randomUUID3();
+        const id = randomUUID4();
         await this.d.store.set("ai_proposals", id, {
           id,
           tool,
@@ -4106,7 +5350,7 @@ ${platformKnowledge(cfg)}`;
     const agent = AGENT_BY_ID.get(String(agentId || "froc")) ?? AGENT_BY_ID.get("froc");
     const text2 = String(message ?? "").trim().slice(0, 4e3);
     if (!text2) throw new AppError(400, "empty", "Escreva a mensagem.");
-    const convId = String(conversationId || "") || randomUUID3();
+    const convId = String(conversationId || "") || randomUUID4();
     const saved = await this.d.store.get("ai_chats", convId);
     if (saved && saved.adminUid !== admin.uid) throw new AppError(403, "forbidden", "Conversa de outro administrador.");
     const history = trimHistory(saved?.contents || []);
@@ -4141,8 +5385,8 @@ ${platformKnowledge(cfg)}`;
   // ------------------------------------------------------------- propostas
   async proposals(admin, status = "pending") {
     this.requireAdmin(admin);
-    const list = await this.d.store.query("ai_proposals", status === "all" ? [] : [["status", "==", status]], 300);
-    return list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const list2 = await this.d.store.query("ai_proposals", status === "all" ? [] : [["status", "==", status]], 300);
+    return list2.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
   async decide(admin, id, decision) {
     this.requireAdmin(admin);
@@ -4342,6 +5586,38 @@ function trimHistory(contents, max = MAX_HISTORY) {
   return contents.slice(start);
 }
 
+// server/geocode.ts
+function createGoogleGeocoder(apiKey, fetchImpl = fetch) {
+  if (!apiKey) return void 0;
+  return async (address) => {
+    const url = "https://maps.googleapis.com/maps/api/geocode/json?" + new URLSearchParams({ address, region: "br", language: "pt-BR", components: "country:BR", key: apiKey }).toString();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6e3);
+    try {
+      const res = await fetchImpl(url, { signal: controller.signal });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const r = json.results?.[0];
+      if (json.status !== "OK" || !r) return null;
+      const comp = (type, short2 = false) => {
+        const c = r.address_components.find((x) => x.types.includes(type));
+        return c ? short2 ? c.short_name : c.long_name : "";
+      };
+      return {
+        lat: r.geometry.location.lat,
+        lng: r.geometry.location.lng,
+        name: r.formatted_address.replace(/, Brasil$|, Brazil$/, ""),
+        city: comp("administrative_area_level_2") || comp("locality"),
+        state: comp("administrative_area_level_1", true)
+      };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
 // server/runtime.ts
 function publicSiteUrl() {
   const explicit = process.env.PUBLIC_SITE_URL || process.env.APP_URL;
@@ -4387,6 +5663,8 @@ function getService() {
       sharedFiles = fb.files;
       return new FrocService(sharedStore, {
         geo,
+        webhooks: createWebhookDispatcher(sharedStore),
+        geocode: createGoogleGeocoder(process.env.GOOGLE_SERVER_MAPS_KEY),
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl })
@@ -4426,6 +5704,7 @@ function configStatus() {
     mercadoPagoWebhook: Boolean(process.env.MERCADO_PAGO_WEBHOOK_SECRET),
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
+    serverGeocoding: Boolean(process.env.GOOGLE_SERVER_MAPS_KEY),
     cron: Boolean(process.env.CRON_SECRET),
     ai: geminiKeysFromEnv(process.env).length > 0,
     aiKeys: geminiKeysFromEnv(process.env).length,

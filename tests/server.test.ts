@@ -9,6 +9,7 @@ import { MemoryStore } from '../server/store.ts';
 import { AppError, FrocService } from '../server/services.ts';
 import type { AuthUser, PaymentsGateway } from '../server/services.ts';
 import { verifyMercadoPagoSignature } from '../server/mercadoPago.ts';
+const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleYear: 2022, vehicleType: 'carro', declarations: { ear: true, inss: true, seguroApp: true, veracidade: true, rntrc: true, ciotPiso: true, lei12009: true } };
 
 const passenger: AuthUser = { uid: 'p1', email: 'ana@exemplo.com', emailVerified: true, name: 'Ana' };
 const other: AuthUser = { uid: 'p2', email: 'bia@exemplo.com', emailVerified: true, name: 'Bia' };
@@ -51,9 +52,9 @@ async function balance(user: AuthUser) {
 }
 
 async function approve(user: AuthUser, kind: 'driver' | 'trucker') {
-  for (const doc of kind === 'driver' ? ['cnh', 'crlv'] : ['cnh', 'crlv', 'antt'])
+  for (const doc of kind === 'driver' ? ['cnh', 'crlv', 'antecedentes'] : ['cnh', 'crlv', 'antt', 'antecedentes'])
     await svc.uploadDocument(user, kind, doc, 'image/png', Buffer.from('foto').toString('base64'));
-  await svc.applyAsProvider(user, kind, { phone: '(11) 98888-7777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
+  await svc.applyAsProvider(user, kind, { ...LEGAL, phone: '(11) 98888-7777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
   await svc.reviewApplication(admin, user.uid, kind, 'approved', '');
 }
 
@@ -94,16 +95,17 @@ describe('contas e cadastro de motorista', () => {
   });
 
   test('cadastro exige documentos, vai para análise e só o admin aprova', async () => {
-    await expectError(svc.applyAsProvider(driver, 'driver', { phone: '11988887777', vehicle: 'Onix', plate: 'ABC1D23' }), 'missing_documents');
+    await expectError(svc.applyAsProvider(driver, 'driver', { ...LEGAL, phone: '11988887777', vehicle: 'Onix', plate: 'ABC1D23' }), 'missing_documents');
     await svc.uploadDocument(driver, 'driver', 'cnh', 'image/jpeg', Buffer.from('x').toString('base64'));
     await svc.uploadDocument(driver, 'driver', 'crlv', 'application/pdf', Buffer.from('x').toString('base64'));
-    const profile = await svc.applyAsProvider(driver, 'driver', { phone: '11988887777', vehicle: 'Onix Prata', plate: 'abc1d23' });
+    await svc.uploadDocument(driver, 'driver', 'antecedentes', 'application/pdf', Buffer.from('x').toString('base64'));
+    const profile = await svc.applyAsProvider(driver, 'driver', { ...LEGAL, phone: '11988887777', vehicle: 'Onix Prata', plate: 'abc1d23' });
     assert.equal(profile.driverStatus, 'pending');
     assert.equal(profile.driverPlate, 'ABC1D23');
     await expectError(svc.reviewApplication(other, driver.uid, 'driver', 'approved', ''), 'forbidden');
     const overview = await svc.adminOverview(admin);
     assert.equal(overview.applications.length, 1);
-    assert.equal(overview.applications[0].documents.length, 2);
+    assert.equal(overview.applications[0].documents.length, 3);
     assert.match(overview.applications[0].documents[0].url, /^https:\/\/arquivos/);
     await svc.reviewApplication(admin, driver.uid, 'driver', 'approved', '');
     assert.equal((await svc.bootstrap(driver)).profile.driverStatus, 'approved');
@@ -116,7 +118,8 @@ describe('contas e cadastro de motorista', () => {
   test('recusa exige motivo e permite reenviar', async () => {
     await svc.uploadDocument(driver, 'driver', 'cnh', 'image/png', 'eA==');
     await svc.uploadDocument(driver, 'driver', 'crlv', 'image/png', 'eA==');
-    await svc.applyAsProvider(driver, 'driver', { phone: '11988887777', vehicle: 'Onix', plate: 'ABC1D23' });
+    await svc.uploadDocument(driver, 'driver', 'antecedentes', 'image/png', 'eA==');
+    await svc.applyAsProvider(driver, 'driver', { ...LEGAL, phone: '11988887777', vehicle: 'Onix', plate: 'ABC1D23' });
     await expectError(svc.reviewApplication(admin, driver.uid, 'driver', 'rejected', ''), 'reason_required');
     await svc.reviewApplication(admin, driver.uid, 'driver', 'rejected', 'CNH ilegível');
     const p = (await svc.bootstrap(driver)).profile;
@@ -223,7 +226,7 @@ describe('1) corrida estilo Uber/99', () => {
     await approve(driver, 'driver');
     await svc.updateProfile(driver, { driverOnline: true });
     await topUp(passenger, 100);
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_moto', paymentMethod: 'froc_pay' });
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_99', paymentMethod: 'froc_pay' });
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     const back = await svc.rideAction(driver, ride.id, { action: 'cancel' });
     assert.equal(back.status, 'searching');

@@ -45,6 +45,8 @@ export interface BlogPost extends Doc {
 }
 
 export const SITE_NAME = 'Froc X Uber';
+/** Páginas de regras e ajuda (renderizadas em server/guidePages.ts). */
+export const GUIDE_SLUGS = ['como-funciona', 'regras-e-requisitos', 'perguntas-frequentes', 'desenvolvedores'];
 
 /** Pauta: cada dia um assunto diferente, girando entre serviço, cidade e tema. */
 export const TOPIC_SERVICES = [
@@ -58,6 +60,9 @@ export const TOPIC_SERVICES = [
   'ganhar dinheiro com van ou caminhão',
   'segurança em corridas por aplicativo',
   'mototáxi e entregas por moto',
+  'entregador para lanchonete e restaurante',
+  'requisitos para motorista de aplicativo (EAR e ano do carro)',
+  'compartilhar a viagem com a família em tempo real',
 ];
 export const TOPIC_CITIES = [
   'São Paulo', 'Rio de Janeiro', 'Belo Horizonte', 'Brasília', 'Salvador', 'Fortaleza', 'Recife', 'Curitiba', 'Porto Alegre', 'Manaus',
@@ -400,7 +405,7 @@ details{border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:12px 16
 .tags span{display:inline-block;border:1px solid rgba(212,175,55,.4);color:#f2c14e;border-radius:999px;padding:2px 10px;font-size:12px;margin:2px}
 `;
 
-function layout(o: { title: string; description: string; canonical: string; body: string; jsonLd: unknown[]; type?: string; publishedAt?: string; image?: string; imageAlt?: string }) {
+export function layout(o: { title: string; description: string; canonical: string; body: string; jsonLd: unknown[]; type?: string; publishedAt?: string; image?: string; imageAlt?: string }) {
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -431,12 +436,12 @@ ${o.jsonLd.map((j) => `<script type="application/ld+json">${JSON.stringify(j).re
 <body>
 <header><div class="wrap bar"><a class="logo" href="/">${SITE_NAME}</a><a class="btn" href="/#entrar">Criar conta grátis</a></div></header>
 <main class="wrap">${o.body}</main>
-<footer><div class="wrap"><a href="/">Início</a> · <a href="/blog">Blog</a> · <a href="/corridas-por-aplicativo">Corridas</a> · <a href="/caronas-intermunicipais">Caronas</a> · <a href="/fretes-e-mudancas">Fretes</a> · <a href="/seja-motorista">Seja motorista</a> · <a href="/legal/termos.html">Termos</a> · <a href="/legal/privacidade.html">Privacidade</a><br>© ${new Date().getFullYear()} ${SITE_NAME}</div></footer>
+<footer><div class="wrap"><a href="/">Início</a> · <a href="/blog">Blog</a> · <a href="/como-funciona">Como funciona</a> · <a href="/regras-e-requisitos">Regras e leis</a> · <a href="/perguntas-frequentes">Perguntas frequentes</a> · <a href="/corridas-por-aplicativo">Corridas</a> · <a href="/caronas-intermunicipais">Caronas</a> · <a href="/fretes-e-mudancas">Fretes</a> · <a href="/seja-motorista">Seja motorista</a> · <a href="/desenvolvedores">Para lojas e desenvolvedores</a> · <a href="/legal/termos.html">Termos</a> · <a href="/legal/privacidade.html">Privacidade</a><br>© ${new Date().getFullYear()} ${SITE_NAME}</div></footer>
 </body>
 </html>`;
 }
 
-const ORG = (site: string) => ({
+export const ORG = (site: string) => ({
   '@context': 'https://schema.org',
   '@type': 'Organization',
   name: SITE_NAME,
@@ -673,7 +678,7 @@ ${latest.length ? `<h2>Do nosso blog</h2><div class="list">${latest.map((r) => `
 const xmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Data da última versão do site (fixada no build), usada como lastmod das páginas fixas. */
-export const STATIC_LASTMOD = '2026-11-15';
+export const STATIC_LASTMOD = '2026-11-16';
 
 export function sitemapIndex(site: string, latestBlog?: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -688,6 +693,7 @@ export function sitemapPages(site: string) {
   const urls = [
     { loc: `${site}/`, priority: '1.0', freq: 'daily' },
     ...SERVICE_PAGES.map((p) => ({ loc: `${site}/${p.slug}`, priority: '0.9', freq: 'weekly' })),
+    ...GUIDE_SLUGS.map((slug) => ({ loc: `${site}/${slug}`, priority: '0.7', freq: 'monthly' })),
     { loc: `${site}/blog`, priority: '0.8', freq: 'daily' },
     ...['ajuda', 'seguranca', 'termos', 'privacidade'].map((p) => ({ loc: `${site}/legal/${p}.html`, priority: '0.3', freq: 'yearly' })),
   ];

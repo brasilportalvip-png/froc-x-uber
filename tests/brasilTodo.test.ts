@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { FrocService, resolvePoint } from '../server/services.ts';
 import type { AuthUser } from '../server/services.ts';
 import { MemoryStore } from '../server/store.ts';
+const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleYear: 2022, vehicleType: 'carro', declarations: { ear: true, inss: true, seguroApp: true, veracidade: true, rntrc: true, ciotPiso: true, lei12009: true } };
 
 const city = (name: string, state: string, lat: number, lng: number) => ({ id: `place-${name}`, name: `${name} · ${state}`, city: name, state, zone: 'intercity', lat, lng, kind: 'city' });
 
@@ -21,8 +22,8 @@ test('Carona entre cidades do Nordeste e caminhoneiro com RNTRC', async () => {
   const svcAdmin = new FrocService((svc as unknown as { store: MemoryStore }).store, { adminEmails: ['adm@x.com'], files: { async save() {}, async signedUrl(p) { return p; } } });
   const driver: AuthUser = { uid: 'd1', email: 'd@x.com', emailVerified: true };
   const b64 = Buffer.from('foto').toString('base64');
-  for (const doc of ['cnh', 'crlv']) await svc.uploadDocument(driver, 'driver', doc, 'image/jpeg', b64);
-  await svc.applyAsProvider(driver, 'driver', { phone: '81988887777', vehicle: 'Onix Prata', plate: 'ABC1D23' });
+  for (const doc of ['cnh', 'crlv', 'antecedentes']) await svc.uploadDocument(driver, 'driver', doc, 'image/jpeg', b64);
+  await svc.applyAsProvider(driver, 'driver', { ...LEGAL, phone: '81988887777', vehicle: 'Onix Prata', plate: 'ABC1D23' });
   await svcAdmin.reviewApplication(admin, 'd1', 'driver', 'approved', '');
   const trip = await svc.publishCarpool(driver, {
     originPoint: city('Recife', 'PE', -8.047, -34.877),
@@ -37,12 +38,12 @@ test('Carona entre cidades do Nordeste e caminhoneiro com RNTRC', async () => {
   assert.ok(trip.distanceKm > 500);
 
   const trucker: AuthUser = { uid: 't1', email: 't@x.com', emailVerified: true };
-  for (const doc of ['cnh', 'crlv', 'antt']) await svc.uploadDocument(trucker, 'trucker', doc, 'image/jpeg', b64);
+  for (const doc of ['cnh', 'crlv', 'antt', 'antecedentes']) await svc.uploadDocument(trucker, 'trucker', doc, 'image/jpeg', b64);
   await assert.rejects(
-    svc.applyAsProvider(trucker, 'trucker', { phone: '91988887777', vehicle: 'VW Delivery', plate: 'QWE1R23', truckType: 'Truck Baú' }),
+    svc.applyAsProvider(trucker, 'trucker', { ...LEGAL, phone: '91988887777', vehicle: 'VW Delivery', plate: 'QWE1R23', truckType: 'Truck Baú' }),
     /RNTRC/,
   );
-  const prof = await svc.applyAsProvider(trucker, 'trucker', { phone: '91988887777', vehicle: 'VW Delivery', plate: 'QWE1R23', truckType: 'Truck Baú', rntrc: '0123.4567-8' });
+  const prof = await svc.applyAsProvider(trucker, 'trucker', { ...LEGAL, phone: '91988887777', vehicle: 'VW Delivery', plate: 'QWE1R23', truckType: 'Truck Baú', rntrc: '0123.4567-8' });
   assert.equal(prof.rntrc, '012345678');
   const overview = await svcAdmin.adminOverview(admin);
   assert.equal(overview.applications.find((a) => a.uid === 't1')?.rntrc, '012345678');

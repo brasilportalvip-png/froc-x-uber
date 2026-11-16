@@ -13,7 +13,7 @@ interface WalletAccountPanelProps {
   onWithdraw: (amount: number, pixKey: string) => Promise<void>;
   onUpdateProfile: (patch: Partial<UserProfile>) => Promise<void>;
   onUploadDocument: (kind: 'driver' | 'trucker', docType: string, file: File) => Promise<void>;
-  onApply: (kind: 'driver' | 'trucker', data: Record<string, string>) => Promise<void>;
+  onApply: (kind: 'driver' | 'trucker', data: Record<string, unknown>) => Promise<void>;
   onLogout: () => Promise<void>;
   onRedeem: () => Promise<void>;
 }

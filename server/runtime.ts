@@ -16,6 +16,8 @@ import type { FileStorage } from './services.ts';
 import type { LlmClient } from './ai/gemini.ts';
 import { AiTeam } from './ai/team.ts';
 import type { Store } from './store.ts';
+import { createWebhookDispatcher } from './merchants.ts';
+import { createGoogleGeocoder } from './geocode.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -81,6 +83,8 @@ export function getService() {
       sharedFiles = fb.files;
       return new FrocService(sharedStore, {
         geo,
+        webhooks: createWebhookDispatcher(sharedStore),
+        geocode: createGoogleGeocoder(process.env.GOOGLE_SERVER_MAPS_KEY),
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),
@@ -123,6 +127,7 @@ export function configStatus() {
     mercadoPagoWebhook: Boolean(process.env.MERCADO_PAGO_WEBHOOK_SECRET),
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
+    serverGeocoding: Boolean(process.env.GOOGLE_SERVER_MAPS_KEY),
     cron: Boolean(process.env.CRON_SECRET),
     ai: geminiKeysFromEnv(process.env).length > 0,
     aiKeys: geminiKeysFromEnv(process.env).length,
