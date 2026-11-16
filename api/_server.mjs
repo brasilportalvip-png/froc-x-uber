@@ -1,3 +1,16 @@
+// server/assetLinks.ts
+function assetLinks(packageName, sha2562) {
+  const pkg = String(packageName || "").trim();
+  const prints = String(sha2562 || "").split(/[\s,;]+/).map((f) => f.trim().toUpperCase()).filter((f) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(f));
+  if (!/^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)+$/.test(pkg) || !prints.length) return [];
+  return [
+    {
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: { namespace: "android_app", package_name: pkg, sha256_cert_fingerprints: [...new Set(prints)] }
+    }
+  ];
+}
+
 // server/app.ts
 import express from "express";
 
@@ -5044,6 +5057,11 @@ function createApp(options) {
       if (!res.headersSent) res.status(503).type("text/plain").send("P\xE1gina temporariamente indispon\xEDvel. Tente em instantes.");
     }
   };
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(JSON.stringify(assetLinks(process.env.ANDROID_PACKAGE_NAME, process.env.ANDROID_SHA256)));
+  });
   app.get("/sitemap.xml", publicPage(async (_req, res) => {
     const posts = await (await platform()).blog.list({ limit: 1 }).catch(() => []);
     sendPage(res, "application/xml", sitemapIndex(site(), posts[0]?.updatedAt || posts[0]?.publishedAt));

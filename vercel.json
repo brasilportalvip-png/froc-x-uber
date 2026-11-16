@@ -5,6 +5,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/.well-known/assetlinks.json",
+      "destination": "/api"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api"
     },
@@ -73,7 +77,7 @@
       "destination": "/api"
     },
     {
-      "source": "/((?!api/|legal/|assets/|blog).*)",
+      "source": "/((?!api/|legal/|assets/|blog|\\.well-known/).*)",
       "destination": "/index.html"
     }
   ],
