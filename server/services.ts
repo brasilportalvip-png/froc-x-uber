@@ -19,6 +19,8 @@ import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, ca
 import { formatCnpj, isValidCnpj, newWebhookSecret, validateWebhookUrl } from './merchants.ts';
 import type { WebhookDispatcher } from './merchants.ts';
 import type { Geocoder } from './geocode.ts';
+import { ageOn, cpfKey, formatCpf, isValidCpf, maskCpf, maskEmail, namesMatch, onlyDigits } from './identity.ts';
+import type { CpfStatus, CpfVerifier } from './identity.ts';
 import { BRAZIL_LOCATIONS, calculateDistanceKm, estimateDurationMin, RIDE_CATEGORIES } from '../src/data/locations.ts';
 import type {
   AdminOverview,
@@ -175,6 +177,11 @@ export interface ServiceDeps {
   webhooks?: WebhookDispatcher;
   /** Endereço → coordenadas para a API de entregas (opcional). */
   geocode?: Geocoder;
+  /**
+   * CPF obrigatório (uma pessoa, uma conta) e conferência na Receita (Serpro, opcional).
+   * Em produção required=true; os testes antigos ligam só quando testam isso.
+   */
+  identity?: { required?: boolean; verify?: CpfVerifier };
 }
 
 /** Localização do motorista é considerada "fresca" por 3 minutos. */
@@ -233,6 +240,14 @@ interface UserDoc extends Doc {
   earnedCents?: number;
   ridePolicyAccepted?: string;
   ridePolicyAcceptedAt?: string;
+  cpfStatus?: CpfStatus;
+  cpfMasked?: string;
+  cpfKey?: string;
+  /** Como o CPF foi conferido: receita (Serpro), documentos (CNH conferida pela equipe), equipe ou basico. */
+  cpfSource?: string;
+  cpfVerifiedAt?: string;
+  legalName?: string;
+  multiAccountFlag?: string;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -486,6 +501,10 @@ export class FrocService {
       cnhExpiry: user.cnhExpiry || '',
       maxVehicleAgeYears: this.cfg.maxVehicleAgeYears,
       withdrawableBalance: toReais(this.withdrawable(user)),
+      cpfStatus: user.cpfStatus || 'none',
+      cpfMasked: user.cpfMasked || '',
+      cpfSource: user.cpfSource || '',
+      identityRequired: Boolean(this.deps.identity?.required),
       merchantStatus: user.merchantStatus || 'none',
       merchant: this.merchantView(user),
     };
@@ -510,12 +529,14 @@ export class FrocService {
   async updateProfile(auth: AuthUser, patch: Record<string, unknown>) {
     const user = await this.ensureUser(auth);
     const next: Partial<UserDoc> = {};
-    if ('name' in patch) next.name = text(patch.name, 80) || user.name;
+    // Com CPF confirmado, o nome vem do cadastro do CPF (ninguém vira outra pessoa no app).
+    if ('name' in patch && !['basic', 'verified'].includes(String(user.cpfStatus))) next.name = text(patch.name, 80) || user.name;
     if ('phone' in patch) next.phone = text(patch.phone, 30);
     if ('city' in patch) next.city = text(patch.city, 80);
     if ('driverOnline' in patch) {
       if (patch.driverOnline === true && user.driverStatus !== 'approved' && user.truckerStatus !== 'approved')
         fail(403, 'not_approved', 'Seu cadastro de motorista ainda não foi aprovado.');
+      if (patch.driverOnline === true) this.identityGate(user);
       if (patch.driverOnline === true && user.cnhExpiry && user.cnhExpiry < this.iso().slice(0, 10))
         fail(403, 'cnh_expired', 'Sua CNH venceu. Envie a CNH nova pelo Atendimento para voltar a ficar online.');
       next.driverOnline = patch.driverOnline === true;
@@ -710,7 +731,7 @@ export class FrocService {
    * Só sai o que foi GANHO na Froc: dinheiro de recarga fica para usar no app.
    */
   async requestWithdrawal(auth: AuthUser, amountReais: unknown, pixKey: unknown, pixKeyType?: unknown) {
-    await this.ensureUser(auth);
+    await this.identityGateFor(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 50000, 'saque'));
     const key = text(pixKey, 120);
     const detected = pixKeyKind(key);
@@ -769,7 +790,7 @@ export class FrocService {
     if (kind === 'merchant') return this.applyAsMerchant(auth, body);
     if (kind !== 'driver' && kind !== 'trucker') return fail(400, 'invalid_kind', 'Tipo de cadastro inválido.');
     const cfg = await this.settings();
-    const user = await this.ensureUser(auth);
+    const user = await this.identityGateFor(auth);
     const status = kind === 'driver' ? user.driverStatus : user.truckerStatus;
     if (status === 'approved') fail(409, 'already_approved', 'Cadastro já aprovado.');
     const docs = (kind === 'driver' ? user.driverDocs : user.truckerDocs) || {};
@@ -833,7 +854,7 @@ export class FrocService {
   // --------------------------------------------------- lojas (Froc Entregas)
 
   async applyAsMerchant(auth: AuthUser, body: Record<string, unknown>) {
-    const user = await this.ensureUser(auth);
+    const user = await this.identityGateFor(auth);
     if (user.merchantStatus === 'approved') fail(409, 'already_approved', 'Sua loja já está aprovada.');
     if (user.merchantStatus === 'pending') fail(409, 'already_submitted', 'O cadastro da sua loja já está em análise.');
     const companyName = text(body.companyName, 80);
@@ -890,6 +911,132 @@ export class FrocService {
     return { webhookUrl, secret, hasWebhookSecret: Boolean(m.webhookSecret) };
   }
 
+  // ------------------------------------------------- identidade (CPF, 1 conta)
+
+  /** Sem CPF confirmado, a pessoa não pede nem oferece serviços (quando o CPF é obrigatório). */
+  private identityGate(user: UserDoc) {
+    if (!this.deps.identity?.required) return;
+    if (user.cpfStatus === 'basic' || user.cpfStatus === 'verified') return;
+    fail(403, 'cpf_required', 'Confirme seu CPF na aba Conta para usar a Froc. Leva 1 minuto e protege motoristas e passageiros.');
+  }
+
+  private async identityGateFor(auth: AuthUser) {
+    const user = await this.ensureUser(auth);
+    this.identityGate(user);
+    return user;
+  }
+
+  /**
+   * Cadastro do CPF. Regras: CPF válido, maior de 18 anos, um CPF = uma conta (vale mesmo
+   * trocando de celular ou de e-mail), CPF de conta bloqueada não volta. Com o Serpro ligado,
+   * CPF + nascimento precisam existir na Receita, a situação precisa ser Regular e o nome bater.
+   */
+  async registerCpf(auth: AuthUser, body: Record<string, unknown>, deviceId?: unknown) {
+    const user = await this.ensureUser(auth);
+    if (user.cpfStatus === 'basic' || user.cpfStatus === 'verified')
+      fail(409, 'cpf_already', 'Seu CPF já está confirmado. Para trocar, fale com o Atendimento.');
+    const cpf = onlyDigits(body.cpf);
+    if (!isValidCpf(cpf)) fail(400, 'invalid_cpf', 'CPF inválido. Confira os 11 números.');
+    const fullName = text(body.fullName, 120).replace(/\s+/g, ' ');
+    if (fullName.split(' ').filter((t) => t.length > 1).length < 2) fail(400, 'invalid_name', 'Informe seu nome completo, como está no CPF.');
+    const birthDate = parseDay(body.birthDate);
+    if (!birthDate) fail(400, 'invalid_birth', 'Informe sua data de nascimento.');
+    const age = ageOn(birthDate, this.now());
+    if (age < 18) fail(403, 'underage', 'A Froc é só para maiores de 18 anos. Menores viajam acompanhados de um adulto com conta.');
+    if (age > 120) fail(400, 'invalid_birth', 'Data de nascimento inválida.');
+    const key = cpfKey(cpf);
+    const taken = async (idx: Doc | null) => {
+      if (!idx || !idx.uid || idx.uid === user.uid) return;
+      if (idx.blocked) fail(403, 'cpf_blocked', 'Este CPF está bloqueado na Froc. Fale com o Atendimento.');
+      fail(409, 'cpf_in_use', `Este CPF já tem uma conta na Froc (${maskEmail(String(idx.email || ''))}). Cada pessoa pode ter só uma conta: entre nela ou fale com o Atendimento.`);
+    };
+    await taken(await this.store.get<Doc>('cpf_index', key));
+
+    // Conferência na Receita (Serpro). Fora do ar: segue como "básico" e a equipe confere depois.
+    let status: CpfStatus = 'basic';
+    let source = 'basico';
+    let legalName = fullName;
+    let situation = '';
+    const lookup = this.deps.identity?.verify ? await this.deps.identity.verify(cpf, birthDate) : null;
+    if (lookup) {
+      if (!lookup.found) fail(400, 'cpf_not_found', 'CPF e data de nascimento não conferem na Receita Federal. Confira os dados.');
+      if (!lookup.regular) fail(403, 'cpf_irregular', `Seu CPF não está regular na Receita (${lookup.situation || 'situação irregular'}). Regularize em gov.br e tente de novo.`);
+      const official = lookup.socialName || lookup.name || '';
+      if (official && !namesMatch(fullName, official) && !(lookup.name && namesMatch(fullName, lookup.name)))
+        fail(400, 'cpf_name_mismatch', 'O nome não bate com o cadastro do CPF na Receita. Digite seu nome completo como está no CPF.');
+      status = 'verified';
+      source = 'receita';
+      legalName = official ? official.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()) : fullName;
+      situation = lookup.situation || 'Regular';
+    }
+    const now = this.iso();
+    await this.store.transaction(async (tx) => {
+      await taken(await tx.get<Doc>('cpf_index', key)); // de novo dentro da transação (duas contas ao mesmo tempo)
+      tx.set('cpf_index', key, { id: key, uid: user.uid, email: user.email, blocked: false, createdAt: now });
+      tx.set('identities', user.uid, { uid: user.uid, cpf: formatCpf(cpf), birthDate, declaredName: fullName, legalName, source, situation, createdAt: now });
+      tx.update('users', user.uid, {
+        cpfStatus: status,
+        cpfMasked: maskCpf(cpf),
+        cpfKey: key,
+        cpfSource: source,
+        cpfVerifiedAt: now,
+        legalName,
+        name: legalName.split(' ').length > 1 ? `${legalName.split(' ')[0]} ${legalName.split(' ').slice(-1)[0]}` : legalName,
+      });
+    });
+    await this.audit(auth, 'cpf_cadastrado', user.uid, { status, fonte: source });
+    if (deviceId) await this.recordDevice(auth, deviceId).catch(() => undefined);
+    return this.profileView((await this.store.get<UserDoc>('users', user.uid))!, auth);
+  }
+
+  /**
+   * Aparelho usado (id aleatório guardado no navegador). Não bloqueia sozinho (família divide
+   * celular), mas 3+ contas no mesmo aparelho viram alerta de possível multiconta para a equipe.
+   */
+  async recordDevice(auth: AuthUser, deviceId: unknown) {
+    const raw = String(deviceId ?? '');
+    if (!/^[a-zA-Z0-9-]{16,64}$/.test(raw)) return { ok: false };
+    const key = createHash('sha256').update(`froc-device:${raw}`).digest('hex');
+    const doc = await this.store.get<Doc>('devices', key);
+    const uids = Array.isArray(doc?.uids) ? (doc!.uids as string[]) : [];
+    if (uids.includes(auth.uid)) return { ok: true };
+    const next = [...uids, auth.uid].slice(-20);
+    await this.store.set('devices', key, { id: key, uids: next, updatedAt: this.iso() });
+    if (next.length >= 3) {
+      const flag = `Mesmo aparelho usado por ${next.length} contas`;
+      await Promise.all(next.map((uid) => this.store.update('users', uid, { multiAccountFlag: flag }).catch(() => undefined)));
+      await this.audit(null, 'possivel_multiconta', auth.uid, { contas: next.length });
+    }
+    return { ok: true };
+  }
+
+  /** Equipe confere o CPF manualmente (ex.: no site da Receita) ou recusa CPF falso. */
+  async adminSetCpfStatus(auth: AuthUser, uid: unknown, decision: unknown, reason: unknown) {
+    this.requireAdmin(auth);
+    if (decision !== 'verified' && decision !== 'rejected') return fail(400, 'invalid_decision', 'Decisão inválida.');
+    const user = (await this.store.get<UserDoc>('users', String(uid))) ?? fail(404, 'not_found', 'Usuário não encontrado.');
+    if (!user.cpfKey) fail(409, 'no_cpf', 'Esta conta ainda não cadastrou CPF.');
+    const why = text(reason, 200);
+    if (decision === 'rejected') {
+      if (why.length < 5) fail(400, 'reason_required', 'Explique o motivo.');
+      // Libera o CPF para o dono verdadeiro e pede um novo cadastro a esta conta.
+      await this.store.update('cpf_index', user.cpfKey!, { uid: null, releasedAt: this.iso(), releasedReason: why });
+      await this.store.update('users', user.uid, { cpfStatus: 'rejected', cpfKey: '', cpfMasked: '', rejectionReason: why });
+    } else {
+      await this.store.update('users', user.uid, { cpfStatus: 'verified', cpfSource: 'equipe', cpfVerifiedAt: this.iso() });
+    }
+    await this.audit(auth, decision === 'verified' ? 'cpf_conferido' : 'cpf_recusado', user.uid, { reason: why });
+    return { ok: true };
+  }
+
+  /** Dados do CPF para a equipe conferir (só admin). */
+  async adminIdentity(auth: AuthUser, uid: unknown) {
+    this.requireAdmin(auth);
+    const id = await this.store.get<Doc>('identities', String(uid));
+    if (id) await this.audit(auth, 'cpf_visualizado', String(uid)); // LGPD: quem viu o CPF fica registrado
+    return id ? { cpf: id.cpf, birthDate: id.birthDate, declaredName: id.declaredName, legalName: id.legalName, source: id.source, situation: id.situation } : null;
+  }
+
   // ---------------------------------------------------------------- admin
 
   private requireAdmin(auth: AuthUser) {
@@ -915,6 +1062,7 @@ export class FrocService {
       ].map(async ({ u, kind }) => {
         const docs = (kind === 'driver' ? u.driverDocs : u.truckerDocs) || {};
         const rule = vehicleAgeLimit(u.driverCity || '', u.driverState || '', settings.maxVehicleAgeYears);
+        const identity = await this.store.get<Doc>('identities', u.uid);
         return {
           uid: u.uid,
           name: u.name,
@@ -931,6 +1079,9 @@ export class FrocService {
           state: u.driverState,
           cnhExpiry: u.cnhExpiry,
           declarations: u.declarations,
+          cpf: identity ? String(identity.cpf) : '',
+          legalName: identity ? String(identity.legalName) : '',
+          cpfStatus: u.cpfStatus || 'none',
           truckType: kind === 'trucker' ? u.truckType : undefined,
           companyName: kind === 'trucker' ? u.companyName : undefined,
           rntrc: kind === 'trucker' ? u.rntrc : undefined,
@@ -990,6 +1141,8 @@ export class FrocService {
       rejectionReason: decision === 'rejected' ? why : '',
       reviewedBy: auth.email,
       reviewedAt: this.iso(),
+      // Aprovar motorista/transportador = a equipe conferiu o CPF na CNH.
+      ...(decision === 'approved' && kind !== 'merchant' && user.cpfStatus === 'basic' ? { cpfStatus: 'verified', cpfSource: 'documentos', cpfVerifiedAt: this.iso() } : {}),
     });
     await this.audit(auth, decision === 'approved' ? 'cadastro_aprovado' : 'cadastro_recusado', user.uid, { kind, reason: why, email: user.email });
     return { ok: true };
@@ -1066,6 +1219,7 @@ export class FrocService {
   }
 
   async createRide(auth: AuthUser, body: Record<string, unknown>) {
+    await this.identityGateFor(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const category = RIDE_CATEGORIES.find((c) => c.id === body.categoryId) ?? fail(400, 'invalid_category', 'Categoria inválida.');
@@ -1107,6 +1261,8 @@ export class FrocService {
         pinCode: String(randomInt(1000, 10000)),
         status: 'searching',
         policyVersion: RIDE_POLICY_VERSION,
+        // Selo para o motorista: CPF conferido na Receita / pela equipe, ou só cadastrado.
+        passengerVerified: user.cpfStatus === 'verified' ? 'verificado' : user.cpfStatus === 'basic' ? 'cpf' : '',
         escrowCents: 0,
         createdAt: this.iso(),
         messages: [],
@@ -1319,6 +1475,7 @@ export class FrocService {
   }
 
   async createInDrive(auth: AuthUser, body: Record<string, unknown>) {
+    await this.identityGateFor(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const method = paymentMethod(body.paymentMethod);
@@ -1512,6 +1669,7 @@ export class FrocService {
   }
 
   async bookCarpool(auth: AuthUser, tripId: string, seatsWanted: unknown) {
+    await this.identityGateFor(auth);
     const seats = Math.round(num(seatsWanted, 1, 6, 'vagas'));
     const bookingId = randomUUID();
     const trip = await this.store.transaction(async (tx) => {
@@ -1676,6 +1834,7 @@ export class FrocService {
   }
 
   async reserveEmptyTruck(auth: AuthUser, id: string) {
+    await this.identityGateFor(auth);
     const route = await this.store.transaction(async (tx) => {
       const t = await this.mustGet<Doc>(tx, 'emptyTrucks', id, 'Caminhão');
       if (t.truckerId === auth.uid) fail(403, 'own_route', 'Esta rota é sua.');
@@ -1732,6 +1891,7 @@ export class FrocService {
   }
 
   async createFreight(auth: AuthUser, body: Record<string, unknown>) {
+    await this.identityGateFor(auth);
     const client = await this.ensureUser(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
@@ -2022,11 +2182,15 @@ export class FrocService {
   async adminUsers(auth: AuthUser, search: unknown) {
     this.requireAdmin(auth);
     const q = text(search, 120).toLowerCase();
-    const users = q.includes('@')
-      ? await this.store.query<UserDoc>('users', [['email', '==', q]], 5)
-      : byNewest(await this.store.query<UserDoc>('users', [], 300)).slice(0, 100);
+    // Busca por CPF: acha a conta dona daquele CPF.
+    const byCpf = isValidCpf(q) ? await this.store.get<Doc>('cpf_index', cpfKey(onlyDigits(q))) : null;
+    const users = byCpf?.uid
+      ? ([await this.store.get<UserDoc>('users', String(byCpf.uid))].filter(Boolean) as UserDoc[])
+      : q.includes('@')
+        ? await this.store.query<UserDoc>('users', [['email', '==', q]], 5)
+        : byNewest(await this.store.query<UserDoc>('users', [], 300)).slice(0, 100);
     return users
-      .filter((u) => !q || q.includes('@') || u.name.toLowerCase().includes(q) || String(u.phone).includes(q))
+      .filter((u) => !q || byCpf || q.includes('@') || u.name.toLowerCase().includes(q) || String(u.phone).includes(q))
       .map((u) => ({
         uid: u.uid,
         name: u.name,
@@ -2042,6 +2206,10 @@ export class FrocService {
         blocked: Boolean(u.blocked),
         blockedReason: u.blockedReason || '',
         qualityAlert: u.qualityAlert || '',
+        cpfStatus: u.cpfStatus || 'none',
+        cpfMasked: u.cpfMasked || '',
+        cpfSource: u.cpfSource || '',
+        multiAccountFlag: u.multiAccountFlag || '',
         merchantStatus: u.merchantStatus || 'none',
       }));
   }
@@ -2057,6 +2225,8 @@ export class FrocService {
       blockedReason: blocked === true ? why : '',
       driverOnline: blocked === true ? false : user.driverOnline,
     });
+    // Bloqueio vale para a PESSOA: o CPF também fica bloqueado (não adianta criar conta nova).
+    if (user.cpfKey) await this.store.update('cpf_index', user.cpfKey, { blocked: blocked === true }).catch(() => undefined);
     await this.audit(auth, blocked === true ? 'usuario_bloqueado' : 'usuario_desbloqueado', user.uid, { reason: why, email: user.email });
     return { ok: true };
   }

@@ -92,6 +92,14 @@ test.describe('Produção', () => {
     await page.getByPlaceholder(/Senha/).fill(process.env.E2E_PASSWORD!);
     await page.locator('#entrar form button[type="submit"]').click();
     await expect(page.getByText('Corridas').first()).toBeVisible({ timeout: 30_000 });
+    // Conta de teste sem CPF: a tela "Confirme quem você é" tem de aparecer e bloquear o uso.
+    const gate = page.getByRole('dialog', { name: 'Confirme quem você é' });
+    if (await gate.isVisible({ timeout: 8_000 }).catch(() => false)) {
+      await expect(gate.getByPlaceholder('000.000.000-00')).toBeVisible();
+      await gate.getByPlaceholder('000.000.000-00').fill('11111111111');
+      await expect(gate.getByText('CPF inválido')).toBeVisible();
+      return;
+    }
     await page.getByTestId('support-button').click();
     await expect(page.getByText('Atendimento Froc')).toBeVisible();
   });

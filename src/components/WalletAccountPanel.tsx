@@ -205,6 +205,17 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
       >
         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Meus dados</h4>
         <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · e-mail ainda não confirmado'}</div>
+        {profile.cpfMasked && (
+          <div className="text-[11px] text-slate-600 dark:text-slate-300">
+            CPF {profile.cpfMasked} ·{' '}
+            {profile.cpfStatus === 'verified' ? (
+              <strong className="text-emerald-600">verificado {profile.cpfSource === 'receita' ? 'na Receita Federal' : 'pela equipe Froc'}</strong>
+            ) : (
+              <strong className="text-sky-600">cadastrado (conferência da equipe em andamento)</strong>
+            )}
+            . O nome vem do CPF; para corrigir, fale com o Atendimento.
+          </div>
+        )}
         {profile.founder && (
           <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/60 bg-black px-3 py-1 text-[11px] font-bold">
             <span className="froc-gold-text">★ Membro fundador</span>
@@ -233,7 +244,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
             {verifyMsg && <div className="font-semibold">{verifyMsg}</div>}
           </div>
         )}
-        <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome completo" className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-semibold" />
+        <input required value={name} disabled={Boolean(profile.cpfMasked)} onChange={(e) => setName(e.target.value)} placeholder="Nome completo" className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-semibold" />
         <div className="grid grid-cols-2 gap-2">
           <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Celular com DDD" className="min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
           <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Cidade" className="min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />

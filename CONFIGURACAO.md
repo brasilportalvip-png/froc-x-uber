@@ -102,6 +102,9 @@ Assim, corridas sem motorista são canceladas e estornadas mesmo quando ninguém
 | GEMINI_API_KEY_2 e GEMINI_API_KEY_3 | não (recomendado) | chaves reservas de OUTRO projeto do Google AI Studio: assumem se a principal estourar a cota |
 | GOOGLE_SITE_VERIFICATION | para o Google Search Console | só o código da metatag (item 7) |
 | BING_SITE_VERIFICATION | para o Bing Webmaster | só o código da metatag (item 7) |
+| SERPRO_CONSUMER_KEY e SERPRO_CONSUMER_SECRET | recomendado | Serpro → Consulta CPF (item 11): confere CPF, nome e nascimento na Receita |
+| SERPRO_CPF_URL | só se o Serpro indicar outro endereço | deixe vazio |
+| CPF_OBRIGATORIO | não | deixe vazio (CPF obrigatório). `nao` desliga só em emergência |
 | GOOGLE_SERVER_MAPS_KEY | não | chave do Google **só com a Geocoding API** e sem restrição de site (item 10) |
 
 ## 7. Equipe IA, atendimento e blog
@@ -195,6 +198,23 @@ Webhooks que falharem são reenviados pelo mesmo agendador do item 5 (`/api/cron
 e cada viagem precisa de CIOT. O app já exige RNTRC e a declaração de CIOT/piso, mas **converse com um advogado**
 antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferência do piso por tabela da ANTT ainda são feitas fora do app.
 
+## 11. Todos verificados: CPF e uma conta por pessoa
+
+- Depois de criar a conta, a pessoa vê **"Confirme quem você é"**: nome completo, CPF e data de nascimento. Sem isso não pede,
+  não dirige, não saca e não cadastra loja. Menor de 18 anos é recusado.
+- **Conferência na Receita (Serpro):** contrate a API **Consulta CPF** em loja.serpro.gov.br (pagamento por consulta) e coloque
+  `SERPRO_CONSUMER_KEY` e `SERPRO_CONSUMER_SECRET` na Vercel. Com isso, CPF + nascimento precisam existir, a situação precisa ser
+  Regular e o nome precisa bater; o nome do app passa a ser o nome oficial (ou o nome social, quando existir).
+  Depois de contratar, abra o menu **Demonstração** do Serpro e confira o endereço da consulta; se for diferente do padrão,
+  coloque em `SERPRO_CPF_URL` (use `{cpf}` e `{nascimento}` no lugar dos dados).
+- **Sem o Serpro:** o CPF é aceito como "cadastrado" (dígitos certos, maior de 18, não usado em outra conta) e você confere em
+  Admin → Usuários → **Ver CPF** → "Conferir na Receita" → **Conferido** ou **CPF não confere** (libera o CPF para o dono verdadeiro).
+  Aprovar um motorista marca o CPF dele como verificado (a equipe comparou com a CNH).
+- **Uma pessoa, uma conta:** o CPF só pode estar em uma conta, mesmo trocando de celular, chip ou e-mail. A tela mostra o e-mail
+  mascarado da conta que já existe. Bloquear uma conta bloqueia o CPF. Três ou mais contas no mesmo aparelho aparecem como
+  **POSSÍVEL MULTICONTA** em Admin → Usuários (não bloqueia sozinho, porque família divide celular).
+- O CPF completo fica numa coleção separada (`identities`); os usuários veem só o selo. Todo "Ver CPF" fica na auditoria.
+
 ## Como o dinheiro funciona
 
 | Situação | O que acontece |
@@ -221,7 +241,7 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - **Equipe IA, Atendimento, Blog e SEO, Auditoria:** veja o item 7.
 
 ## Testes
-`npm test` roda 116 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
+`npm test` roda 129 testes automáticos (regras de negócio, Equipe IA, atendimento, blog/SEO e limites). `npm run e2e` e `npm run e2e:prod` rodam o teste no navegador.
 
 ## Antes de abrir ao público
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`

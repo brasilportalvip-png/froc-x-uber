@@ -124,6 +124,32 @@ export async function logout() {
 }
 
 /** Chama o servidor com o token do Firebase. Erros viram mensagens em português. */
+/**
+ * Identificador aleatório deste aparelho/navegador (não é dado pessoal). Ajuda a equipe a
+ * perceber muitas contas criadas no mesmo aparelho (regra: uma pessoa, uma conta).
+ */
+export function deviceId(): string {
+  try {
+    let id = localStorage.getItem('froc-aparelho');
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem('froc-aparelho', id);
+    }
+    return id;
+  } catch {
+    return '';
+  }
+}
+
+/** Erro do servidor com o código (ex.: cpf_required) para a tela reagir. */
+export class ApiError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const user = requireAuth().currentUser;
   if (!user) throw new Error('Faça login para continuar.');
@@ -138,16 +164,21 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   const send = async (fresh: boolean) =>
     fetch(path, {
       method: init.method || (init.body ? 'POST' : 'GET'),
-      headers: { Authorization: `Bearer ${await user.getIdToken(fresh)}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: {
+        Authorization: `Bearer ${await user.getIdToken(fresh)}`,
+        ...(deviceId() ? { 'X-Froc-Device': deviceId() } : {}),
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      },
       body: init.body ? JSON.stringify(init.body) : undefined,
     });
   let res = await send(renew);
   // Token recusado: pega um novo no Firebase e tenta uma vez mais antes de mostrar erro.
   if (res.status === 401) res = await send(true);
-  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
   if (!res.ok) {
     if (res.status === 413) throw new Error('Arquivo grande demais. Envie uma foto menor ou um PDF de até 3 MB.');
-    throw new Error(data.error || (res.status >= 500 ? 'O servidor não respondeu. Tente de novo em instantes.' : 'Erro de conexão com o servidor.'));
+    if (data.code === 'cpf_required') window.dispatchEvent(new Event('froc:cpf-required'));
+    throw new ApiError(data.error || (res.status >= 500 ? 'O servidor não respondeu. Tente de novo em instantes.' : 'Erro de conexão com o servidor.'), data.code || '');
   }
   return data as T;
 }

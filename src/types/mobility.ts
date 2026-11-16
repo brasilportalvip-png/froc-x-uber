@@ -59,6 +59,8 @@ export interface RideOrder {
   vehiclePlate?: string;
   etaMin?: number;
   createdAt: string;
+  /** Selo do passageiro para o motorista: 'verificado' (CPF conferido) ou 'cpf' (cadastrado). */
+  passengerVerified?: 'verificado' | 'cpf' | '';
   /** 'froc' = aviso automático da plataforma (ex.: motorista chegou). */
   messages: { sender: 'passenger' | 'driver' | 'froc'; text: string; time: string }[];
   acceptedAt?: string;
@@ -340,6 +342,12 @@ export interface UserProfile {
   walletBalance: number;
   /** Parte do saldo que pode ser sacada por Pix (ganhos). */
   withdrawableBalance?: number;
+  /** CPF: none (falta), basic (cadastrado e válido), verified (conferido na Receita/pela equipe), rejected. */
+  cpfStatus?: 'none' | 'basic' | 'verified' | 'rejected';
+  cpfMasked?: string;
+  cpfSource?: string;
+  /** Quando true, sem CPF a pessoa não pede nem oferece serviços. */
+  identityRequired?: boolean;
   driverOnline: boolean;
   driverVehicle: string;
   driverPlate: string;
@@ -379,6 +387,10 @@ export interface DriverApplicationView {
   cnpj?: string;
   category?: string;
   pickupAddress?: string;
+  /** CPF completo (só para a equipe comparar com a CNH). */
+  cpf?: string;
+  legalName?: string;
+  cpfStatus?: string;
   plate: string;
   truckType?: TruckType;
   companyName?: string;
@@ -447,6 +459,10 @@ export interface AdminUserRow {
   /** Controle de qualidade: motorista com nota baixa em revisão. */
   qualityAlert?: string;
   merchantStatus?: ApprovalStatus;
+  cpfStatus?: string;
+  cpfMasked?: string;
+  cpfSource?: string;
+  multiAccountFlag?: string;
 }
 
 export interface AdminReport {

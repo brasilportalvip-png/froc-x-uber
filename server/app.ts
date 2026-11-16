@@ -323,6 +323,14 @@ export function createApp(options: AppOptions) {
 
   api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req))));
   api.patch('/profile', wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
+  // CPF: poucas tentativas por dia (ninguém fica testando CPF dos outros).
+  api.post(
+    '/identity/cpf',
+    rateLimit(5, 60_000),
+    guard('cpf', 8, 864e5, 'Muitas tentativas de CPF hoje. Tente amanhã ou fale com o Atendimento.'),
+    wrap(async (req) => (await service()).registerCpf(a(req), req.body || {}, req.headers['x-froc-device'])),
+  );
+  api.post('/device', rateLimit(10, 60_000), wrap(async (req) => (await service()).recordDevice(a(req), req.headers['x-froc-device'])));
 
   api.post('/rides/quote', wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
   api.get('/drivers/nearby', rateLimit(40, 60_000), wrap(async (req) => (await service()).nearbyDrivers(a(req), req.query.lat, req.query.lng)));
@@ -404,6 +412,8 @@ export function createApp(options: AppOptions) {
     wrap(async (req) => (await service()).reviewApplication(a(req), id(req), req.body?.kind, req.body?.decision, req.body?.reason)),
   );
   api.get('/admin/users', wrap(async (req) => (await service()).adminUsers(a(req), req.query.q)));
+  api.get('/admin/users/:id/identity', wrap(async (req) => ({ identity: await (await service()).adminIdentity(a(req), id(req)) })));
+  api.post('/admin/users/:id/cpf', wrap(async (req) => (await service()).adminSetCpfStatus(a(req), id(req), req.body?.decision, req.body?.reason)));
   api.post('/admin/users/:id/block', wrap(async (req) => (await service()).setBlocked(a(req), id(req), req.body?.blocked, req.body?.reason)));
   api.get('/admin/reports', wrap(async (req) => (await service()).adminReports(a(req), req.query.days)));
   api.patch('/admin/settings', wrap(async (req) => (await service()).updateSettings(a(req), req.body || {})));

@@ -134,6 +134,8 @@ export const REQUIREMENTS: LegalSection[] = [
     summary: 'Conta pessoal, maior de 18 anos, com respeito ao motorista e às regras de trânsito.',
     items: [
       'Ter 18 anos ou mais para criar conta. Menores só viajam acompanhados de um adulto responsável.',
+      'Confirmar o CPF no cadastro (nome completo, CPF e data de nascimento), conferido na Receita Federal. Motoristas veem o selo "passageiro verificado".',
+      'Uma pessoa, uma conta: o CPF só pode estar em uma conta, mesmo trocando de celular ou de e-mail. Conta bloqueada bloqueia o CPF.',
       'Usar cinto de segurança (obrigatório para todos no veículo).',
       'Informar o PIN de embarque só depois de entrar no carro certo (confira placa, modelo e foto).',
       'Não levar objetos ilegais ou perigosos. Animais de estimação só com combinação prévia com o motorista (cão-guia é sempre aceito, por lei).',
@@ -166,6 +168,7 @@ export const SHARE_RULES = {
 };
 
 export const QUALITY_CONTROL = [
+  'Todos são verificados: passageiros confirmam o CPF (conferido na Receita) e motoristas têm documentos conferidos. Uma pessoa, uma conta.',
   'Todo motorista, motoboy e transportador passa por análise manual de documentos antes de ser liberado (CNH com EAR, CRLV, antecedentes e, em cargas, RNTRC).',
   'Ano do veículo conferido no cadastro conforme a regra da cidade.',
   'CNH com validade: vencida, o motorista fica offline até atualizar.',
@@ -242,6 +245,8 @@ export const FAQ: [string, string][] = [
   ['Posso pagar em dinheiro ou fazer Pix direto para o motorista?', 'Não. Para acabar com golpes de troco, cobrança por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se alguém pedir pagamento por fora, não pague e avise o Atendimento.'],
   ['Como o motorista recebe e tira o dinheiro?', 'O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no próprio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. Só os ganhos podem ir para Pix; saldo de recarga é para usar no app.'],
   ['E se o motorista não aparecer?', 'Se ninguém aceitar no tempo limite, o pedido é cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila.'],
+  ['Por que preciso informar meu CPF?', 'Para segurança de todos: o motorista sabe que o passageiro é uma pessoa real e verificada, e você sabe quem é o motorista. O CPF é conferido na Receita Federal junto com o nome e a data de nascimento. Os outros usuários veem só o selo de verificado, nunca o seu CPF.'],
+  ['Posso ter mais de uma conta?', 'Não. Cada pessoa pode ter uma única conta, ligada ao CPF. Trocar de celular ou de e-mail não muda isso: entre na sua conta de sempre. Se perdeu o acesso, fale com o Atendimento.'],
   ['Posso cancelar a corrida?', 'Pode. Antes de algum motorista aceitar, e até 1 minuto depois do aceite, é grátis. Entre 1 e 2 minutos, 50% do valor vai para o motorista. Depois de 2 minutos, ou com o motorista já no embarque, ele recebe 100%. Se o motorista atrasar mais de 10 minutos além do previsto, ou desistir, você não paga nada.'],
   ['O motorista chegou e eu demorei. Pago a mais?', 'Quando o motorista chega, aparece um aviso na sua tela com um contador. O primeiro minuto é grátis. Depois: +10% com 1 minuto, +30% com 2 minutos e +50% a partir de 3 minutos. Com 5 minutos, o motorista pode encerrar como "passageiro não apareceu" e recebe 100%.'],
   ['Como funciona o controle de qualidade?', 'Documentos conferidos por pessoas, CNH e veículo dentro da validade e da idade permitida, avaliação dos dois lados e revisão de quem fica com nota baixa.'],

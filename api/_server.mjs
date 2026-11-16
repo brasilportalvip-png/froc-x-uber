@@ -17,7 +17,7 @@ var CARGO_VEHICLES = [
 var CARGO_VEHICLE_TYPES = CARGO_VEHICLES.map((v) => v.type);
 
 // server/services.ts
-import { createHash as createHash2, randomBytes as randomBytes2, randomUUID as randomUUID2, randomInt } from "node:crypto";
+import { createHash as createHash3, randomBytes as randomBytes2, randomUUID as randomUUID2, randomInt } from "node:crypto";
 
 // src/data/legal.ts
 var LEGAL_UPDATED = "2026-11-16";
@@ -116,6 +116,8 @@ var REQUIREMENTS = [
     summary: "Conta pessoal, maior de 18 anos, com respeito ao motorista e \xE0s regras de tr\xE2nsito.",
     items: [
       "Ter 18 anos ou mais para criar conta. Menores s\xF3 viajam acompanhados de um adulto respons\xE1vel.",
+      'Confirmar o CPF no cadastro (nome completo, CPF e data de nascimento), conferido na Receita Federal. Motoristas veem o selo "passageiro verificado".',
+      "Uma pessoa, uma conta: o CPF s\xF3 pode estar em uma conta, mesmo trocando de celular ou de e-mail. Conta bloqueada bloqueia o CPF.",
       "Usar cinto de seguran\xE7a (obrigat\xF3rio para todos no ve\xEDculo).",
       "Informar o PIN de embarque s\xF3 depois de entrar no carro certo (confira placa, modelo e foto).",
       "N\xE3o levar objetos ilegais ou perigosos. Animais de estima\xE7\xE3o s\xF3 com combina\xE7\xE3o pr\xE9via com o motorista (c\xE3o-guia \xE9 sempre aceito, por lei).",
@@ -145,6 +147,7 @@ var SHARE_RULES = {
   ]
 };
 var QUALITY_CONTROL = [
+  "Todos s\xE3o verificados: passageiros confirmam o CPF (conferido na Receita) e motoristas t\xEAm documentos conferidos. Uma pessoa, uma conta.",
   "Todo motorista, motoboy e transportador passa por an\xE1lise manual de documentos antes de ser liberado (CNH com EAR, CRLV, antecedentes e, em cargas, RNTRC).",
   "Ano do ve\xEDculo conferido no cadastro conforme a regra da cidade.",
   "CNH com validade: vencida, o motorista fica offline at\xE9 atualizar.",
@@ -219,6 +222,8 @@ var FAQ = [
   ["Posso pagar em dinheiro ou fazer Pix direto para o motorista?", "N\xE3o. Para acabar com golpes de troco, cobran\xE7a por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se algu\xE9m pedir pagamento por fora, n\xE3o pague e avise o Atendimento."],
   ["Como o motorista recebe e tira o dinheiro?", "O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no pr\xF3prio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. S\xF3 os ganhos podem ir para Pix; saldo de recarga \xE9 para usar no app."],
   ["E se o motorista n\xE3o aparecer?", "Se ningu\xE9m aceitar no tempo limite, o pedido \xE9 cancelado sozinho e o valor volta para a carteira. Se o motorista desistir, a corrida volta para a fila."],
+  ["Por que preciso informar meu CPF?", "Para seguran\xE7a de todos: o motorista sabe que o passageiro \xE9 uma pessoa real e verificada, e voc\xEA sabe quem \xE9 o motorista. O CPF \xE9 conferido na Receita Federal junto com o nome e a data de nascimento. Os outros usu\xE1rios veem s\xF3 o selo de verificado, nunca o seu CPF."],
+  ["Posso ter mais de uma conta?", "N\xE3o. Cada pessoa pode ter uma \xFAnica conta, ligada ao CPF. Trocar de celular ou de e-mail n\xE3o muda isso: entre na sua conta de sempre. Se perdeu o acesso, fale com o Atendimento."],
   ["Posso cancelar a corrida?", "Pode. Antes de algum motorista aceitar, e at\xE9 1 minuto depois do aceite, \xE9 gr\xE1tis. Entre 1 e 2 minutos, 50% do valor vai para o motorista. Depois de 2 minutos, ou com o motorista j\xE1 no embarque, ele recebe 100%. Se o motorista atrasar mais de 10 minutos al\xE9m do previsto, ou desistir, voc\xEA n\xE3o paga nada."],
   ["O motorista chegou e eu demorei. Pago a mais?", 'Quando o motorista chega, aparece um aviso na sua tela com um contador. O primeiro minuto \xE9 gr\xE1tis. Depois: +10% com 1 minuto, +30% com 2 minutos e +50% a partir de 3 minutos. Com 5 minutos, o motorista pode encerrar como "passageiro n\xE3o apareceu" e recebe 100%.'],
   ["Como funciona o controle de qualidade?", "Documentos conferidos por pessoas, CNH e ve\xEDculo dentro da validade e da idade permitida, avalia\xE7\xE3o dos dois lados e revis\xE3o de quem fica com nota baixa."],
@@ -450,6 +455,105 @@ function createWebhookDispatcher(store, fetchImpl = fetch, now3 = () => /* @__PU
       const id = randomUUID();
       const body = JSON.stringify({ id, type: "webhook.test", createdAt: now3().toISOString(), data: { message: "Teste do Froc Entregas. Se voc\xEA recebeu, est\xE1 tudo certo." } });
       return send(url, secret, body, "webhook.test", id);
+    }
+  };
+}
+
+// server/identity.ts
+import { createHash as createHash2 } from "node:crypto";
+function onlyDigits(v) {
+  return String(v ?? "").replace(/\D/g, "");
+}
+function isValidCpf(value) {
+  const d = onlyDigits(value);
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  const digit = (len) => {
+    let sum = 0;
+    for (let i = 0; i < len; i++) sum += Number(d[i]) * (len + 1 - i);
+    const r = sum * 10 % 11;
+    return r === 10 ? 0 : r;
+  };
+  return digit(9) === Number(d[9]) && digit(10) === Number(d[10]);
+}
+var formatCpf = (d) => `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+var maskCpf = (d) => `***.${d.slice(3, 6)}.${d.slice(6, 9)}-**`;
+var cpfKey = (d) => createHash2("sha256").update(`froc-cpf:${d}`).digest("hex");
+function maskEmail(email) {
+  const [user, domain = ""] = email.split("@");
+  const [host, ...rest] = domain.split(".");
+  return `${user.slice(0, 1)}***@${host.slice(0, 1)}***${rest.length ? "." + rest.join(".") : ""}`;
+}
+function ageOn(birth, today) {
+  const [y, m, d] = birth.split("-").map(Number);
+  let age = today.getUTCFullYear() - y;
+  const md = (today.getUTCMonth() + 1) * 100 + today.getUTCDate();
+  if (md < m * 100 + d) age--;
+  return age;
+}
+var normName = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((t) => t.length > 1 && !["de", "da", "do", "das", "dos", "e"].includes(t));
+function namesMatch(declared, official) {
+  const a = normName(declared);
+  const b = normName(official);
+  if (!a.length || !b.length || a[0] !== b[0]) return false;
+  const rest = a.slice(1);
+  if (!rest.length) return b.length === 1;
+  const hits = rest.filter((t) => b.includes(t)).length;
+  return hits >= Math.ceil(rest.length / 2);
+}
+function createSerproVerifier(env, fetchImpl = fetch) {
+  const key = env.SERPRO_CONSUMER_KEY;
+  const secret = env.SERPRO_CONSUMER_SECRET;
+  if (!key || !secret) return void 0;
+  const tokenUrl = env.SERPRO_TOKEN_URL || "https://gateway.apiserpro.serpro.gov.br/token";
+  const cpfUrl = env.SERPRO_CPF_URL || "https://apicpf.estaleiro.serpro.gov.br/api/v3/cpf/{cpf}?dataNascimento={nascimento}";
+  let token = null;
+  const timed = async (url, init) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8e3);
+    try {
+      return await fetchImpl(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const getToken = async () => {
+    if (token && token.until > Date.now() + 6e4) return token.value;
+    const res = await timed(tokenUrl, {
+      method: "POST",
+      headers: { Authorization: `Basic ${Buffer.from(`${key}:${secret}`).toString("base64")}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: "grant_type=client_credentials"
+    });
+    if (!res.ok) throw new Error(`token ${res.status}`);
+    const json = await res.json();
+    token = { value: json.access_token, until: Date.now() + (json.expires_in || 3600) * 1e3 };
+    return token.value;
+  };
+  return async (cpf, birthDate) => {
+    try {
+      const url = cpfUrl.replace("{cpf}", cpf).replace("{nascimento}", birthDate).replace("{nascimentoBR}", birthDate.split("-").reverse().join(""));
+      let res = await timed(url, { headers: { Authorization: `Bearer ${await getToken()}`, Accept: "application/json" } });
+      if (res.status === 401) {
+        token = null;
+        res = await timed(url, { headers: { Authorization: `Bearer ${await getToken()}`, Accept: "application/json" } });
+      }
+      if (res.status === 404 || res.status === 400) return { found: false };
+      if (!res.ok) return null;
+      const j = await res.json();
+      const situacao = j.situacao || {};
+      const desc = String(situacao.descricao ?? j.situacao_cpf ?? j.situacaoCadastral ?? "");
+      const code2 = String(situacao.codigo ?? "");
+      const nasc = String(j.nascimento ?? j.dataNascimento ?? j.data_nascimento ?? "");
+      if (/^\d{8}$/.test(nasc) && `${nasc.slice(4)}-${nasc.slice(2, 4)}-${nasc.slice(0, 2)}` !== birthDate) return { found: false };
+      return {
+        found: true,
+        name: String(j.nome ?? j.name ?? ""),
+        socialName: String(j.nomeSocial ?? j.nome_social ?? "") || void 0,
+        regular: code2 === "0" || /regular/i.test(desc),
+        situation: desc || code2
+      };
+    } catch (e) {
+      console.warn("Consulta CPF (Serpro) indispon\xEDvel:", String(e?.message || e));
+      return null;
     }
   };
 }
@@ -1077,6 +1181,10 @@ var FrocService = class {
       cnhExpiry: user.cnhExpiry || "",
       maxVehicleAgeYears: this.cfg.maxVehicleAgeYears,
       withdrawableBalance: toReais(this.withdrawable(user)),
+      cpfStatus: user.cpfStatus || "none",
+      cpfMasked: user.cpfMasked || "",
+      cpfSource: user.cpfSource || "",
+      identityRequired: Boolean(this.deps.identity?.required),
       merchantStatus: user.merchantStatus || "none",
       merchant: this.merchantView(user)
     };
@@ -1099,12 +1207,13 @@ var FrocService = class {
   async updateProfile(auth, patch) {
     const user = await this.ensureUser(auth);
     const next = {};
-    if ("name" in patch) next.name = text(patch.name, 80) || user.name;
+    if ("name" in patch && !["basic", "verified"].includes(String(user.cpfStatus))) next.name = text(patch.name, 80) || user.name;
     if ("phone" in patch) next.phone = text(patch.phone, 30);
     if ("city" in patch) next.city = text(patch.city, 80);
     if ("driverOnline" in patch) {
       if (patch.driverOnline === true && user.driverStatus !== "approved" && user.truckerStatus !== "approved")
         fail2(403, "not_approved", "Seu cadastro de motorista ainda n\xE3o foi aprovado.");
+      if (patch.driverOnline === true) this.identityGate(user);
       if (patch.driverOnline === true && user.cnhExpiry && user.cnhExpiry < this.iso().slice(0, 10))
         fail2(403, "cnh_expired", "Sua CNH venceu. Envie a CNH nova pelo Atendimento para voltar a ficar online.");
       next.driverOnline = patch.driverOnline === true;
@@ -1275,7 +1384,7 @@ var FrocService = class {
    * Só sai o que foi GANHO na Froc: dinheiro de recarga fica para usar no app.
    */
   async requestWithdrawal(auth, amountReais, pixKey, pixKeyType) {
-    await this.ensureUser(auth);
+    await this.identityGateFor(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 5e4, "saque"));
     const key = text(pixKey, 120);
     const detected = pixKeyKind(key);
@@ -1329,7 +1438,7 @@ var FrocService = class {
     if (kind === "merchant") return this.applyAsMerchant(auth, body);
     if (kind !== "driver" && kind !== "trucker") return fail2(400, "invalid_kind", "Tipo de cadastro inv\xE1lido.");
     const cfg = await this.settings();
-    const user = await this.ensureUser(auth);
+    const user = await this.identityGateFor(auth);
     const status = kind === "driver" ? user.driverStatus : user.truckerStatus;
     if (status === "approved") fail2(409, "already_approved", "Cadastro j\xE1 aprovado.");
     const docs = (kind === "driver" ? user.driverDocs : user.truckerDocs) || {};
@@ -1388,7 +1497,7 @@ var FrocService = class {
   }
   // --------------------------------------------------- lojas (Froc Entregas)
   async applyAsMerchant(auth, body) {
-    const user = await this.ensureUser(auth);
+    const user = await this.identityGateFor(auth);
     if (user.merchantStatus === "approved") fail2(409, "already_approved", "Sua loja j\xE1 est\xE1 aprovada.");
     if (user.merchantStatus === "pending") fail2(409, "already_submitted", "O cadastro da sua loja j\xE1 est\xE1 em an\xE1lise.");
     const companyName = text(body.companyName, 80);
@@ -1442,6 +1551,122 @@ var FrocService = class {
     await this.audit(auth, "webhook_configurado", user.uid, { url: webhookUrl, novoSegredo: Boolean(secret) });
     return { webhookUrl, secret, hasWebhookSecret: Boolean(m.webhookSecret) };
   }
+  // ------------------------------------------------- identidade (CPF, 1 conta)
+  /** Sem CPF confirmado, a pessoa não pede nem oferece serviços (quando o CPF é obrigatório). */
+  identityGate(user) {
+    if (!this.deps.identity?.required) return;
+    if (user.cpfStatus === "basic" || user.cpfStatus === "verified") return;
+    fail2(403, "cpf_required", "Confirme seu CPF na aba Conta para usar a Froc. Leva 1 minuto e protege motoristas e passageiros.");
+  }
+  async identityGateFor(auth) {
+    const user = await this.ensureUser(auth);
+    this.identityGate(user);
+    return user;
+  }
+  /**
+   * Cadastro do CPF. Regras: CPF válido, maior de 18 anos, um CPF = uma conta (vale mesmo
+   * trocando de celular ou de e-mail), CPF de conta bloqueada não volta. Com o Serpro ligado,
+   * CPF + nascimento precisam existir na Receita, a situação precisa ser Regular e o nome bater.
+   */
+  async registerCpf(auth, body, deviceId) {
+    const user = await this.ensureUser(auth);
+    if (user.cpfStatus === "basic" || user.cpfStatus === "verified")
+      fail2(409, "cpf_already", "Seu CPF j\xE1 est\xE1 confirmado. Para trocar, fale com o Atendimento.");
+    const cpf = onlyDigits(body.cpf);
+    if (!isValidCpf(cpf)) fail2(400, "invalid_cpf", "CPF inv\xE1lido. Confira os 11 n\xFAmeros.");
+    const fullName = text(body.fullName, 120).replace(/\s+/g, " ");
+    if (fullName.split(" ").filter((t) => t.length > 1).length < 2) fail2(400, "invalid_name", "Informe seu nome completo, como est\xE1 no CPF.");
+    const birthDate = parseDay(body.birthDate);
+    if (!birthDate) fail2(400, "invalid_birth", "Informe sua data de nascimento.");
+    const age = ageOn(birthDate, this.now());
+    if (age < 18) fail2(403, "underage", "A Froc \xE9 s\xF3 para maiores de 18 anos. Menores viajam acompanhados de um adulto com conta.");
+    if (age > 120) fail2(400, "invalid_birth", "Data de nascimento inv\xE1lida.");
+    const key = cpfKey(cpf);
+    const taken = async (idx) => {
+      if (!idx || !idx.uid || idx.uid === user.uid) return;
+      if (idx.blocked) fail2(403, "cpf_blocked", "Este CPF est\xE1 bloqueado na Froc. Fale com o Atendimento.");
+      fail2(409, "cpf_in_use", `Este CPF j\xE1 tem uma conta na Froc (${maskEmail(String(idx.email || ""))}). Cada pessoa pode ter s\xF3 uma conta: entre nela ou fale com o Atendimento.`);
+    };
+    await taken(await this.store.get("cpf_index", key));
+    let status = "basic";
+    let source = "basico";
+    let legalName = fullName;
+    let situation = "";
+    const lookup = this.deps.identity?.verify ? await this.deps.identity.verify(cpf, birthDate) : null;
+    if (lookup) {
+      if (!lookup.found) fail2(400, "cpf_not_found", "CPF e data de nascimento n\xE3o conferem na Receita Federal. Confira os dados.");
+      if (!lookup.regular) fail2(403, "cpf_irregular", `Seu CPF n\xE3o est\xE1 regular na Receita (${lookup.situation || "situa\xE7\xE3o irregular"}). Regularize em gov.br e tente de novo.`);
+      const official = lookup.socialName || lookup.name || "";
+      if (official && !namesMatch(fullName, official) && !(lookup.name && namesMatch(fullName, lookup.name)))
+        fail2(400, "cpf_name_mismatch", "O nome n\xE3o bate com o cadastro do CPF na Receita. Digite seu nome completo como est\xE1 no CPF.");
+      status = "verified";
+      source = "receita";
+      legalName = official ? official.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()) : fullName;
+      situation = lookup.situation || "Regular";
+    }
+    const now3 = this.iso();
+    await this.store.transaction(async (tx) => {
+      await taken(await tx.get("cpf_index", key));
+      tx.set("cpf_index", key, { id: key, uid: user.uid, email: user.email, blocked: false, createdAt: now3 });
+      tx.set("identities", user.uid, { uid: user.uid, cpf: formatCpf(cpf), birthDate, declaredName: fullName, legalName, source, situation, createdAt: now3 });
+      tx.update("users", user.uid, {
+        cpfStatus: status,
+        cpfMasked: maskCpf(cpf),
+        cpfKey: key,
+        cpfSource: source,
+        cpfVerifiedAt: now3,
+        legalName,
+        name: legalName.split(" ").length > 1 ? `${legalName.split(" ")[0]} ${legalName.split(" ").slice(-1)[0]}` : legalName
+      });
+    });
+    await this.audit(auth, "cpf_cadastrado", user.uid, { status, fonte: source });
+    if (deviceId) await this.recordDevice(auth, deviceId).catch(() => void 0);
+    return this.profileView(await this.store.get("users", user.uid), auth);
+  }
+  /**
+   * Aparelho usado (id aleatório guardado no navegador). Não bloqueia sozinho (família divide
+   * celular), mas 3+ contas no mesmo aparelho viram alerta de possível multiconta para a equipe.
+   */
+  async recordDevice(auth, deviceId) {
+    const raw = String(deviceId ?? "");
+    if (!/^[a-zA-Z0-9-]{16,64}$/.test(raw)) return { ok: false };
+    const key = createHash3("sha256").update(`froc-device:${raw}`).digest("hex");
+    const doc = await this.store.get("devices", key);
+    const uids = Array.isArray(doc?.uids) ? doc.uids : [];
+    if (uids.includes(auth.uid)) return { ok: true };
+    const next = [...uids, auth.uid].slice(-20);
+    await this.store.set("devices", key, { id: key, uids: next, updatedAt: this.iso() });
+    if (next.length >= 3) {
+      const flag = `Mesmo aparelho usado por ${next.length} contas`;
+      await Promise.all(next.map((uid) => this.store.update("users", uid, { multiAccountFlag: flag }).catch(() => void 0)));
+      await this.audit(null, "possivel_multiconta", auth.uid, { contas: next.length });
+    }
+    return { ok: true };
+  }
+  /** Equipe confere o CPF manualmente (ex.: no site da Receita) ou recusa CPF falso. */
+  async adminSetCpfStatus(auth, uid, decision, reason) {
+    this.requireAdmin(auth);
+    if (decision !== "verified" && decision !== "rejected") return fail2(400, "invalid_decision", "Decis\xE3o inv\xE1lida.");
+    const user = await this.store.get("users", String(uid)) ?? fail2(404, "not_found", "Usu\xE1rio n\xE3o encontrado.");
+    if (!user.cpfKey) fail2(409, "no_cpf", "Esta conta ainda n\xE3o cadastrou CPF.");
+    const why = text(reason, 200);
+    if (decision === "rejected") {
+      if (why.length < 5) fail2(400, "reason_required", "Explique o motivo.");
+      await this.store.update("cpf_index", user.cpfKey, { uid: null, releasedAt: this.iso(), releasedReason: why });
+      await this.store.update("users", user.uid, { cpfStatus: "rejected", cpfKey: "", cpfMasked: "", rejectionReason: why });
+    } else {
+      await this.store.update("users", user.uid, { cpfStatus: "verified", cpfSource: "equipe", cpfVerifiedAt: this.iso() });
+    }
+    await this.audit(auth, decision === "verified" ? "cpf_conferido" : "cpf_recusado", user.uid, { reason: why });
+    return { ok: true };
+  }
+  /** Dados do CPF para a equipe conferir (só admin). */
+  async adminIdentity(auth, uid) {
+    this.requireAdmin(auth);
+    const id = await this.store.get("identities", String(uid));
+    if (id) await this.audit(auth, "cpf_visualizado", String(uid));
+    return id ? { cpf: id.cpf, birthDate: id.birthDate, declaredName: id.declaredName, legalName: id.legalName, source: id.source, situation: id.situation } : null;
+  }
   // ---------------------------------------------------------------- admin
   requireAdmin(auth) {
     if (!this.isAdmin(auth)) fail2(403, "forbidden", "Acesso restrito \xE0 administra\xE7\xE3o.");
@@ -1465,6 +1690,7 @@ var FrocService = class {
       ].map(async ({ u, kind }) => {
         const docs = (kind === "driver" ? u.driverDocs : u.truckerDocs) || {};
         const rule = vehicleAgeLimit(u.driverCity || "", u.driverState || "", settings.maxVehicleAgeYears);
+        const identity = await this.store.get("identities", u.uid);
         return {
           uid: u.uid,
           name: u.name,
@@ -1481,6 +1707,9 @@ var FrocService = class {
           state: u.driverState,
           cnhExpiry: u.cnhExpiry,
           declarations: u.declarations,
+          cpf: identity ? String(identity.cpf) : "",
+          legalName: identity ? String(identity.legalName) : "",
+          cpfStatus: u.cpfStatus || "none",
           truckType: kind === "trucker" ? u.truckType : void 0,
           companyName: kind === "trucker" ? u.companyName : void 0,
           rntrc: kind === "trucker" ? u.rntrc : void 0,
@@ -1538,7 +1767,9 @@ var FrocService = class {
       [field]: decision,
       rejectionReason: decision === "rejected" ? why : "",
       reviewedBy: auth.email,
-      reviewedAt: this.iso()
+      reviewedAt: this.iso(),
+      // Aprovar motorista/transportador = a equipe conferiu o CPF na CNH.
+      ...decision === "approved" && kind !== "merchant" && user.cpfStatus === "basic" ? { cpfStatus: "verified", cpfSource: "documentos", cpfVerifiedAt: this.iso() } : {}
     });
     await this.audit(auth, decision === "approved" ? "cadastro_aprovado" : "cadastro_recusado", user.uid, { kind, reason: why, email: user.email });
     return { ok: true };
@@ -1606,6 +1837,7 @@ var FrocService = class {
     return type === "carro";
   }
   async createRide(auth, body) {
+    await this.identityGateFor(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const category = RIDE_CATEGORIES.find((c) => c.id === body.categoryId) ?? fail2(400, "invalid_category", "Categoria inv\xE1lida.");
@@ -1646,6 +1878,8 @@ var FrocService = class {
         pinCode: String(randomInt(1e3, 1e4)),
         status: "searching",
         policyVersion: RIDE_POLICY_VERSION,
+        // Selo para o motorista: CPF conferido na Receita / pela equipe, ou só cadastrado.
+        passengerVerified: user.cpfStatus === "verified" ? "verificado" : user.cpfStatus === "basic" ? "cpf" : "",
         escrowCents: 0,
         createdAt: this.iso(),
         messages: []
@@ -1845,6 +2079,7 @@ var FrocService = class {
     };
   }
   async createInDrive(auth, body) {
+    await this.identityGateFor(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const method = paymentMethod(body.paymentMethod);
@@ -2025,6 +2260,7 @@ var FrocService = class {
     return this.carpoolView(doc, auth.uid, [], []);
   }
   async bookCarpool(auth, tripId, seatsWanted) {
+    await this.identityGateFor(auth);
     const seats = Math.round(num(seatsWanted, 1, 6, "vagas"));
     const bookingId = randomUUID2();
     const trip = await this.store.transaction(async (tx) => {
@@ -2181,6 +2417,7 @@ var FrocService = class {
     return this.truckView(doc, auth.uid);
   }
   async reserveEmptyTruck(auth, id) {
+    await this.identityGateFor(auth);
     const route = await this.store.transaction(async (tx) => {
       const t = await this.mustGet(tx, "emptyTrucks", id, "Caminh\xE3o");
       if (t.truckerId === auth.uid) fail2(403, "own_route", "Esta rota \xE9 sua.");
@@ -2232,6 +2469,7 @@ var FrocService = class {
     return this.truckView(route, auth.uid);
   }
   async createFreight(auth, body) {
+    await this.identityGateFor(auth);
     const client = await this.ensureUser(auth);
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
@@ -2502,8 +2740,9 @@ var FrocService = class {
   async adminUsers(auth, search) {
     this.requireAdmin(auth);
     const q = text(search, 120).toLowerCase();
-    const users = q.includes("@") ? await this.store.query("users", [["email", "==", q]], 5) : byNewest(await this.store.query("users", [], 300)).slice(0, 100);
-    return users.filter((u) => !q || q.includes("@") || u.name.toLowerCase().includes(q) || String(u.phone).includes(q)).map((u) => ({
+    const byCpf = isValidCpf(q) ? await this.store.get("cpf_index", cpfKey(onlyDigits(q))) : null;
+    const users = byCpf?.uid ? [await this.store.get("users", String(byCpf.uid))].filter(Boolean) : q.includes("@") ? await this.store.query("users", [["email", "==", q]], 5) : byNewest(await this.store.query("users", [], 300)).slice(0, 100);
+    return users.filter((u) => !q || byCpf || q.includes("@") || u.name.toLowerCase().includes(q) || String(u.phone).includes(q)).map((u) => ({
       uid: u.uid,
       name: u.name,
       email: u.email,
@@ -2518,6 +2757,10 @@ var FrocService = class {
       blocked: Boolean(u.blocked),
       blockedReason: u.blockedReason || "",
       qualityAlert: u.qualityAlert || "",
+      cpfStatus: u.cpfStatus || "none",
+      cpfMasked: u.cpfMasked || "",
+      cpfSource: u.cpfSource || "",
+      multiAccountFlag: u.multiAccountFlag || "",
       merchantStatus: u.merchantStatus || "none"
     }));
   }
@@ -2532,6 +2775,7 @@ var FrocService = class {
       blockedReason: blocked === true ? why : "",
       driverOnline: blocked === true ? false : user.driverOnline
     });
+    if (user.cpfKey) await this.store.update("cpf_index", user.cpfKey, { blocked: blocked === true }).catch(() => void 0);
     await this.audit(auth, blocked === true ? "usuario_bloqueado" : "usuario_desbloqueado", user.uid, { reason: why, email: user.email });
     return { ok: true };
   }
@@ -2619,7 +2863,7 @@ var FrocService = class {
     const drivers = this.onlineCache.users.filter(
       (u) => u.uid !== auth.uid && !u.blocked && typeof u.driverLat === "number" && typeof u.driverLng === "number" && nowMs - Date.parse(String(u.locationAt || 0)) < LOCATION_FRESH_MS && (u.driverStatus === "approved" || u.truckerStatus === "approved")
     ).map((u) => ({ u, km: straightKm({ lat, lng }, { lat: u.driverLat, lng: u.driverLng }) })).filter((x) => x.km <= 6).sort((a, b) => a.km - b.km).slice(0, 20).map(({ u }) => {
-      const h = createHash2("sha256").update(`${u.uid}:${day}`).digest();
+      const h = createHash3("sha256").update(`${u.uid}:${day}`).digest();
       return {
         id: h.toString("hex").slice(0, 12),
         lat: round6(u.driverLat + (h[0] / 255 - 0.5) * 24e-4),
@@ -3318,6 +3562,9 @@ CADASTRO E CONTA
 - Transportador: CNH com EAR, CRLV, comprovante ANTT, certid\xE3o de antecedentes, n\xFAmero do RNTRC, tipo de ve\xEDculo e placa; declara conhecer o CIOT e o piso m\xEDnimo de frete da ANTT.
 - Loja (Froc Entregas): Conta > Froc para lojas; CNPJ (MEI aceito), telefone, categoria e endere\xE7o de coleta. Aprovada, chama entregas pelo painel ou pela API (/desenvolvedores).
 - CNH vencida: o motorista n\xE3o consegue ficar online at\xE9 enviar a nova pelo Atendimento.
+- CPF obrigat\xF3rio para TODOS (passageiro, motorista, loja): depois de criar a conta aparece "Confirme quem voc\xEA \xE9" (nome completo, CPF, nascimento). Conferido na Receita (Serpro) quando ligado: CPF + nascimento t\xEAm de existir, situa\xE7\xE3o Regular e nome batendo; sem isso, fica "cadastrado" e a equipe confere. Menor de 18 n\xE3o cria conta.
+- Uma pessoa, uma conta: o CPF s\xF3 pode estar em uma conta (trocar de celular/e-mail n\xE3o adianta). Se a pessoa diz que o CPF "j\xE1 tem conta", oriente entrar na conta antiga (o app mostra o e-mail mascarado) ou chamar a equipe. Conta bloqueada bloqueia o CPF. Nunca pe\xE7a nem repita o CPF completo no chat.
+- Selos: o motorista v\xEA "Passageiro verificado"; o passageiro v\xEA "Motorista (documentos conferidos)".
 - Fotos grandes s\xE3o reduzidas automaticamente; PDF at\xE9 3 MB.
 
 SEGURAN\xC7A
@@ -4524,6 +4771,13 @@ function createApp(options) {
   };
   api.get("/bootstrap", wrap(async (req) => (await service()).bootstrap(a(req))));
   api.patch("/profile", wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
+  api.post(
+    "/identity/cpf",
+    rateLimit(5, 6e4),
+    guard("cpf", 8, 864e5, "Muitas tentativas de CPF hoje. Tente amanh\xE3 ou fale com o Atendimento."),
+    wrap(async (req) => (await service()).registerCpf(a(req), req.body || {}, req.headers["x-froc-device"]))
+  );
+  api.post("/device", rateLimit(10, 6e4), wrap(async (req) => (await service()).recordDevice(a(req), req.headers["x-froc-device"])));
   api.post("/rides/quote", wrap(async (req) => (await service()).quoteRide(a(req), req.body || {})));
   api.get("/drivers/nearby", rateLimit(40, 6e4), wrap(async (req) => (await service()).nearbyDrivers(a(req), req.query.lat, req.query.lng)));
   api.post("/trips/:kind/:id/share", limited, wrap(async (req) => (await service()).shareTrip(a(req), req.params.kind, id(req))));
@@ -4595,6 +4849,8 @@ function createApp(options) {
     wrap(async (req) => (await service()).reviewApplication(a(req), id(req), req.body?.kind, req.body?.decision, req.body?.reason))
   );
   api.get("/admin/users", wrap(async (req) => (await service()).adminUsers(a(req), req.query.q)));
+  api.get("/admin/users/:id/identity", wrap(async (req) => ({ identity: await (await service()).adminIdentity(a(req), id(req)) })));
+  api.post("/admin/users/:id/cpf", wrap(async (req) => (await service()).adminSetCpfStatus(a(req), id(req), req.body?.decision, req.body?.reason)));
   api.post("/admin/users/:id/block", wrap(async (req) => (await service()).setBlocked(a(req), id(req), req.body?.blocked, req.body?.reason)));
   api.get("/admin/reports", wrap(async (req) => (await service()).adminReports(a(req), req.query.days)));
   api.patch("/admin/settings", wrap(async (req) => (await service()).updateSettings(a(req), req.body || {})));
@@ -5836,6 +6092,8 @@ function getService() {
         geo,
         webhooks: createWebhookDispatcher(sharedStore),
         geocode: createGoogleGeocoder(process.env.GOOGLE_SERVER_MAPS_KEY),
+        // CPF obrigatório para todos (uma pessoa, uma conta). CPF_OBRIGATORIO=nao desliga (só para emergência).
+        identity: { required: process.env.CPF_OBRIGATORIO !== "nao", verify: createSerproVerifier(process.env) },
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl })
@@ -5876,6 +6134,8 @@ function configStatus() {
     publicSiteUrl: publicSiteUrl() || null,
     googleMaps: Boolean(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
     serverGeocoding: Boolean(process.env.GOOGLE_SERVER_MAPS_KEY),
+    cpfReceita: Boolean(process.env.SERPRO_CONSUMER_KEY && process.env.SERPRO_CONSUMER_SECRET),
+    cpfObrigatorio: process.env.CPF_OBRIGATORIO !== "nao",
     cron: Boolean(process.env.CRON_SECRET),
     ai: geminiKeysFromEnv(process.env).length > 0,
     aiKeys: geminiKeysFromEnv(process.env).length,

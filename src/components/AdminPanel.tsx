@@ -32,6 +32,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
   const [tab, setTab] = useState<Tab>('equipe');
   const [data, setData] = useState<AdminOverview | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [identities, setIdentities] = useState<Record<string, { cpf: string; birthDate: string; declaredName: string; legalName: string } | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<AdminUserRow[] | null>(null);
   const [search, setSearch] = useState('');
@@ -179,6 +180,13 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                       </div>
                     )}
                     {app.cnhExpiry && <div>CNH válida até {app.cnhExpiry.split('-').reverse().join('/')} · confira a observação EAR na foto da CNH</div>}
+                    {app.cpf ? (
+                      <div>
+                        CPF informado <strong className="font-mono-num">{app.cpf}</strong> · nome {app.legalName} — <strong>confira se é o mesmo da CNH</strong> (aprovar marca o CPF como verificado)
+                      </div>
+                    ) : (
+                      <div className="text-amber-600">Sem CPF cadastrado.</div>
+                    )}
                   </div>
                 )}
                 {app.declarations && Object.keys(app.declarations).length > 0 && (
@@ -287,7 +295,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
             }}
             className="flex gap-2"
           >
-            <input placeholder="Buscar por e-mail exato, nome ou telefone" value={search} onChange={(e) => setSearch(e.target.value)} className={input} />
+            <input placeholder="Buscar por e-mail exato, CPF, nome ou telefone" value={search} onChange={(e) => setSearch(e.target.value)} className={input} />
             <button type="submit" className="px-4 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold cursor-pointer">
               Buscar
             </button>
@@ -299,7 +307,52 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                 {u.name} {u.blocked && <span className="text-red-600">· BLOQUEADO</span>}
                 {u.qualityAlert && <span className="text-amber-600"> · REVISAR QUALIDADE ({u.qualityAlert})</span>}
                 {u.merchantStatus === 'approved' && <span className="text-emerald-600"> · LOJA</span>}
+                {u.multiAccountFlag && <span className="text-red-600"> · POSSÍVEL MULTICONTA ({u.multiAccountFlag})</span>}
               </div>
+              <div className="text-slate-600 dark:text-slate-300 flex flex-wrap items-center gap-2">
+                <span>
+                  CPF {u.cpfMasked || 'não cadastrado'} ·{' '}
+                  {u.cpfStatus === 'verified' ? `verificado (${u.cpfSource})` : u.cpfStatus === 'basic' ? 'cadastrado, falta conferir' : u.cpfStatus === 'rejected' ? 'recusado' : 'pendente'}
+                </span>
+                {u.cpfMasked && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      act(async () => {
+                        const r = await api<{ identity: { cpf: string; birthDate: string; declaredName: string; legalName: string } | null }>(`/api/admin/users/${u.uid}/identity`);
+                        setIdentities((m) => ({ ...m, [u.uid]: r.identity }));
+                      }, 'Dados do CPF abertos (acesso registrado na auditoria).')
+                    }
+                    className="underline font-semibold cursor-pointer"
+                  >
+                    Ver CPF
+                  </button>
+                )}
+              </div>
+              {identities[u.uid] && (
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-900 p-2 space-y-1">
+                  <div>
+                    <strong className="font-mono-num select-all">{identities[u.uid]!.cpf}</strong> · nascimento {identities[u.uid]!.birthDate.split('-').reverse().join('/')} · nome: {identities[u.uid]!.legalName}
+                  </div>
+                  <a href="https://servicos.receita.fazenda.gov.br/servicos/cpf/consultasituacao/consultapublica.asp" target="_blank" rel="noreferrer" className="underline font-semibold text-emerald-700 dark:text-emerald-400">
+                    Conferir na Receita (CPF + nascimento)
+                  </a>
+                  {u.cpfStatus !== 'verified' && (
+                    <div className="flex gap-2 pt-1">
+                      <button type="button" onClick={() => act(() => api(`/api/admin/users/${u.uid}/cpf`, { body: { decision: 'verified' } }), 'CPF marcado como conferido.', () => loadUsers())} className="px-3 min-h-[34px] rounded-lg bg-emerald-600 text-white font-bold cursor-pointer">
+                        Conferido: nome bate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => act(() => api(`/api/admin/users/${u.uid}/cpf`, { body: { decision: 'rejected', reason: reasons['c' + u.uid] || 'CPF não confere com o nome' } }), 'CPF recusado: a pessoa terá de informar de novo.', () => loadUsers())}
+                        className="px-3 min-h-[34px] rounded-lg border border-red-300 text-red-700 font-bold cursor-pointer"
+                      >
+                        CPF não confere
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="text-slate-600 dark:text-slate-300">
                 {u.email} · {u.phone || 'sem telefone'} · desde {new Date(u.createdAt).toLocaleDateString('pt-BR')}
               </div>
