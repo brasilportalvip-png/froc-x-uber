@@ -1,13 +1,22 @@
 import React, { useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, LogOut, QrCode, Wallet } from 'lucide-react';
 import { formatBRL } from '../data/locations.ts';
-import type { UserProfile, WalletTransaction } from '../types/mobility.ts';
+import type { UserProfile, WalletTransaction, MyWithdrawalView } from '../types/mobility.ts';
+import { PIX_KEY_LABELS, isAmbiguousPixKey, pixKeyKind } from '../lib/pixKey.ts';
 import { ProviderOnboarding } from './ProviderOnboarding.tsx';
 import { resendVerification } from '../lib/session.ts';
+
+const WITHDRAWAL_STATUS: Record<MyWithdrawalView['status'], { label: string; className: string }> = {
+  pending: { label: 'Em análise', className: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300' },
+  approved: { label: 'Liberado · Pix a enviar', className: 'bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300' },
+  paid: { label: 'Pix enviado', className: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' },
+  rejected: { label: 'Recusado · valor devolvido', className: 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300' },
+};
 
 interface WalletAccountPanelProps {
   profile: UserProfile;
   transactions: WalletTransaction[];
+  withdrawals?: MyWithdrawalView[];
   paymentsEnabled: boolean;
   onTopUp: (amount: number) => Promise<void>;
   onWithdraw: (amount: number, pixKey: string, pixKeyType: string) => Promise<void>;
@@ -21,6 +30,7 @@ interface WalletAccountPanelProps {
 export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   profile,
   transactions,
+  withdrawals,
   paymentsEnabled,
   onTopUp,
   onWithdraw,
@@ -35,6 +45,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   const [pixKey, setPixKey] = useState('');
   const [pixKeyType, setPixKeyType] = useState('cpf');
   const withdrawable = profile.withdrawableBalance ?? 0;
+  const myWithdrawals: MyWithdrawalView[] = withdrawals ?? [];
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone);
   const [city, setCity] = useState(profile.city);
@@ -154,23 +165,53 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
             </button>
           </div>
           <div className="flex gap-2">
-            <select value={pixKeyType} onChange={(e) => setPixKeyType(e.target.value)} className="w-32 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2">
+            <select aria-label="Tipo da chave Pix" value={pixKeyType} onChange={(e) => setPixKeyType(e.target.value)} className="w-32 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2">
               <option value="cpf">CPF</option>
               <option value="cnpj">CNPJ</option>
               <option value="telefone">Celular</option>
               <option value="email">E-mail</option>
               <option value="aleatoria">Aleatória</option>
             </select>
-            <input required placeholder="Chave Pix de destino" value={pixKey} onChange={(e) => setPixKey(e.target.value)} className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
+            <input
+              required
+              aria-label="Chave Pix de destino"
+              placeholder="Chave Pix de destino"
+              value={pixKey}
+              onChange={(e) => {
+                const value = e.target.value;
+                setPixKey(value);
+                // O tipo acompanha a chave digitada (e-mail, CNPJ, aleatória, +55...). 11 números: a pessoa escolhe CPF ou celular.
+                const kind = pixKeyKind(value);
+                if (kind && !(isAmbiguousPixKey(value) && (pixKeyType === 'cpf' || pixKeyType === 'telefone'))) setPixKeyType(kind);
+              }} className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
           </div>
           <button type="submit" disabled={busy === 'withdraw' || withdrawable < 20} className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-60 cursor-pointer">
             {busy === 'withdraw' ? 'Solicitando...' : 'Transferir por Pix'}
           </button>
           <p className="text-[11px] text-slate-500">
             Só os ganhos (corridas, entregas, fretes e caronas) podem ir para Pix; saldo de recarga fica para usar no app. Isso impede o golpe de recarregar com cartão roubado e sacar.
-            O valor sai do saldo na hora e a equipe Froc confirma o Pix.
+            O valor sai do saldo na hora e fica reservado; a equipe Froc confere e envia o Pix. Acompanhe abaixo em "Meus pedidos de Pix".
           </p>
         </form>
+      )}
+
+      {myWithdrawals.length > 0 && (
+        <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2 text-xs" data-testid="meus-saques">
+          <h4 className="text-sm font-bold text-slate-900 dark:text-white">Meus pedidos de Pix</h4>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {myWithdrawals.map((w: MyWithdrawalView) => (
+              <div key={w.id} className="py-2.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900 dark:text-white truncate">
+                    {formatBRL(w.amount)} · {PIX_KEY_LABELS[w.pixKeyType as keyof typeof PIX_KEY_LABELS] ?? 'Pix'} {w.pixKey}
+                  </div>
+                  <div className="text-[11px] text-slate-500">{w.date}</div>
+                </div>
+                <span className={`shrink-0 px-2 py-1 rounded-lg font-bold ${WITHDRAWAL_STATUS[w.status].className}`}>{WITHDRAWAL_STATUS[w.status].label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       <div className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-3">

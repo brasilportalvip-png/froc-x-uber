@@ -353,7 +353,10 @@ export default function App() {
   };
   const handleRedeem = () => run(() => post('/api/wallet/redeem'), 'Pontos trocados por R$ 5,00 de crédito!');
   const handleWithdraw = (amount: number, pixKey: string, pixKeyType: string) =>
-    run(() => post('/api/wallet/withdraw', { amount, pixKey, pixKeyType }), 'Pix solicitado! O valor já saiu do seu saldo.');
+    run(
+      () => post('/api/wallet/withdraw', { amount, pixKey, pixKeyType }),
+      'Pedido de Pix recebido! O valor ficou reservado e a equipe Froc envia o Pix. Acompanhe em "Meus pedidos de Pix".',
+    );
   const handleUpdateProfile = (patch: Partial<UserProfile>) => run(() => api('/api/profile', { method: 'PATCH', body: patch }), 'Dados salvos.');
   const handleUploadDocument = async (kind: 'driver' | 'trucker', docType: string, file: File) => {
     try {
@@ -780,6 +783,7 @@ export default function App() {
                     key={state.profile.uid}
                     profile={state.profile}
                     transactions={state.transactions}
+                    withdrawals={state.withdrawals}
                     paymentsEnabled={paymentsEnabled}
                     onTopUp={handleTopUp}
                     onWithdraw={handleWithdraw}
