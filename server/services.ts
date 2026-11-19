@@ -370,6 +370,11 @@ function involvement(uid: string, ownerId: unknown, providerId: unknown): 'owner
   return null;
 }
 
+/** Corrida com motorista: aceita, chegou ou em andamento. */
+const DRIVING_RIDE = ['accepted', 'arriving', 'in_progress'];
+/** Corridas por motorista: a atual + 2 na fila. */
+export const MAX_DRIVER_QUEUE = 3;
+
 /** Reservas de carona que ainda contam (pagas, embarcadas ou passageiro faltou com prova). */
 const CARPOOL_ACTIVE = ['paid', 'boarded', 'no_show'];
 
@@ -589,6 +594,7 @@ export class FrocService {
       faceCheckDue: this.faceCheckDue(user),
       faceCheckDueAt: user.lastFaceCheckAt ? new Date(Date.parse(user.lastFaceCheckAt) + FACE_CHECK_EVERY_MS).toISOString() : '',
       faceBlocked: Boolean(user.faceBlocked),
+      rideCallSeconds: this.cfg.rideCallSeconds,
     };
   }
 
@@ -1195,6 +1201,12 @@ export class FrocService {
         if (docs.some((x) => x[other] === b)) return true;
       }
     }
+    // Chamada de corrida: motorista online vê a foto de quem está pedindo agora.
+    const calling = await this.store.query<Doc>('rides', [['passengerId', '==', b]], 50);
+    if (calling.some((r) => r.status === 'searching')) {
+      const me = await this.store.get<UserDoc>('users', a);
+      if (me?.driverOnline) return true;
+    }
     // Pedido de viagem agendada: o passageiro vê a foto de quem mandou proposta; o motorista, de quem pediu.
     const myRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', a]], 100);
     if (myRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === b))) return true;
@@ -1705,16 +1717,25 @@ export class FrocService {
   async rideAction(auth: AuthUser, rideId: string, body: Record<string, unknown>) {
     await this.settings();
     const action = String(body.action || '');
+    // Fila do motorista: até 3 corridas (a atual + 2 na fila). Ao terminar a atual, a próxima entra sozinha.
+    let queueInfo: { position: number; aheadMin: number } | null = null;
     if (action === 'driver_accept') {
       await this.approvedUser(auth, 'driver');
-      const driving = await this.store.query<Doc>('rides', [['driverId', '==', auth.uid]], 200);
-      if (driving.some((r) => ['accepted', 'arriving', 'in_progress'].includes(String(r.status))))
-        fail(409, 'driver_busy', 'Finalize a corrida atual antes de aceitar outra.');
+      const driving = (await this.store.query<Doc>('rides', [['driverId', '==', auth.uid]], 200)).filter((r) => DRIVING_RIDE.includes(String(r.status)));
+      if (driving.length >= MAX_DRIVER_QUEUE)
+        fail(409, 'queue_full', `Você já tem ${MAX_DRIVER_QUEUE} corridas (a atual e ${MAX_DRIVER_QUEUE - 1} na fila). Termine uma para aceitar outra.`);
+      if (driving.length) {
+        // Tempo até chegar a este passageiro: o que falta das corridas na frente + o deslocamento.
+        const aheadMin = driving.reduce((acc, r) => acc + (r.status === 'in_progress' ? Math.max(3, Number(r.etaMin ?? r.durationMin ?? 10)) : Number(r.durationMin ?? 10) + Number(r.etaMin ?? 5)), 0);
+        queueInfo = { position: driving.length, aheadMin: Math.round(aheadMin) };
+      }
     }
     let statusBefore = '';
+    let driverBefore = '';
     const result = await this.store.transaction(async (tx) => {
       const ride = await this.mustGet<Doc>(tx, 'rides', rideId, 'Corrida');
       statusBefore = String(ride.status);
+      driverBefore = String(ride.driverId || '');
       const isPassenger = ride.passengerId === auth.uid;
       const isDriver = ride.driverId === auth.uid;
       const status = String(ride.status);
@@ -1741,13 +1762,17 @@ export class FrocService {
             driverRating: round2(driver.rating),
             vehicleModel: driver.driverVehicle,
             vehiclePlate: driver.driverPlate,
-            etaMin: category?.etaOffsetMin ?? 5,
+            etaMin: (category?.etaOffsetMin ?? 5) + (queueInfo?.aheadMin ?? 0),
             acceptedAt: this.iso(),
+            // Na fila: o motorista termina outra corrida antes (o passageiro vê isso e cancela sem custo).
+            queued: Boolean(queueInfo),
+            queuePosition: queueInfo?.position ?? 0,
           });
           return { ride };
         }
         case 'arriving': {
           if (!isDriver) fail(403, 'forbidden', 'Só o motorista da corrida pode fazer isso.');
+          if (ride.queued) fail(409, 'queued', 'Esta corrida está na fila: termine a corrida atual primeiro.');
           if (status !== 'accepted') fail(409, 'invalid_state', 'A corrida não está aguardando chegada.');
           // Só vale "cheguei" perto do embarque: a espera paga começa a contar daqui.
           const me = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
@@ -1772,6 +1797,7 @@ export class FrocService {
         }
         case 'start': {
           if (!isDriver) fail(403, 'forbidden', 'Só o motorista da corrida pode iniciar.');
+          if (ride.queued) fail(409, 'queued', 'Esta corrida está na fila: termine a corrida atual primeiro.');
           if (status !== 'accepted' && status !== 'arriving') fail(409, 'invalid_state', 'A corrida não pode ser iniciada agora.');
           // Entrega de loja: "iniciar" = coletou o pedido (o código é pedido só na entrega ao cliente).
           if (!ride.delivery && String(body.pin || '') !== String(ride.pinCode)) fail(400, 'wrong_pin', 'PIN incorreto. Peça o PIN de 4 dígitos ao passageiro.');
@@ -1817,7 +1843,8 @@ export class FrocService {
             if (!['searching', 'accepted', 'arriving'].includes(status)) fail(409, 'invalid_state', 'Não é possível cancelar agora.');
             const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
             const escrow = Number(ride.escrowCents || 0);
-            const pct = this.rideCancelPercent(ride);
+            // Corrida na fila (motorista ainda termina outra): cancelar não custa nada.
+            const pct = ride.queued ? 0 : this.rideCancelPercent(ride);
             const fee = Math.round((escrow * pct) / 100);
             // Lê tudo antes de gravar (regra do Firestore).
             const driver = fee > 0 ? await this.mustGet<UserDoc>(tx, 'users', String(ride.driverId), 'Motorista') : null;
@@ -1832,6 +1859,8 @@ export class FrocService {
             set({
               status: 'searching',
               arrivedAt: null,
+              queued: false,
+              queuePosition: 0,
               driverId: null,
               driverName: null,
               driverRating: null,
@@ -1893,7 +1922,25 @@ export class FrocService {
       }
     });
     if (result.ride.delivery && String(result.ride.status) !== statusBefore) await this.deliveryEvent(result.ride);
+    // A corrida saiu da mão do motorista (terminou, cancelou, desistiu): a próxima da fila entra sozinha.
+    const left = driverBefore && DRIVING_RIDE.includes(statusBefore) && (!DRIVING_RIDE.includes(String(result.ride.status)) || !result.ride.driverId);
+    if (left) await this.promoteDriverQueue(driverBefore);
     return this.rideView(result.ride, auth.uid);
+  }
+
+  /** Fila do motorista: se não há corrida atual, a mais antiga da fila vira a atual; as outras sobem. */
+  private async promoteDriverQueue(driverId: string) {
+    const active = (await this.store.query<Doc>('rides', [['driverId', '==', driverId]], 200)).filter((r) => DRIVING_RIDE.includes(String(r.status)));
+    const queued = active.filter((r) => r.queued).sort((a, b) => Number(a.queuePosition || 0) - Number(b.queuePosition || 0) || String(a.acceptedAt).localeCompare(String(b.acceptedAt)));
+    const hasCurrent = active.some((r) => !r.queued);
+    let position = 0;
+    for (const r of queued) {
+      if (!hasCurrent && position === 0) {
+        const category = RIDE_CATEGORIES.find((c) => c.id === r.categoryId);
+        await this.store.update('rides', String(r.id), { queued: false, queuePosition: 0, etaMin: category?.etaOffsetMin ?? 5, acceptedAt: this.iso(), promotedAt: this.iso() });
+      } else await this.store.update('rides', String(r.id), { queuePosition: hasCurrent ? position + 1 : position });
+      position++;
+    }
   }
 
   // ------------------------------------------------- 2) viagens agendadas (agendadas, valor combinado)

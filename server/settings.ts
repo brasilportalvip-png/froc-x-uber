@@ -31,6 +31,8 @@ export interface PlatformSettings {
   freightCommissionPercent: number;
   /** % do valor combinado que fica com a Froc nas viagens agendadas. */
   privateCommissionPercent: number;
+  /** Segundos que a janela de chamada de corrida fica aberta para o motorista (decisão do dono: 3). */
+  rideCallSeconds: number;
   /** Valor máximo de UM saque que a Equipe IA libera sozinha (R$). Acima disso o Financeiro analisa antes. */
   autoPayoutLimit: number;
 }
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   carpoolCommissionPercent: 30,
   freightCommissionPercent: 30,
   privateCommissionPercent: 30,
+  rideCallSeconds: 3,
 };
 
 export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 'boolean'> = {
@@ -75,6 +78,7 @@ export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 
   carpoolCommissionPercent: [0, 50],
   freightCommissionPercent: [0, 50],
   privateCommissionPercent: [0, 50],
+  rideCallSeconds: [3, 30],
 };
 
 export const REDEEM_VALUE_CENTS = 500;
