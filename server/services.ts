@@ -1668,7 +1668,7 @@ export class FrocService {
     return this.rideView(result.ride, auth.uid);
   }
 
-  // ------------------------------------------------- 2) viagens particulares (agendadas, valor combinado)
+  // ------------------------------------------------- 2) viagens agendadas (agendadas, valor combinado)
   //
   // O passageiro agenda uma viagem para qualquer cidade do Brasil (dia, hora, pessoas), escolhe
   // "individual" (carro só dele) ou "compartilhada" (divide o carro) e diz quanto quer pagar.
@@ -1735,13 +1735,13 @@ export class FrocService {
     const minimum = this.privateFloor(distanceKm, shareMode, seats);
     const offer = round2(num(body.passengerOffer, 8, 20000, 'oferta'));
     if (offer < minimum)
-      fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km (${shareMode === 'individual' ? 'viagem individual' : `${seats} pessoa(s), compartilhada`}) é ${brl(minimum)}: cobre combustível e tempo do motorista.`);
+      fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km (${shareMode === 'individual' ? 'viagem VIP' : `${seats} pessoa(s), compartilhada`}) é ${brl(minimum)}: cobre combustível e tempo do motorista.`);
     const user = await this.ensureUser(auth);
     if (method === 'froc_pay' && user.balanceCents < toCents(offer))
       fail(402, 'insufficient_balance', `Saldo insuficiente: sua carteira tem ${brl(user.balanceCents / 100)}. Recarregue por Pix ou cartão.`);
     const mine = await this.store.query<Doc>('indrive', [['passengerId', '==', auth.uid]], 200);
     if (mine.filter((r) => r.status === 'open' || r.status === 'matched').length >= 5)
-      fail(409, 'too_many_requests', 'Você já tem 5 viagens particulares agendadas ou aguardando proposta.');
+      fail(409, 'too_many_requests', 'Você já tem 5 viagens agendadas ou aguardando proposta.');
     const id = randomUUID();
     const doc: Doc = {
       id,
@@ -1871,8 +1871,8 @@ export class FrocService {
         if (driver.balanceCents < deposit && !canGoNegative)
           fail(409, 'driver_no_deposit', 'Esse motorista ainda não tem a caução para novas viagens. Escolha outra proposta.');
         const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
-        this.debit(tx, passenger, cents, `Viagem particular ${route} · ${offer.driverName} · valor retido`, 'indrive');
-        this.debit(tx, driver, deposit, `Caução · viagem particular ${route} com ${passenger.name} (volta quando a viagem acontecer)`, 'caucao', canGoNegative);
+        this.debit(tx, passenger, cents, `Viagem agendada ${route} · ${offer.driverName} · valor retido`, 'indrive');
+        this.debit(tx, driver, deposit, `Caução · viagem agendada ${route} com ${passenger.name} (volta quando a viagem acontecer)`, 'caucao', canGoNegative);
         const pct = cfg.privateCommissionPercent;
         Object.assign(patch, {
           escrowCents: cents,
@@ -1955,7 +1955,7 @@ export class FrocService {
         const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso() };
         Object.assign(r, patch);
         tx.update('indrive', id, patch);
-        this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Viagem particular', 'indrive', typeof r.platformFeeCents === 'number' ? Number(r.platformFeeCents) : undefined);
+        this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Viagem agendada', 'indrive', typeof r.platformFeeCents === 'number' ? Number(r.platformFeeCents) : undefined);
         return r;
       }
       if (this.now().getTime() < dep) fail(409, 'not_departed', 'A viagem ainda não saiu. Confirme depois do horário marcado.');
@@ -1964,7 +1964,7 @@ export class FrocService {
       const proven = r.boardingStatus === 'boarded' || r.boardingStatus === 'no_show';
       if (proven) {
         const pct = Number(r.commissionPct ?? this.cfg.privateCommissionPercent);
-        this.creditEarning(tx, driver, this.providerCut(amount, pct), `Ganho · viagem particular ${route}${r.boardingStatus === 'no_show' ? ' (passageiro não apareceu)' : ''}`);
+        this.creditEarning(tx, driver, this.providerCut(amount, pct), `Ganho · viagem agendada ${route}${r.boardingStatus === 'no_show' ? ' (passageiro não apareceu)' : ''}`);
         this.platformRevenue(tx, 'viagem_particular', amount, amount - this.providerCut(amount, pct));
         if (r.boardingStatus === 'boarded') this.awardPoints(tx, passenger ?? null, amount);
         driver.carpoolsDone = (driver.carpoolsDone ?? 0) + 1;
@@ -1972,9 +1972,9 @@ export class FrocService {
         tx.update('users', driver.uid, { carpoolsDone: driver.carpoolsDone, completedTrips: driver.completedTrips });
       } else if (passenger && amount > 0) {
         // Sem PIN e sem prova de que o passageiro faltou: o valor volta para ele.
-        this.credit(tx, passenger, amount, `Estorno · viagem particular ${route} sem embarque confirmado`, 'estorno');
+        this.credit(tx, passenger, amount, `Estorno · viagem agendada ${route} sem embarque confirmado`, 'estorno');
       }
-      this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · viagem particular ${route}`);
+      this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · viagem agendada ${route}`);
       const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso(), paidToDriver: proven };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
@@ -2001,13 +2001,13 @@ export class FrocService {
         const refund = Math.round((escrow * refundPct) / 100);
         const kept = escrow - refund;
         const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
-        if (refund > 0) this.credit(tx, passenger, refund, refundPct === 100 ? `Estorno · viagem particular ${route} cancelada` : `Estorno ${refundPct}% · viagem particular ${route} cancelada com menos de 24h`, 'estorno');
+        if (refund > 0) this.credit(tx, passenger, refund, refundPct === 100 ? `Estorno · viagem agendada ${route} cancelada` : `Estorno ${refundPct}% · viagem agendada ${route} cancelada com menos de 24h`, 'estorno');
         if (kept > 0) {
           const pct = Number(r.commissionPct ?? this.cfg.privateCommissionPercent);
-          this.creditEarning(tx, driver, this.providerCut(kept, pct), `Ganho · ${passenger.name} cancelou a viagem particular ${route} (${100 - refundPct}% do valor)`);
+          this.creditEarning(tx, driver, this.providerCut(kept, pct), `Ganho · ${passenger.name} cancelou a viagem agendada ${route} (${100 - refundPct}% do valor)`);
           this.platformRevenue(tx, 'cancelamento_viagem_particular', kept, kept - this.providerCut(kept, pct));
         }
-        this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · ${passenger.name} cancelou a viagem particular`);
+        this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · ${passenger.name} cancelou a viagem agendada`);
         const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'passenger', refundPct };
         Object.assign(r, patch);
         tx.update('indrive', id, patch);
@@ -2020,8 +2020,8 @@ export class FrocService {
       const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancellationFeePercent: pct, cancellationFee: toReais(fee) };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · viagem cancelada (taxa ${pct}%)` : 'Estorno · viagem particular cancelada', 'estorno');
-      if (driver) this.payCancellation(tx, driver, fee, pct, 'Viagem particular', 'indrive', false, typeof r.platformFeeCents === 'number');
+      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · viagem cancelada (taxa ${pct}%)` : 'Estorno · viagem agendada cancelada', 'estorno');
+      if (driver) this.payCancellation(tx, driver, fee, pct, 'Viagem agendada', 'indrive', false, typeof r.platformFeeCents === 'number');
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -2045,7 +2045,7 @@ export class FrocService {
       const deposit = Number(r.depositCents || 0);
       const penalty = Math.min(deposit, Math.round((escrow * penaltyPct) / 100));
       const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
-      if (escrow > 0) this.credit(tx, passenger, escrow, `Estorno · motorista desistiu da viagem particular ${route}`, 'estorno');
+      if (escrow > 0) this.credit(tx, passenger, escrow, `Estorno · motorista desistiu da viagem agendada ${route}`, 'estorno');
       if (penalty > 0) this.credit(tx, passenger, penalty, `Compensação · motorista desistiu da viagem ${route} com menos de 24h`, 'compensacao');
       this.returnDeposit(tx, driver, deposit - penalty, penalty > 0 ? `Caução devolvida (menos multa de ${penaltyPct}%) · viagem ${route}` : `Caução devolvida · viagem ${route} cancelada com antecedência`);
       if (penalty > 0) {
@@ -2849,7 +2849,7 @@ export class FrocService {
       }
     }
     for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) {
-      // Viagem particular agendada fica aberta até o horário marcado; pedido antigo expira pelo tempo.
+      // Viagem agendada fica aberta até o horário marcado; pedido antigo expira pelo tempo.
       const dep = this.privateDeparture(r);
       if (dep !== null ? now < dep : now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) continue;
       await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
@@ -3162,7 +3162,7 @@ export class FrocService {
       status,
       statusLabel,
       active: !ended,
-      categoryLabel: String(trip.categoryLabel || (kind === 'indrive' ? 'Viagem particular' : 'Corrida')),
+      categoryLabel: String(trip.categoryLabel || (kind === 'indrive' ? 'Viagem agendada' : 'Corrida')),
       origin: point(trip.origin),
       destination: point(trip.destination),
       passengerFirstName: delivery ? firstName(delivery.recipientName) : firstName(trip.passengerName),
@@ -3468,7 +3468,7 @@ export class FrocService {
         [...myRides.filter((r) => !r.merchantId), ...drivingRides, ...this.nearby(user, queueRides).filter((r) => r.passengerId !== uid && this.vehicleFits(user, r))],
         notOld,
       ).map((r) => this.rideView(r, uid)),
-      // Viagens particulares: as minhas + todos os pedidos abertos do Brasil (o motorista filtra por cidade e data).
+      // Viagens agendadas: as minhas + todos os pedidos abertos do Brasil (o motorista filtra por cidade e data).
       indriveRequests: [
         ...recent([...myInDrive, ...drivingInDrive], notOld),
         ...uniqueById(openInDrive)

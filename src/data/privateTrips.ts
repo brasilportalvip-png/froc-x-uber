@@ -1,5 +1,5 @@
 /**
- * Viagens particulares — regras de preço mínimo (fonte única: servidor e tela usam a mesma conta).
+ * Viagens agendadas — regras de preço mínimo (fonte única: servidor e tela usam a mesma conta).
  * O piso protege o motorista (combustível e tempo); o valor de verdade é combinado entre as partes.
  */
 

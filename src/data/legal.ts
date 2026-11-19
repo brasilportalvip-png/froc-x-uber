@@ -55,7 +55,7 @@ export function minVehicleYear(maxYears: number, now = new Date()) {
 export const REQUIREMENTS: LegalSection[] = [
   {
     id: 'motorista',
-    title: 'Motorista de aplicativo (corridas, viagens particulares e caronas)',
+    title: 'Motorista de aplicativo (corridas, viagens agendadas e caronas)',
     summary:
       'A lei federal do transporte remunerado privado individual de passageiros exige CNH com EAR, veículo dentro das regras da cidade, CRLV em dia e certidão negativa de antecedentes criminais.',
     items: [
@@ -195,10 +195,10 @@ export const HOW_IT_WORKS: { title: string; steps: string[] }[] = [
     ],
   },
   {
-    title: 'Viagens particulares',
+    title: 'Viagens agendadas',
     steps: [
       'Diga de onde sai, para onde vai, o dia e a hora (ex.: aeroporto de Campinas às 12h15 para o Rio de Janeiro), quantas pessoas e quanto quer pagar.',
-      'Escolha: viagem individual (o carro só para você) ou aceito compartilhar (divide o carro com outras pessoas e paga menos).',
+      'Escolha: VIP (o carro só para você, mais conforto e privacidade) ou Compartilhada (divide o carro com outras pessoas e paga menos).',
       'Motoristas de todo o Brasil que vão passar pela sua cidade mandam propostas; você escolhe a melhor e a viagem fica agendada.',
       'Valem as mesmas regras das caronas: valor retido na carteira, caução do motorista, PIN de embarque e cancelamento justo para os dois lados.',
     ],

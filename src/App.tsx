@@ -497,7 +497,7 @@ export default function App() {
           {(
             [
               { id: 'rides', label: 'Corridas' },
-              { id: 'indrive', label: 'Viagens particulares' },
+              { id: 'indrive', label: 'Viagens agendadas' },
               { id: 'carpool', label: 'Caronas' },
               { id: 'freight', label: 'Cargas' },
               { id: 'wallet', label: 'Conta' },
@@ -601,7 +601,7 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">Viagens particulares</div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">Viagens agendadas</div>
                 <div className="text-sm font-bold font-mono-num text-sky-600 dark:text-sky-400">
                   {state.indriveRequests.filter((r) => r.status === 'open').length} pedidos abertos
                 </div>
@@ -857,7 +857,7 @@ export default function App() {
         {(
           [
             { id: 'rides', label: 'Corridas', Icon: Car },
-            { id: 'indrive', label: 'Particular', Icon: HandCoins },
+            { id: 'indrive', label: 'Agendar', Icon: HandCoins },
             { id: 'carpool', label: 'Caronas', Icon: Users },
             { id: 'freight', label: 'Cargas', Icon: Truck },
             { id: 'wallet', label: 'Conta', Icon: Wallet },

@@ -29,7 +29,7 @@ export interface PlatformSettings {
   /** % do valor total que fica com a Froc nas caronas e nos fretes/retorno vazio. */
   carpoolCommissionPercent: number;
   freightCommissionPercent: number;
-  /** % do valor combinado que fica com a Froc nas viagens particulares. */
+  /** % do valor combinado que fica com a Froc nas viagens agendadas. */
   privateCommissionPercent: number;
   /** Valor máximo de UM saque que a Equipe IA libera sozinha (R$). Acima disso o Financeiro analisa antes. */
   autoPayoutLimit: number;

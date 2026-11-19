@@ -388,7 +388,7 @@ export function createApp(options: AppOptions) {
   api.post('/indrive/:id/accept', wrap(async (req) => ({ request: await (await service()).acceptInDriveOffer(a(req), id(req), req.body?.offerId) })));
   api.post('/indrive/:id/complete', wrap(async (req) => ({ request: await (await service()).completeInDrive(a(req), id(req)) })));
   api.post('/indrive/:id/cancel', wrap(async (req) => ({ request: await (await service()).cancelInDrive(a(req), id(req)) })));
-  // Viagens particulares: embarque com PIN, passageiro que não apareceu e motorista que desiste.
+  // Viagens agendadas: embarque com PIN, passageiro que não apareceu e motorista que desiste.
   api.post('/indrive/:id/board', limited, wrap(async (req) => ({ request: await (await service()).boardInDrive(a(req), id(req), req.body?.pin) })));
   api.post('/indrive/:id/no-show', limited, wrap(async (req) => ({ request: await (await service()).noShowInDrive(a(req), id(req), req.body?.lat, req.body?.lng) })));
   api.post('/indrive/:id/driver-cancel', wrap(async (req) => ({ request: await (await service()).driverCancelInDrive(a(req), id(req)) })));
