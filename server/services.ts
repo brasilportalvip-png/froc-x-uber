@@ -53,7 +53,7 @@ import type {
 import type { Doc, Store, Tx } from './store.ts';
 import { DEFAULT_SETTINGS, REDEEM_VALUE_CENTS, SETTINGS_LIMITS } from './settings.ts';
 import type { PlatformSettings } from './settings.ts';
-import { createGridGeo, DISPATCH_RING, SURGE_RING } from './geo.ts';
+import { createGridGeo, DISPATCH_RING, NEARBY_RING, SURGE_RING, zonesAround } from './geo.ts';
 import type { GeoIndex } from './geo.ts';
 
 export class AppError extends Error {
@@ -99,6 +99,11 @@ const DELIVERY_STATUS: Record<string, [DeliveryStatus, string]> = {
   completed: ['entregue', 'Entregue'],
   cancelled: ['cancelada', 'Cancelada'],
 };
+
+/** Minuto (UTC, "2026-11-19T15:42"): os prazos são buscados no banco pelo minuto em que vencem. */
+export const minuteKey = (ms: number) => new Date(ms).toISOString().slice(0, 16);
+/** Até quantos minutos para trás a varredura recupera prazos (servidor parado, deploy). */
+const DEADLINE_BACKLOG_MIN = 180;
 
 const firstName = (name: unknown) => String(name || '').trim().split(/\s+/)[0] || '';
 
@@ -256,6 +261,8 @@ interface UserDoc extends Doc {
   driverLat?: number;
   driverLng?: number;
   driverCell?: string;
+  /** Zona do motorista (~36 km²): busca de motoristas por região. */
+  driverZone?: string;
   locationAt?: string;
   driverHeading?: number;
   driverVehicleType?: 'carro' | 'moto';
@@ -431,8 +438,10 @@ export class FrocService {
   private cfg: PlatformSettings = { ...DEFAULT_SETTINGS };
   private cfgLoadedAt = 0;
   private lastSweep = 0;
-  private lastStaleSweep = 0;
-  private onlineCache: { at: number; users: UserDoc[] } = { at: 0, users: [] };
+  /** Próximo minuto de prazos que esta instância ainda não varreu. */
+  private deadlineCursor: number | undefined;
+  /** Motoristas online por zona (uma leitura a cada 8 s serve todos os passageiros daquela zona). */
+  private onlineCache = new Map<string, { at: number; users: UserDoc[] }>();
   private riskCache: { at: number; zones: RiskZoneLike[] } = { at: 0, zones: [] };
 
   constructor(store: Store, deps: ServiceDeps = {}) {
@@ -1708,6 +1717,9 @@ export class FrocService {
         platformFeeCents: toCents(pricing.platformFee),
         driverEarning: pricing.driverEarning,
         originCell: this.geo.cellOf(origin.lat, origin.lng),
+        originZone: this.geo.zoneOf(this.geo.cellOf(origin.lat, origin.lng)),
+        // Minuto em que o pedido sem motorista é cancelado e estornado (varredura por minuto).
+        searchDeadline: minuteKey(this.now().getTime() + (await this.settings()).rideSearchTimeoutMin * 60_000),
         paymentMethod: method,
         pinCode: String(randomInt(1000, 10000)),
         status: 'searching',
@@ -1778,6 +1790,7 @@ export class FrocService {
             vehiclePlate: driver.driverPlate,
             etaMin: (category?.etaOffsetMin ?? 5) + (queueInfo?.aheadMin ?? 0),
             acceptedAt: this.iso(),
+            startDeadline: minuteKey(this.now().getTime() + STALE_ACCEPTED_MIN * 60_000),
             // Na fila: o motorista termina outra corrida antes (o passageiro vê isso e cancela sem custo).
             queued: Boolean(queueInfo),
             queuePosition: queueInfo?.position ?? 0,
@@ -1872,6 +1885,8 @@ export class FrocService {
             // Motorista desistiu: a corrida volta para a fila dos outros motoristas (sem custo ao passageiro).
             set({
               status: 'searching',
+              // Mesmo prazo de antes (contado do pedido); se já passou, vence na próxima varredura.
+              searchDeadline: minuteKey(Math.max(Date.parse(String(ride.createdAt)) + (ride.delivery ? Math.max(this.cfg.rideSearchTimeoutMin, DELIVERY_SEARCH_MIN) : this.cfg.rideSearchTimeoutMin) * 60_000, this.now().getTime())),
               arrivedAt: null,
               queued: false,
               queuePosition: 0,
@@ -1951,7 +1966,7 @@ export class FrocService {
     for (const r of queued) {
       if (!hasCurrent && position === 0) {
         const category = RIDE_CATEGORIES.find((c) => c.id === r.categoryId);
-        await this.store.update('rides', String(r.id), { queued: false, queuePosition: 0, etaMin: category?.etaOffsetMin ?? 5, acceptedAt: this.iso(), promotedAt: this.iso() });
+        await this.store.update('rides', String(r.id), { queued: false, queuePosition: 0, etaMin: category?.etaOffsetMin ?? 5, acceptedAt: this.iso(), promotedAt: this.iso(), startDeadline: minuteKey(this.now().getTime() + STALE_ACCEPTED_MIN * 60_000) });
       } else await this.store.update('rides', String(r.id), { queuePosition: hasCurrent ? position + 1 : position });
       position++;
     }
@@ -2044,6 +2059,8 @@ export class FrocService {
       date,
       time,
       departureAt: new Date(dep).toISOString(),
+      // Pedido sem proposta aceita sai do ar no horário da viagem (varredura por minuto).
+      expireDeadline: minuteKey(dep),
       shareMode,
       seats,
       suggestedPrice,
@@ -2951,14 +2968,36 @@ export class FrocService {
   // ------------------------------------------- H3: preço dinâmico e localização
 
   /** Multiplicador do preço na região: mais pedidos que motoristas por perto = preço sobe. */
+  /** Pedidos procurando motorista nas zonas em volta (busca por região, nunca o Brasil inteiro). */
+  private async searchingNear(cell: string, k: number): Promise<Doc[]> {
+    const zones = zonesAround(this.geo, cell, k);
+    const lists = await Promise.all(zones.map((z) => this.store.query<Doc>('rides', [['status', '==', 'searching'], ['originZone', '==', z]], 300)));
+    return lists.flat();
+  }
+
+  /** Motoristas online nas zonas em volta (busca por região). */
+  private async onlineDriversNear(cell: string, k: number): Promise<UserDoc[]> {
+    const zones = zonesAround(this.geo, cell, k);
+    const now = Date.now();
+    const lists = await Promise.all(
+      zones.map(async (z) => {
+        const hit = this.onlineCache.get(z);
+        if (hit && now - hit.at < 8000) return hit.users;
+        const users = await this.store.query<UserDoc>('users', [['driverOnline', '==', true], ['driverZone', '==', z]], 1000);
+        this.onlineCache.set(z, { at: now, users });
+        if (this.onlineCache.size > 5000) for (const [key, v] of this.onlineCache) if (now - v.at > 60_000) this.onlineCache.delete(key);
+        return users;
+      }),
+    );
+    return lists.flat();
+  }
+
   async surgeAt(lat: number, lng: number): Promise<number> {
     const cfg = await this.settings();
     if (!cfg.surgeEnabled) return 1;
-    const area = new Set(this.geo.ring(this.geo.cellOf(lat, lng), SURGE_RING));
-    const [searching, online] = await Promise.all([
-      this.store.query<Doc>('rides', [['status', '==', 'searching']], 300),
-      this.store.query<UserDoc>('users', [['driverOnline', '==', true]], 500),
-    ]);
+    const cell = this.geo.cellOf(lat, lng);
+    const area = new Set(this.geo.ring(cell, SURGE_RING));
+    const [searching, online] = await Promise.all([this.searchingNear(cell, SURGE_RING), this.onlineDriversNear(cell, SURGE_RING)]);
     const now = this.now().getTime();
     const demand = searching.filter((r) => area.has(String(r.originCell))).length;
     const supply = online.filter(
@@ -3095,7 +3134,7 @@ export class FrocService {
       const prev = { lat: user.driverLat, lng: user.driverLng };
       if (Math.abs(prev.lat - lat) + Math.abs(prev.lng - lng) > 0.00015) heading = bearing(prev, { lat, lng });
     }
-    await this.store.update('users', user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, locationAt: at, ...(heading !== null ? { driverHeading: heading } : {}) });
+    await this.store.update('users', user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, driverZone: this.geo.zoneOf(cell), locationAt: at, ...(heading !== null ? { driverHeading: heading } : {}) });
     const location = { lat: round6(lat), lng: round6(lng), at, ...(heading !== null ? { heading } : {}) };
     const [rides, deals] = await Promise.all([
       this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
@@ -3124,9 +3163,12 @@ export class FrocService {
     const now = this.now().getTime();
     let rides = 0;
     let deals = 0;
-    for (const r of await this.store.query<Doc>('rides', [['status', '==', 'searching']], 300)) {
+    // Prazos vencidos: busca só os que vencem em cada minuto que já passou (não lê o Brasil inteiro).
+    const minutes = this.dueMinutes(now);
+    const expireRide = async (r: Doc) => {
       const limitMin = r.delivery ? Math.max(cfg.rideSearchTimeoutMin, DELIVERY_SEARCH_MIN) : cfg.rideSearchTimeoutMin;
-      if (now - Date.parse(String(r.createdAt)) < limitMin * 60_000) continue;
+      const due = r.searchDeadline ? String(r.searchDeadline) < minuteKey(now) : now - Date.parse(String(r.createdAt)) >= limitMin * 60_000;
+      if (!due) return false;
       const done = await this.store.transaction(async (tx) => {
         const ride = await tx.get<Doc>('rides', String(r.id));
         if (!ride || ride.status !== 'searching') return false;
@@ -3140,20 +3182,31 @@ export class FrocService {
         rides++;
         if (r.delivery) await this.deliveryEvent({ ...r, status: 'cancelled', cancelledBy: 'timeout' });
       }
-    }
-    for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) {
+      return done;
+    };
+    const expireRequest = async (r: Doc) => {
       // Viagem agendada fica aberta até o horário marcado; pedido antigo expira pelo tempo.
       const dep = this.privateDeparture(r);
-      if (dep !== null ? now < dep : now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) continue;
-      await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
-      deals++;
+      if (dep !== null ? now < dep : now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) return false;
+      const ok = await this.store.transaction(async (tx) => {
+        const cur = await tx.get<Doc>('indrive', String(r.id));
+        if (!cur || cur.status !== 'open') return false;
+        tx.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
+        return true;
+      });
+      if (ok) deals++;
+      return ok;
+    };
+    await this.forEachDue('rides', 'searching', 'searchDeadline', minutes, expireRide);
+    await this.forEachDue('indrive', 'open', 'expireDeadline', minutes, expireRequest);
+    // Rede de segurança só no agendador: pedidos antigos (sem o minuto do prazo) ou que passaram
+    // enquanto o servidor ficou parado. Cada um confere o próprio prazo antes de cancelar.
+    if (force) {
+      for (const r of await this.store.query<Doc>('rides', [['status', '==', 'searching']], 300)) await expireRide(r).catch(() => false);
+      for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) await expireRequest(r).catch(() => false);
     }
-    // Corrida aceita que não começou em 30 min: valor volta ao passageiro (confere a cada 2 min).
-    let esquecidas: unknown = null;
-    if (force || Date.now() - this.lastStaleSweep > 2 * 60_000) {
-      this.lastStaleSweep = Date.now();
-      esquecidas = await this.closeStaleTrips(now).catch((e) => ({ erro: String(e?.message || e) }));
-    }
+    // Corrida aceita que não começou em 30 min: valor volta ao passageiro.
+    const esquecidas = await this.closeStaleTrips(now, minutes, force).catch((e) => ({ erro: String(e?.message || e) }));
     const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
     // Equipe IA no comando: saques dentro das regras e lojas com CNPJ ativo, sem esperar o dono.
     // Só no agendador (força=true): não deixa a tela de ninguém esperando consultas externas.
@@ -3168,18 +3221,14 @@ export class FrocService {
    * (Corrida com PIN termina quando o motorista toca em Finalizar; viagens agendadas e caronas,
    * quando o motorista encerra. Nada disso espera prazo.)
    */
-  private async closeStaleTrips(now: number) {
+  private async closeStaleTrips(now: number, minutes: string[], legacy = false) {
     const older = (iso: unknown) => {
       const t = Date.parse(String(iso || ''));
       return Number.isFinite(t) && now - t > STALE_ACCEPTED_MIN * 60_000;
     };
     const out = { corridasCanceladas: 0 };
-    const waiting = [
-      ...(await this.store.query<Doc>('rides', [['status', '==', 'accepted']], 300)),
-      ...(await this.store.query<Doc>('rides', [['status', '==', 'arriving']], 300)),
-    ];
-    for (const r of waiting) {
-      if (!older(r.acceptedAt || r.createdAt)) continue;
+    const handle = async (r: Doc) => {
+      if (!older(r.acceptedAt || r.createdAt)) return false;
       const done = await this.store.transaction(async (tx) => {
         const ride = await tx.get<Doc>('rides', String(r.id));
         if (!ride || !['accepted', 'arriving'].includes(String(ride.status)) || !older(ride.acceptedAt || ride.createdAt)) return null;
@@ -3189,13 +3238,44 @@ export class FrocService {
         if (passenger && escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} não começou em ${STALE_ACCEPTED_MIN} min`, 'estorno');
         return { ...ride, status: 'cancelled', cancelledBy: 'timeout_driver' };
       });
-      if (!done) continue;
+      if (!done) return false;
       out.corridasCanceladas++;
       if (done.delivery) await this.deliveryEvent(done);
       if (done.driverId) await this.promoteDriverQueue(String(done.driverId)).catch(() => undefined);
       await this.audit(null, 'corrida_cancelada_sem_inicio', String(done.id), { minutos: STALE_ACCEPTED_MIN, estorno: true });
+      return true;
+    };
+    for (const status of ['accepted', 'arriving']) {
+      await this.forEachDue('rides', status, 'startDeadline', minutes, handle);
+      // Rede de segurança só no agendador (corridas antigas ou servidor parado); cada uma confere o prazo.
+      if (legacy) for (const r of await this.store.query<Doc>('rides', [['status', '==', status]], 300)) await handle(r).catch(() => false);
     }
     return out;
+  }
+
+  /**
+   * Minutos já vencidos desde a última varredura deste servidor (no máximo DEADLINE_BACKLOG_MIN para trás).
+   * O minuto atual só entra quando termina.
+   */
+  private dueMinutes(now: number): string[] {
+    const last = Math.floor(now / 60_000) * 60_000 - 60_000;
+    const first = Math.max(this.deadlineCursor ?? -Infinity, last - DEADLINE_BACKLOG_MIN * 60_000);
+    const out: string[] = [];
+    for (let t = first; t <= last; t += 60_000) out.push(minuteKey(t));
+    if (last >= first) this.deadlineCursor = last + 60_000;
+    return out;
+  }
+
+  /** Processa os documentos com o prazo vencido em cada minuto (em lotes de 500). */
+  private async forEachDue(col: string, status: string, field: string, minutes: string[], fn: (d: Doc) => Promise<boolean>) {
+    for (const m of minutes) {
+      for (let round = 0; round < 50; round++) {
+        const batch = await this.store.query<Doc>(col, [['status', '==', status], [field, '==', m]], 500);
+        let changed = 0;
+        for (const d of batch) if (await fn(d).catch((e) => (console.warn('Prazo não processado:', col, d.id, e?.message), false))) changed++;
+        if (batch.length < 500 || changed === 0) break;
+      }
+    }
   }
 
   // ------------------------------------------------------------- SOS e pontos
@@ -3332,14 +3412,14 @@ export class FrocService {
       byKind[k].gross += Number(e.grossCents);
       byKind[k].fee += Number(e.feeCents);
     }
-    const online = await this.store.query<UserDoc>('users', [['driverOnline', '==', true]], 1000);
+    const onlineCount = await this.store.count('users', [['driverOnline', '==', true]]);
     const total = Object.values(byKind).reduce((a, k) => ({ gross: a.gross + k.gross, fee: a.fee + k.fee, count: a.count + k.count }), { gross: 0, fee: 0, count: 0 });
     return {
       days: period,
       completedServices: total.count,
       grossVolume: toReais(total.gross),
       platformRevenue: toReais(total.fee),
-      driversOnline: online.length,
+      driversOnline: onlineCount,
       byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, { count: v.count, gross: toReais(v.gross), fee: toReais(v.fee) }])),
     };
   }
@@ -3403,12 +3483,9 @@ export class FrocService {
   async nearbyDrivers(auth: AuthUser, latValue: unknown, lngValue: unknown): Promise<{ drivers: NearbyDriver[] }> {
     const lat = num(latValue, -34.5, 5.9, 'latitude');
     const lng = num(lngValue, -74.5, -28.5, 'longitude');
-    if (Date.now() - this.onlineCache.at > 8000) {
-      this.onlineCache = { at: Date.now(), users: await this.store.query<UserDoc>('users', [['driverOnline', '==', true]], 500) };
-    }
     const nowMs = this.now().getTime();
     const day = this.iso().slice(0, 10);
-    const drivers = this.onlineCache.users
+    const drivers = (await this.onlineDriversNear(this.geo.cellOf(lat, lng), NEARBY_RING))
       .filter(
         (u) =>
           u.uid !== auth.uid &&
@@ -3618,6 +3695,8 @@ export class FrocService {
         discountApplied: 0,
         surgeMultiplier: route.surge,
         originCell: this.geo.cellOf(route.pickup.lat, route.pickup.lng),
+        originZone: this.geo.zoneOf(this.geo.cellOf(route.pickup.lat, route.pickup.lng)),
+        searchDeadline: minuteKey(this.now().getTime() + Math.max(this.cfg.rideSearchTimeoutMin, DELIVERY_SEARCH_MIN) * 60_000),
         paymentMethod: 'froc_pay',
         platformFeeCents: toCents(deliveryFee.fee),
         driverEarning: round2(route.price - deliveryFee.fee),
@@ -3731,6 +3810,16 @@ export class FrocService {
     return rides.filter((r) => !r.originCell || area.has(String(r.originCell)));
   }
 
+  /**
+   * Pedidos para o motorista online: só os das zonas em volta da posição dele (vale para 3 milhões
+   * de corridas por dia). Sem localização recente, recebe uma amostra nacional até ligar o GPS.
+   */
+  private async dispatchFeed(user: UserDoc): Promise<Doc[]> {
+    const fresh = user.driverCell && this.now().getTime() - Date.parse(String(user.locationAt || 0)) < LOCATION_FRESH_MS;
+    if (fresh) return this.searchingNear(user.driverCell!, DISPATCH_RING);
+    return this.store.query<Doc>('rides', [['status', '==', 'searching']], 50);
+  }
+
   async bootstrap(auth: AuthUser) {
     await this.settings();
     await this.sweep().catch((e) => console.warn('Varredura de prazos falhou:', e));
@@ -3763,9 +3852,8 @@ export class FrocService {
     ] = await Promise.all([
       q('rides', 'passengerId', uid),
       isDriver ? q('rides', 'driverId', uid) : [],
-      // Pedidos do Brasil inteiro; o filtro por região vem depois. Com só 30, num horário de muito
-      // movimento o motorista podia não receber nenhum pedido da cidade dele.
-      isDriver && user.driverOnline ? q('rides', 'status', 'searching', 150) : [],
+      // Pedidos da região do motorista (zonas em volta dele), não do Brasil inteiro.
+      isDriver && user.driverOnline ? this.dispatchFeed(user) : [],
       q('indrive', 'passengerId', uid),
       isDriver ? q('indrive', 'driverId', uid) : [],
       isDriver ? q('indrive', 'status', 'open', 300) : [],
