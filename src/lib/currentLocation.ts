@@ -155,3 +155,19 @@ export async function currentLocationPoint(): Promise<GeoPoint> {
   const { lat, lng } = await getCurrentCoords();
   return pointAt(lat, lng);
 }
+
+/**
+ * Ponto ainda não escolhido num formulário (carona, frete, retorno vazio).
+ * Nunca um endereço fixo de exemplo (antes vinha São Paulo → Rio de Janeiro).
+ */
+export const CHOOSE_ID = 'escolher';
+export function choosePoint(label = 'Toque para escolher'): GeoPoint {
+  return { id: CHOOSE_ID, name: label, city: '', state: '', zone: 'urban', lat: BRAZIL_CENTER.lat, lng: BRAZIL_CENTER.lng, kind: 'avenue' };
+}
+export const isChoosePoint = (p: { id: string }) => p.id === CHOOSE_ID;
+/** Ponto ainda sem lugar real: localizando, sem localização, destino vazio ou "escolher". */
+export const isPlaceMissing = (p: { id: string }) => isOriginPending(p) || isUnsetDestination(p) || isChoosePoint(p);
+/** Partida de um formulário: onde a pessoa está agora; se ainda não sabemos, pede para escolher. */
+export function startPointFrom(here: GeoPoint | null | undefined, label = 'Toque para escolher a partida'): GeoPoint {
+  return here && !isPlaceMissing(here) ? here : choosePoint(label);
+}

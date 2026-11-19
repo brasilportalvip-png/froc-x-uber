@@ -1,9 +1,10 @@
 import { CARGO_VEHICLE_TYPES } from '../data/cargoVehicles.ts';
 import { CubageCalculator } from './CubageCalculator.tsx';
 import truckImg from '../assets/images/fleet_truck_cargo_1794683388987.jpg';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Box, CheckCircle2, Home, PackageCheck, Plus, ShieldCheck, Star, Truck } from 'lucide-react';
-import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
+import { formatBRL } from '../data/locations.ts';
+import { choosePoint, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
 import type { EmptyTruckRoute, FreightRequest, GeoPoint, TruckType, UserProfile, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
 
@@ -12,6 +13,8 @@ interface TruckFreightPanelProps {
   profile: UserProfile;
   emptyTrucks: EmptyTruckRoute[];
   freights: FreightRequest[];
+  /** Onde a pessoa está agora (GPS). Os formulários começam daqui. */
+  origin?: GeoPoint;
   onSelectRouteOnMap: (origin: GeoPoint, destination: GeoPoint) => void;
   onPublishEmptyTruck: (payload: {
     originId: string;
@@ -56,6 +59,7 @@ const TRUCK_TYPES: TruckType[] = [...CARGO_VEHICLE_TYPES];
 export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   role,
   profile,
+  origin,
   emptyTrucks,
   freights,
   onSelectRouteOnMap,
@@ -73,12 +77,13 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [searchCity, setSearchCity] = useState('');
 
-  const pointOf = (id: string) => BRAZIL_LOCATIONS.find((l) => l.id === id) ?? BRAZIL_LOCATIONS[0];
 
   // Empty truck publish state (Trucker)
   // Qualquer cidade do Brasil (busca do Google).
-  const [etOrigin, setEtOrigin] = useState<GeoPoint>(() => pointOf('br-curitiba'));
-  const [etDest, setEtDest] = useState<GeoPoint>(() => pointOf('sp-paulista'));
+  // Sem cidades fixas de exemplo: a origem começa onde a pessoa está e o destino ela escolhe.
+  const [etOrigin, setEtOrigin] = useState<GeoPoint>(() => startPointFrom(origin, 'Toque para escolher a cidade de origem'));
+  const [etDest, setEtDest] = useState<GeoPoint>(() => choosePoint('Toque para escolher a cidade de destino'));
+  const [formError, setFormError] = useState('');
   // O tipo de caminhão é o do cadastro aprovado (não muda por anúncio).
   const etType: TruckType = profile.truckType;
   const [etDir, setEtDir] = useState<'indo_vazio' | 'voltando_vazio' | 'espaco_parcial'>('voltando_vazio');
@@ -95,8 +100,14 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   );
   const [frTitle, setFrTitle] = useState('Mudança Residencial Completa');
   // Endereço de coleta e de entrega em qualquer lugar do Brasil.
-  const [frOrigin, setFrOrigin] = useState<GeoPoint>(() => pointOf('sp-pinheiros'));
-  const [frDest, setFrDest] = useState<GeoPoint>(() => pointOf('br-santos'));
+  const [frOrigin, setFrOrigin] = useState<GeoPoint>(() => startPointFrom(origin, 'Toque para escolher o endereço de coleta'));
+  const [frDest, setFrDest] = useState<GeoPoint>(() => choosePoint('Toque para escolher o endereço de entrega'));
+  // O GPS respondeu depois: a origem dos formulários vira a localização atual.
+  useEffect(() => {
+    if (!origin || isPlaceMissing(origin)) return;
+    setEtOrigin((p) => (isChoosePoint(p) ? origin : p));
+    setFrOrigin((p) => (isChoosePoint(p) ? origin : p));
+  }, [origin]);
   const [frTruck, setFrTruck] = useState<TruckType>('3/4 Baú');
   const [frWeight, setFrWeight] = useState('1500');
   const [frVolume, setFrVolume] = useState('12');
@@ -124,6 +135,11 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
 
   const handlePublishEmpty = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPlaceMissing(etOrigin) || isPlaceMissing(etDest)) {
+      setFormError('Escolha a cidade de origem e a cidade de destino.');
+      return;
+    }
+    setFormError('');
     setBusyId('pub-empty');
     try {
       await onPublishEmptyTruck({
@@ -148,6 +164,11 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
 
   const handleCreateFreight = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPlaceMissing(frOrigin) || isPlaceMissing(frDest)) {
+      setFormError('Escolha o endereço de coleta e o endereço de entrega.');
+      return;
+    }
+    setFormError('');
     setBusyId('pub-freight');
     try {
       await onCreateFreight({
@@ -261,6 +282,11 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 <PlacePicker label="Origem da viagem" mode="cities" value={etOrigin} onChange={setEtOrigin} />
                 <PlacePicker label="Destino da viagem" mode="cities" value={etDest} onChange={setEtDest} />
               </div>
+              {formError && (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-2 text-xs font-semibold">
+                  {formError}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
@@ -533,6 +559,11 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
                 <PlacePicker label="Endereço de coleta" mode="address" value={frOrigin} onChange={setFrOrigin} />
                 <PlacePicker label="Endereço de entrega" mode="address" value={frDest} onChange={setFrDest} />
               </div>
+              {formError && (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-2 text-xs font-semibold">
+                  {formError}
+                </div>
+              )}
 
               <CubageCalculator
                 onApply={({ volumeM3, weightKg, truck }) => {
