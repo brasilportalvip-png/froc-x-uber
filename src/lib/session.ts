@@ -264,6 +264,19 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/** Sistema Froc: pede o áudio da fala ao servidor e devolve um endereço local para tocar. */
+export async function apiAudio(path: string, body: unknown): Promise<string> {
+  const user = requireAuth().currentUser;
+  if (!user) throw new Error('Faça login para continuar.');
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await user.getIdToken()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error('voz_indisponivel');
+  return URL.createObjectURL(await res.blob());
+}
+
 /** Baixa uma imagem protegida (foto de perfil, selfie) com o login e devolve um endereço local para <img>. */
 export async function apiImageUrl(path: string): Promise<string> {
   const user = requireAuth().currentUser;

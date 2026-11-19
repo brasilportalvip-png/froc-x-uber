@@ -23,6 +23,8 @@ import { createSerproVerifier } from './identity.ts';
 import { createCnpjLookup } from './merchants.ts';
 import { createOpenMeteoRain } from './weather.ts';
 import { createGeminiFaces } from './faceCheck.ts';
+import { createFrocVoice } from './voz.ts';
+import type { FrocVoice } from './voz.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -110,10 +112,29 @@ export function getService() {
   return servicePromise;
 }
 
+let voicePromise: Promise<FrocVoice> | null = null;
+/** Sistema Froc: voz neural (Gemini TTS "Charon"), com os áudios guardados no Storage. */
+export function getVoice() {
+  voicePromise ??= getService().then(() =>
+    createFrocVoice({
+      apiKey: geminiKeysFromEnv(process.env)[0],
+      model: process.env.GEMINI_TTS_MODEL,
+      voice: process.env.GEMINI_TTS_VOICE,
+      files: sharedFiles,
+      enabled: process.env.FROC_VOZ_NEURAL !== 'nao',
+    }),
+  );
+  voicePromise.catch(() => {
+    voicePromise = null;
+  });
+  return voicePromise;
+}
+
 export function buildApp() {
   return createApp({
     service: getService,
     platform: getPlatform,
+    voice: getVoice,
     siteUrl: () => publicSiteUrl() || 'https://froc-x-uber.vercel.app',
     verifyToken: async (token) => (await initFirebase()).verifyToken(token),
     webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET,

@@ -274,3 +274,17 @@ antes de abrir o módulo Cargas ao público: a geração do CIOT e a conferênci
 - Preencha os campos entre colchetes em `public/legal/termos.html` e `public/legal/privacidade.html`
   (razão social, CNPJ, endereço, e-mail e encarregado de dados) e peça a revisão de um advogado.
 - Verifique as regras da sua cidade para transporte por aplicativo (Lei 13.640/2018) e a ANTT para fretes.
+
+## Sistema Froc — voz da marca
+
+A Froc fala com motoristas e passageiros (online, nova corrida, chegou, PIN/cinto, corrida
+encerrada com incentivo, viagem concluída). As falas são programadas (10 versões por situação,
+sem IA), sabem a hora de Brasília e usam o primeiro nome da pessoa.
+
+- Voz: a mesma do Froc IA — Gemini TTS, voz **Charon**, masculina, calorosa e amigável.
+  Usa a mesma `GEMINI_API_KEY`. Cada frase é gerada **uma vez** e guardada no Storage
+  (`froc-x-uber/voz/`): depois toca sem custo.
+- Opcional: `GEMINI_TTS_MODEL` (padrão `gemini-3.1-flash-tts-preview`) e `GEMINI_TTS_VOICE` (padrão `Charon`).
+- `FROC_VOZ_NEURAL=nao` desliga a voz neural: o app usa a voz masculina do próprio aparelho (custo zero).
+- Cada pessoa liga/desliga a voz no botão do alto-falante, no alto do app.
+- As falas ficam em `src/data/frocVoz.ts` (copie este arquivo para os outros apps da marca Froc).
