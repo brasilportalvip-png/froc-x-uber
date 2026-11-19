@@ -21,6 +21,7 @@ import { createWebhookDispatcher } from './merchants.ts';
 import { createGoogleGeocoder } from './geocode.ts';
 import { createSerproVerifier } from './identity.ts';
 import { createCnpjLookup } from './merchants.ts';
+import { createOpenMeteoRain } from './weather.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -93,6 +94,7 @@ export function getService() {
         // CPF obrigatório para todos (uma pessoa, uma conta). CPF_OBRIGATORIO=nao desliga (só para emergência).
         identity: { required: process.env.CPF_OBRIGATORIO !== 'nao', verify: createSerproVerifier(process.env) },
         cnpjLookup: createCnpjLookup(),
+        rain: createOpenMeteoRain(),
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),

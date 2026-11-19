@@ -16,8 +16,9 @@ import { CARGO_VEHICLE_TYPES } from '../src/data/cargoVehicles.ts';
 import { normalizePixKey, resolvePixKeyType } from '../src/lib/pixKey.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
-import { platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
-import type { PriceBreakdown, RiskZoneLike } from '../src/data/pricing.ts';
+import { holidayAt, platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
+import type { PriceBreakdown, RainLevel, RideCategoryKey, RiskZoneLike } from '../src/data/pricing.ts';
+import type { RainLookup } from './weather.ts';
 import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, cancelFeePercent, waitingFeePercent } from '../src/data/ridePolicy.ts';
 import { formatCnpj, isValidCnpj, newWebhookSecret, validateWebhookUrl } from './merchants.ts';
 import type { WebhookDispatcher } from './merchants.ts';
@@ -181,6 +182,8 @@ export interface ServiceDeps {
   payouts?: PayoutGateway;
   /** Consulta pública de CNPJ (aprovação automática de lojas). */
   cnpjLookup?: (cnpj: string) => Promise<{ active: boolean; name: string; situation: string } | null>;
+  /** Chuva agora no local (Open-Meteo em produção). Sem ele, o leilão considera "sem chuva". */
+  rain?: RainLookup;
 }
 
 export interface PayoutGateway {
@@ -365,15 +368,22 @@ export function hideFee(doc: Doc, viewer: 'cliente' | 'motorista') {
     const p = { ...pricing };
     delete p.platformFee;
     delete p.feeReasons;
-    if (viewer === 'cliente') delete p.driverEarning;
-    else {
+    if (viewer === 'cliente') {
+      // km do motorista + total permitiriam calcular o ganho da Froc.
+      delete p.driverEarning;
+      delete p.perKm;
+      delete p.billedKm;
+    } else {
       delete p.total;
       delete p.base;
     }
     doc.pricing = p;
   }
-  if (viewer === 'cliente') delete doc.driverEarning;
-  else if (typeof doc.driverEarning === 'number') {
+  if (viewer === 'cliente') {
+    delete doc.driverEarning;
+    delete doc.perKm;
+    delete doc.billedKm;
+  } else if (typeof doc.driverEarning === 'number') {
     // O motorista vê o valor dele no lugar do preço do passageiro.
     doc.price = doc.driverEarning;
   }
@@ -407,8 +417,8 @@ export class FrocService {
   }
 
   /** Parte do prestador, em centavos, conforme a comissão configurada. */
-  private providerCut(cents: number) {
-    return Math.round(cents * (1 - this.cfg.commissionPercent / 100));
+  private providerCut(cents: number, pct = this.cfg.commissionPercent) {
+    return Math.round(cents * (1 - pct / 100));
   }
 
   async updateSettings(auth: AuthUser, patch: Record<string, unknown>) {
@@ -670,8 +680,8 @@ export class FrocService {
   }
 
   /** Paga o prestador (100% menos a comissão) e registra o serviço concluído para os dois lados. */
-  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida', fixedFeeCents?: number) {
-    const pct = this.cfg.commissionPercent;
+  private payProvider(tx: Tx, provider: UserDoc, client: UserDoc | null, escrowCents: number, method: PaymentMethod, title: string, kind = 'corrida', fixedFeeCents?: number, commissionPct?: number) {
+    const pct = commissionPct ?? this.cfg.commissionPercent;
     if (method === 'froc_pay' && escrowCents > 0 && typeof fixedFeeCents === 'number') {
       // Modelo novo: a Froc fica com um valor fixo (R$ 2 a 8); o motorista com todo o resto.
       const fee = Math.min(escrowCents, Math.max(0, fixedFeeCents));
@@ -687,12 +697,12 @@ export class FrocService {
       return;
     }
     if (method === 'froc_pay' && escrowCents > 0) {
-      this.creditEarning(tx, provider, this.providerCut(escrowCents), `Ganho · ${title} (${100 - pct}% líquido)`);
+      this.creditEarning(tx, provider, this.providerCut(escrowCents, pct), `Ganho · ${title} (${100 - pct}% líquido)`);
     } else if (method === 'cash' && escrowCents > 0 && pct > 0) {
       // Só corridas antigas (criadas antes do fim do dinheiro em mãos): a comissão sai da carteira.
-      this.debit(tx, provider, escrowCents - this.providerCut(escrowCents), `Taxa · ${title} (pago em dinheiro)`, 'taxa', true);
+      this.debit(tx, provider, escrowCents - this.providerCut(escrowCents, pct), `Taxa · ${title} (pago em dinheiro)`, 'taxa', true);
     }
-    if (escrowCents > 0) this.platformRevenue(tx, kind, escrowCents, escrowCents - this.providerCut(escrowCents));
+    if (escrowCents > 0) this.platformRevenue(tx, kind, escrowCents, escrowCents - this.providerCut(escrowCents, pct));
     provider.completedTrips += 1;
     tx.update('users', provider.uid, { completedTrips: provider.completedTrips });
     if (client && client.uid !== provider.uid) {
@@ -1401,7 +1411,7 @@ export class FrocService {
     const method = paymentMethod(body.paymentMethod);
     const distanceKm = calculateDistanceKm(origin, destination);
     if (distanceKm > 300) fail(400, 'too_far', 'Para viagens longas, use Caronas.');
-    // Preço estilo Uber: tarifa × (faixa de horário × demanda) + área de risco; a Froc fica com R$ 2–8.
+    // Leilão automático: km do motorista (horário, fim de semana, feriado, chuva, procura) + risco + Froc R$ 2–8.
     const pricing = await this.priceFor(category.id, origin, destination);
     const { durationMin } = pricing;
     const surge = pricing.multiplier;
@@ -1946,8 +1956,10 @@ export class FrocService {
         const total = paid.reduce((acc, b) => acc + Number(b.amountCents), 0);
         for (const b of paid) tx.update('carpoolBookings', String(b.id), { status: 'released' });
         if (total > 0) {
-          this.creditEarning(tx, driver, this.providerCut(total), `Ganho · carona ${route} (${100 - this.cfg.commissionPercent}% líquido)`);
-          this.platformRevenue(tx, 'carona', total, total - this.providerCut(total));
+          // Caronas: a Froc fica com 30% do valor total (configurável no Admin).
+          const pct = this.cfg.carpoolCommissionPercent;
+          this.creditEarning(tx, driver, this.providerCut(total, pct), `Ganho · carona ${route} (${100 - pct}% líquido)`);
+          this.platformRevenue(tx, 'carona', total, total - this.providerCut(total, pct));
           for (const b of paid) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
         }
         driver.completedTrips += 1;
@@ -2062,7 +2074,7 @@ export class FrocService {
         const client = await tx.get<UserDoc>('users', String(t.reservedById));
         tx.update('emptyTrucks', id, { status: 'completed', escrowCents: 0, completedAt: this.iso() });
         t.status = 'completed';
-        this.payProvider(tx, trucker, client, escrow, 'froc_pay', `frete ${label}`, 'retorno_vazio');
+        this.payProvider(tx, trucker, client, escrow, 'froc_pay', `frete ${label}`, 'retorno_vazio', undefined, this.cfg.freightCommissionPercent);
         return t;
       }
       if (t.status === 'reserved') {
@@ -2188,7 +2200,7 @@ export class FrocService {
         const client = await tx.get<UserDoc>('users', String(f.clientId));
         tx.update('freights', id, { status: 'delivered', escrowCents: 0, deliveredAt: this.iso() });
         f.status = 'delivered';
-        this.payProvider(tx, trucker, client, escrow, 'froc_pay', String(f.title), 'frete');
+        this.payProvider(tx, trucker, client, escrow, 'froc_pay', String(f.title), 'frete', undefined, this.cfg.freightCommissionPercent);
         return f;
       }
       if (f.clientId !== auth.uid) fail(403, 'forbidden', 'Só quem pediu o frete pode cancelar.');
@@ -2238,22 +2250,36 @@ export class FrocService {
   }
 
   /** Preço completo de uma categoria: tarifa, dinâmico (horário × demanda), área de risco e ganho da Froc. */
-  async priceFor(categoryId: string, origin: GeoPoint, destination: GeoPoint, demand?: number): Promise<PriceBreakdown & { distanceKm: number; durationMin: number }> {
+  /** Chuva agora na partida (só se o leilão por chuva estiver ligado). Falha = sem chuva. */
+  async rainAt(lat: number, lng: number): Promise<RainLevel> {
+    const cfg = await this.settings();
+    if (!cfg.rainSurgeEnabled || !this.deps.rain) return 'sem_chuva';
+    try {
+      return await this.deps.rain(lat, lng);
+    } catch {
+      return 'sem_chuva';
+    }
+  }
+
+  /**
+   * Preço de uma categoria pelo LEILÃO AUTOMÁTICO: km do motorista (carro R$ 2–5, moto R$ 1,50–2,50)
+   * conforme horário, fim de semana, feriado, chuva e procura; + área de risco; + ganho da Froc (R$ 2–8).
+   */
+  async priceFor(categoryId: string, origin: GeoPoint, destination: GeoPoint, demand?: number, rain?: RainLevel): Promise<PriceBreakdown & { distanceKm: number; durationMin: number }> {
     const cfg = await this.settings();
     const category = RIDE_CATEGORIES.find((c) => c.id === categoryId) ?? fail(400, 'invalid_category', 'Categoria inválida.');
     const distanceKm = calculateDistanceKm(origin, destination);
     const durationMin = estimateDurationMin(distanceKm, category.id === 'froc_moto' || category.id === 'froc_delivery' ? 'moto' : 'urban');
-    const base = category.baseFare + distanceKm * category.perKm + durationMin * category.perMin;
     const risk = riskZoneFor([origin, destination], await this.riskZones(), this.now());
     const p = priceRide({
-      base,
-      minimum: 7.5,
+      categoryId: category.id as RideCategoryKey,
+      distanceKm,
       date: this.now(),
       demand: demand ?? (await this.surgeAt(origin.lat, origin.lng)),
       maxSurge: cfg.maxSurge,
       timeSurgeEnabled: cfg.timeSurgeEnabled,
+      rain: rain ?? (await this.rainAt(origin.lat, origin.lng)),
       risk,
-      distanceKm,
       limits: this.feeLimits(),
     });
     return { ...p, distanceKm, durationMin };
@@ -2264,7 +2290,9 @@ export class FrocService {
     await this.settings();
     const risk = riskZoneFor([origin], await this.riskZones(), this.now());
     const demand = await this.surgeAt(origin.lat, origin.lng);
-    return platformFee({ fare: price, band: timeBandAt(this.now()), demand, riskZone: Boolean(risk), distanceKm }, this.feeLimits());
+    const holiday = this.cfg.timeSurgeEnabled && Boolean(holidayAt(this.now()));
+    const rain = await this.rainAt(origin.lat, origin.lng);
+    return platformFee({ fare: price, band: timeBandAt(this.now()), demand, riskZone: Boolean(risk), distanceKm, holiday, rain }, this.feeLimits());
   }
 
   /** Áreas de risco (agentes de segurança e preços cuidam delas). */
@@ -2299,12 +2327,16 @@ export class FrocService {
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const surge = await this.surgeAt(origin.lat, origin.lng);
-    const quotes = await Promise.all(RIDE_CATEGORIES.map(async (c) => ({ categoryId: c.id, ...(await this.priceFor(c.id, origin, destination, surge)) })));
+    const rain = await this.rainAt(origin.lat, origin.lng);
+    const quotes = await Promise.all(RIDE_CATEGORIES.map(async (c) => ({ categoryId: c.id, ...(await this.priceFor(c.id, origin, destination, surge, rain)) })));
     const first = quotes[0];
     return {
       surge: first.multiplier,
       demand: surge,
       band: first.band,
+      // Motivos do preço estar mais alto agora (sincero com o passageiro).
+      factors: first.factors,
+      rain,
       risk: first.risk,
       distanceKm: first.distanceKm,
       // SIGILO: o passageiro não recebe o ganho da Froc nem o do motorista.

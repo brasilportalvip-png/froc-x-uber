@@ -461,6 +461,9 @@ export interface PlatformSettingsView {
   platformFeeMaxPct: number;
   agentAutonomy: boolean;
   autoPayoutLimit: number;
+  rainSurgeEnabled: boolean;
+  carpoolCommissionPercent: number;
+  freightCommissionPercent: number;
 }
 
 export interface AdminOverview {

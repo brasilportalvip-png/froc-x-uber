@@ -165,14 +165,15 @@ describe('carteira e Mercado Pago', () => {
   });
 
   test('Pix: só os ganhos saem; recarga fica no app; admin pode recusar devolvendo', async () => {
-    await topUp(passenger, 100);
+    await topUp(passenger, 300);
     await expectError(svc.requestWithdrawal(passenger, 30, 'ana@pix.com'), 'nothing_to_withdraw');
     await approve(driver, 'driver');
     await topUp(driver, 100);
     await expectError(svc.requestWithdrawal(driver, 40, 'caio@pix.com'), 'nothing_to_withdraw');
     // Motorista ganha uma corrida de verdade.
     await svc.updateProfile(driver, { driverOnline: true });
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_comfort' });
+    // Corrida mais longa (Paulista → Guarulhos) para o ganho passar do Pix mínimo de R$ 20.
+    const ride = await svc.createRide(passenger, { originId: 'sp-paulista', destinationId: 'sp-gru', categoryId: 'froc_comfort' });
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     await svc.rideAction(driver, ride.id, { action: 'start', pin: ride.pinCode });
     await svc.rideAction(driver, ride.id, { action: 'complete' });
@@ -359,7 +360,7 @@ describe('3) caronas estilo BlaBlaCar', () => {
     assert.equal(seenByOther.driverPhone, undefined, 'telefone do motorista só para quem reservou');
     assert.equal(driverView.availableSeats, 1);
     await svc.finishCarpool(driver, trip.id, 'completed');
-    assert.equal(await balance(driver), 70.4);
+    assert.equal(await balance(driver), 56, 'carona: Froc fica com 30% do total (R$ 80 → R$ 56)');
     assert.equal(await balance(passenger), 120);
   });
 
@@ -392,7 +393,7 @@ describe('4) caminhões vazios e fretes/mudanças', () => {
     await expectError(svc.reserveEmptyTruck(other, route.id), 'taken');
     await expectError(svc.finishEmptyTruck(passenger, route.id, 'complete'), 'forbidden');
     await svc.finishEmptyTruck(trucker, route.id, 'complete');
-    assert.equal(await balance(trucker), 792);
+    assert.equal(await balance(trucker), 630, 'retorno vazio: Froc fica com 30% do total (R$ 900 → R$ 630)');
     assert.equal(await balance(passenger), 1100);
   });
 
@@ -415,7 +416,7 @@ describe('4) caminhões vazios e fretes/mudanças', () => {
     await svc.acceptFreightBid(passenger, freight.id, withBid.bids[0].id);
     assert.equal(await balance(passenger), 750);
     await svc.finishFreight(trucker, freight.id, 'deliver');
-    assert.equal(await balance(trucker), 1100);
+    assert.equal(await balance(trucker), 875, 'frete: Froc fica com 30% do total (R$ 1.250 → R$ 875)');
   });
 
   test('cliente cancela frete contratado e recebe de volta', async () => {
