@@ -19,7 +19,7 @@ const DECL_LABEL: Record<string, string> = {
 const KIND_NAME: Record<string, string> = { driver: 'Motorista', trucker: 'Transportador de carga', merchant: 'Loja (Froc Entregas)' };
 const KIND_LABEL: Record<string, string> = {
   corrida: 'Corridas',
-  indrive: 'Viagens particulares',
+  indrive: 'Viagens agendadas',
   carona: 'Caronas',
   frete: 'Fretes e mudanças',
   retorno_vazio: 'Retorno vazio',
@@ -457,7 +457,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
               ['commissionPercent', 'Comissão da plataforma em outros serviços (%)', 0, 40, 1],
               ['carpoolCommissionPercent', 'Froc fica com (% do total) nas caronas', 0, 50, 1],
               ['freightCommissionPercent', 'Froc fica com (% do total) nos fretes e retorno vazio', 0, 50, 1],
-              ['privateCommissionPercent', 'Froc fica com (% do valor combinado) nas viagens particulares', 0, 50, 1],
+              ['privateCommissionPercent', 'Froc fica com (% do valor combinado) nas viagens agendadas', 0, 50, 1],
               ['maxSurge', 'Leilão: km do motorista sobe no máximo (x; carro R$ 2–5, moto R$ 1,50–2,50)', 1, 3, 0.1],
               ['rideSearchTimeoutMin', 'Cancelar corrida sem motorista após (min)', 3, 60, 1],
               ['indriveOpenTimeoutMin', 'Expirar negociação sem resposta após (min)', 5, 240, 1],

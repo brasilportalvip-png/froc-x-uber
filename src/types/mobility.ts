@@ -189,7 +189,7 @@ export interface InDriveRequest {
   matchedAt?: string;
   offers: InDriveOffer[];
   createdAt: string;
-  /** Viagem particular agendada (pedidos antigos não têm). */
+  /** Viagem agendada (pedidos antigos não têm). */
   date?: string;
   time?: string;
   departureAt?: string;

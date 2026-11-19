@@ -89,7 +89,7 @@ export const AGENTS: AgentDef[] = [
     name: 'Especialista em Negociação',
     emoji: '🤝',
     area: 'Operação',
-    mission: 'Acompanha as viagens particulares agendadas: pisos mínimos, propostas, agenda dos motoristas, pedidos expirados e conflitos de valor.',
+    mission: 'Acompanha as viagens agendadas: pisos mínimos, propostas, agenda dos motoristas, pedidos expirados e conflitos de valor.',
     tools: [...READ_ALL, ...COMMS],
   },
   {

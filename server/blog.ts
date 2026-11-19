@@ -52,7 +52,7 @@ export const GUIDE_SLUGS = ['como-funciona', 'regras-e-requisitos', 'perguntas-f
 /** Pauta: cada dia um assunto diferente, girando entre serviço, cidade e tema. */
 export const TOPIC_SERVICES = [
   'corrida por aplicativo barata',
-  'viagem particular entre cidades',
+  'viagem agendada entre cidades',
   'carona intermunicipal dividindo custos',
   'frete barato com retorno vazio',
   'mudança residencial com van ou caminhão',
@@ -193,7 +193,7 @@ export function autoFixSeo<T extends SeoFields>(p: T): T {
 }
 
 const POST_PROMPT = (topic: string, existingTitles: string[]) => `
-Escreva UM artigo de blog original para o site ${SITE_NAME} (app 4 em 1: corridas, viagens particulares agendadas entre cidades (valor combinado com o motorista), caronas entre cidades e cargas/fretes com caminhão, van, furgão e utilitário — em todo o Brasil; inauguração em 10/03/2027).
+Escreva UM artigo de blog original para o site ${SITE_NAME} (app 4 em 1: corridas, viagens agendadas entre cidades (valor combinado com o motorista), caronas entre cidades e cargas/fretes com caminhão, van, furgão e utilitário — em todo o Brasil; inauguração em 10/03/2027).
 Assunto do dia: "${topic}".
 Objetivo: ser realmente útil para quem pesquisa isso no Google e no Bing (responder a dúvida de verdade, com dicas práticas), e convidar a pessoa a se cadastrar no ${SITE_NAME}.
 Regras de SEO (obrigatórias):
@@ -602,7 +602,7 @@ export const SERVICE_PAGES: ServicePage[] = [
     ],
     faq: [
       ['Funciona na minha cidade?', 'Sim: qualquer endereço do Brasil pode ser origem ou destino. A disponibilidade de motoristas cresce conforme a região.'],
-      ['Posso combinar o preço de uma viagem?', 'Sim, em Viagens particulares você agenda a viagem, diz quanto quer pagar e os motoristas respondem com propostas.'],
+      ['Posso combinar o preço de uma viagem?', 'Sim, em Viagens agendadas você agenda a viagem, diz quanto quer pagar e os motoristas respondem com propostas.'],
       ['Como é a segurança?', 'Motoristas com documentos analisados, PIN no embarque, SOS, compartilhamento da viagem e avaliação.'],
     ],
     cta: 'Crie sua conta grátis e peça sua primeira corrida.',
@@ -648,11 +648,11 @@ export const SERVICE_PAGES: ServicePage[] = [
   {
     slug: 'seja-motorista',
     title: 'Seja motorista parceiro do Froc X Uber | Cadastre-se',
-    description: 'Dirija com carro, moto, van ou caminhão no Froc X Uber: corridas, viagens particulares, caronas e fretes num app só. Cadastro com análise rápida de documentos.',
+    description: 'Dirija com carro, moto, van ou caminhão no Froc X Uber: corridas, viagens agendadas, caronas e fretes num app só. Cadastro com análise rápida de documentos.',
     h1: 'Seja motorista ou transportador parceiro',
-    intro: 'Quer ser motorista de aplicativo ou ganhar dinheiro com seu veículo de carga? No Froc X Uber você recebe corridas, faz viagens particulares agendadas, oferece caronas entre cidades e faz fretes — tudo com a mesma conta.',
+    intro: 'Quer ser motorista de aplicativo ou ganhar dinheiro com seu veículo de carga? No Froc X Uber você recebe corridas, faz viagens agendadas, oferece caronas entre cidades e faz fretes — tudo com a mesma conta.',
     points: [
-      ['4 fontes de renda', 'Corridas, viagens particulares, caronas intermunicipais e fretes/mudanças.'],
+      ['4 fontes de renda', 'Corridas, viagens agendadas, caronas intermunicipais e fretes/mudanças.'],
       ['Receba na carteira', 'O valor cai na sua carteira quando o serviço termina; saque por Pix.'],
       ['Regras claras', 'A comissão aparece no app antes de cada serviço.'],
       ['Cadastro simples', 'Envie CNH e documento do veículo pelo celular; transportadores enviam também ANTT/RNTRC.'],

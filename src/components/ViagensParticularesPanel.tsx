@@ -11,7 +11,7 @@ import { TripSafetyBar } from './TripSafetyBar.tsx';
 import { choosePoint, getCurrentCoords, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
 
 /**
- * Viagens particulares: o passageiro lança um pedido agendado para qualquer lugar do Brasil
+ * Viagens agendadas: o passageiro lança um pedido agendado para qualquer lugar do Brasil
  * (individual ou aceitando compartilhar) e diz quanto quer pagar; motoristas do Brasil inteiro
  * filtram por cidade e data, mandam propostas e montam a própria agenda.
  */
@@ -44,7 +44,7 @@ function ModoBadge({ r }: { r: InDriveRequest }) {
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold ${r.shareMode === 'individual' ? 'bg-violet-100 text-violet-800 dark:bg-violet-950/50 dark:text-violet-200' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'}`}>
       {r.shareMode === 'individual' ? <User className="w-3 h-3" /> : <Users className="w-3 h-3" />}
-      {r.shareMode === 'individual' ? 'Individual' : 'Aceita compartilhar'} · {r.seats ?? 1} pessoa(s)
+      {r.shareMode === 'individual' ? 'VIP' : 'Compartilhada'} · {r.seats ?? 1} pessoa(s)
     </span>
   );
 }
@@ -145,14 +145,14 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
       <SosButton
         kind="indrive"
         refId={r.id}
-        shareText={`Viagem particular de ${r.origin.name} para ${r.destination.name} (${quando(r)})${chosen ? `, motorista ${chosen.driverName}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}` : ''}.`}
+        shareText={`Viagem agendada de ${r.origin.name} para ${r.destination.name} (${quando(r)})${chosen ? `, motorista ${chosen.driverName}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}` : ''}.`}
       />
       <TripSafetyBar
         kind="indrive"
         tripId={r.id}
         me={isDriver ? 'driver' : 'passenger'}
         recording={r.recording}
-        shareText={chosen ? `Motorista ${chosen.driverName.split(' ')[0]}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}.` : 'Viagem particular pela Froc.'}
+        shareText={chosen ? `Motorista ${chosen.driverName.split(' ')[0]}, ${chosen.vehicleModel} placa ${chosen.vehiclePlate}.` : 'Viagem agendada pela Froc.'}
       />
     </>
   );
@@ -173,7 +173,7 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
     return (
       <div className="space-y-4 text-sm" data-testid="viagens-particulares-motorista">
         <p className="text-xs text-slate-600 dark:text-slate-300">
-          <strong className="text-slate-900 dark:text-white">Viagens particulares:</strong> pedidos agendados do Brasil inteiro. Procure pelas cidades por onde você vai passar, mande sua proposta e monte a sua agenda.
+          <strong className="text-slate-900 dark:text-white">Viagens agendadas:</strong> pedidos agendados do Brasil inteiro. Procure pelas cidades por onde você vai passar, mande sua proposta e monte a sua agenda.
         </p>
 
         <section className={box}>
@@ -291,8 +291,8 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
             <input aria-label="Dia" type="date" value={dia} onChange={(e) => setDia(e.target.value)} className={input} />
             <select aria-label="Tipo" value={tipo} onChange={(e) => setTipo(e.target.value as 'todas' | ShareMode)} className={input}>
               <option value="todas">Todas</option>
-              <option value="individual">Só individual</option>
-              <option value="compartilhada">Aceita compartilhar</option>
+              <option value="individual">Só VIP</option>
+              <option value="compartilhada">Só compartilhada</option>
             </select>
           </div>
           {vitrine.length === 0 && <p className="text-xs text-slate-600 dark:text-slate-300">Nenhum pedido com esses filtros. Tente outra cidade ou outro dia.</p>}
@@ -356,7 +356,7 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
   return (
     <div className="space-y-4 text-sm" data-testid="viagens-particulares-passageiro">
       <p className="text-xs text-slate-600 dark:text-slate-300">
-        <strong className="text-slate-900 dark:text-white">Viagens particulares:</strong> agende uma viagem para qualquer lugar do Brasil, só para você ou dividindo o carro, e combine o valor com motoristas que vão passar por lá.
+        <strong className="text-slate-900 dark:text-white">Viagens agendadas:</strong> agende uma viagem para qualquer lugar do Brasil, só para você ou dividindo o carro, e combine o valor com motoristas que vão passar por lá.
       </p>
 
       <form onSubmit={publish} className={box} noValidate>
@@ -389,8 +389,8 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
         <div role="radiogroup" aria-label="Tipo de viagem" className="grid grid-cols-2 gap-2">
           {(
             [
-              { id: 'individual', title: 'Individual', text: 'O carro só para você. Mais conforto e privacidade.', Icon: User },
-              { id: 'compartilhada', title: 'Aceito compartilhar', text: 'Divide o carro com outras pessoas e paga menos.', Icon: Users },
+              { id: 'individual', title: 'VIP', text: 'O carro só para você. Mais conforto e privacidade.', Icon: User },
+              { id: 'compartilhada', title: 'Compartilhada', text: 'Divide o carro com outras pessoas e paga menos.', Icon: Users },
             ] as const
           ).map((o) => (
             <button
@@ -426,7 +426,7 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
 
       <section className={box}>
         <h3 className="font-bold text-slate-900 dark:text-white">Meus pedidos</h3>
-        {meus.length === 0 && <p className="text-xs text-slate-600 dark:text-slate-300">Você ainda não lançou nenhuma viagem particular.</p>}
+        {meus.length === 0 && <p className="text-xs text-slate-600 dark:text-slate-300">Você ainda não lançou nenhuma viagem agendada.</p>}
         {meus.map((r) => {
           const chosen = r.offers.find((o) => o.id === r.acceptedOfferId);
           return (
