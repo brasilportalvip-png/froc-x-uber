@@ -196,8 +196,15 @@ export interface CarpoolTrip {
   driverId?: string;
   mine?: Involvement;
   status?: 'open' | 'completed' | 'cancelled';
-  /** Para o motorista: quem reservou. */
-  passengers?: { name: string; seats: number; phone?: string }[];
+  /** Para o motorista: quem reservou e a situação do embarque. */
+  passengers?: { bookingId?: string; name: string; seats: number; phone?: string; status?: 'paid' | 'boarded' | 'no_show' }[];
+  /** Para o passageiro: PIN de embarque de cada reserva (mostra ao motorista ao entrar no carro). */
+  boardingPins?: { pin: string; seats: number; status: string }[];
+  /** Quanto custa cancelar agora: passageiro (quanto volta) ou motorista (multa e caução). */
+  cancelPreview?: { refund?: number; paid?: number; penaltyPct?: number; penalty?: number; deposit?: number };
+  /** Já passou do horário de saída. */
+  departed?: boolean;
+  departureAt?: string;
   /** Telefone do motorista, visível só para quem reservou. */
   driverPhone?: string;
   driverName: string;
@@ -302,7 +309,7 @@ export interface FreightRequest {
 export interface WalletTransaction {
   id: string;
   title: string;
-  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa' | 'bonus' | 'entrega';
+  category: 'corrida' | 'indrive' | 'carona' | 'frete' | 'recarga_pix' | 'ganho_motorista' | 'estorno' | 'saque' | 'taxa' | 'bonus' | 'entrega' | 'caucao' | 'compensacao';
   amount: number;
   type: 'debit' | 'credit';
   date: string;

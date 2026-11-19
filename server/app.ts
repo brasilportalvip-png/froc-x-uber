@@ -394,6 +394,9 @@ export function createApp(options: AppOptions) {
   api.post('/carpools/:id/cancel-booking', wrap(async (req) => ({ trip: await (await service()).cancelCarpoolBooking(a(req), id(req)) })));
   api.post('/carpools/:id/complete', wrap(async (req) => ({ trip: await (await service()).finishCarpool(a(req), id(req), 'completed') })));
   api.post('/carpools/:id/cancel', wrap(async (req) => ({ trip: await (await service()).finishCarpool(a(req), id(req), 'cancelled') })));
+  // Embarque com PIN (com limite de tentativas) e passageiro que não apareceu (GPS no ponto de encontro).
+  api.post('/carpools/:id/board', limited, wrap(async (req) => ({ trip: await (await service()).boardCarpool(a(req), id(req), req.body?.pin) })));
+  api.post('/carpools/:id/no-show', limited, wrap(async (req) => ({ trip: await (await service()).carpoolNoShow(a(req), id(req), String(req.body?.bookingId || ''), req.body?.lat, req.body?.lng) })));
 
   api.post('/empty-trucks', limited, wrap(async (req) => (await service()).publishEmptyTruck(a(req), req.body || {})));
   api.post('/empty-trucks/:id/reserve', wrap(async (req) => ({ route: await (await service()).reserveEmptyTruck(a(req), id(req)) })));
