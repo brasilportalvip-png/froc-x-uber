@@ -18,7 +18,7 @@ import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
 import { holidayAt, platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
 import { privateTripFloor } from '../src/data/privateTrips.ts';
-import { CARPOOL_POLICY, departureMs, depositCentsFor, driverPenaltyPct, hoursUntil, kmBetween, passengerRefundPct, strikesAfter } from '../src/data/carpoolPolicy.ts';
+import { CARPOOL_POLICY, dataHoraLivreMs, departureMs, depositCentsFor, driverPenaltyPct, hoursUntil, kmBetween, passengerRefundPct, strikesAfter } from '../src/data/carpoolPolicy.ts';
 import type { PriceBreakdown, RainLevel, RideCategoryKey, RiskZoneLike } from '../src/data/pricing.ts';
 import type { RainLookup } from './weather.ts';
 import type { FaceChecker, Img } from './faceCheck.ts';
@@ -2480,6 +2480,7 @@ export class FrocService {
       date,
       departureTime,
       departureAt: new Date(dep).toISOString(),
+      expireDeadline: minuteKey(dep),
       arrivalTime: `${String(Math.floor(arr / 60)).padStart(2, '0')}:${String(arr % 60).padStart(2, '0')}`,
       distanceKm,
       pricePerSeat: round2(num(body.pricePerSeat, 5, 2000, 'preço por vaga')),
@@ -2789,6 +2790,8 @@ export class FrocService {
       destination,
       distanceKm,
       departureDate: text(body.departureDate, 60) || fail(400, 'invalid_date', 'Informe a data de saída.'),
+      // Horário de verdade (Brasília): some das listas e encerra sozinho quando passar.
+      departureAt: new Date(this.freeDate(body.departureDate, 'saída')).toISOString(),
       departureWindow: text(body.departureWindow, 120) || 'Combinar horário pelo telefone após a reserva',
       direction: ['indo_vazio', 'voltando_vazio', 'espaco_parcial'].includes(String(body.direction)) ? body.direction : 'voltando_vazio',
       availableTons: round2(num(body.availableTons, 0.1, 60, 'toneladas')),
@@ -2801,7 +2804,7 @@ export class FrocService {
       status: 'available',
       createdAt: this.iso(),
     };
-    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint), { expireDeadline: minuteKey(Date.parse(String(doc.departureAt))) });
     await this.store.set('emptyTrucks', id, doc);
     return this.truckView(doc, auth.uid);
   }
@@ -2891,12 +2894,13 @@ export class FrocService {
       minimumPrice: freightFloor(distanceKm),
       proposedBudget: round2(num(body.proposedBudget, 50, 200000, 'orçamento')),
       scheduledDate: text(body.scheduledDate, 60) || fail(400, 'invalid_date', 'Informe a data da coleta.'),
+      scheduledAt: new Date(this.freeDate(body.scheduledDate, 'coleta')).toISOString(),
       status: 'open_bids',
       bids: [],
       escrowCents: 0,
       createdAt: this.iso(),
     };
-    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint), { expireDeadline: minuteKey(Date.parse(String(doc.scheduledAt))) });
     await this.store.set('freights', id, doc);
     return this.freightView(doc, auth.uid);
   }
@@ -3023,6 +3027,56 @@ export class FrocService {
     // Quem fez a ação já atualiza a própria tela: o aviso vai só para as outras pessoas.
     ids.delete(actorUid);
     this.signal(ids);
+  }
+
+  /** Data digitada no frete/retorno vazio → horário (ms). Já passou ou não entendeu: pede de novo. */
+  private freeDate(value: unknown, what: string): number {
+    const ms = dataHoraLivreMs(String(value ?? ''), this.now().getTime());
+    if (ms === null) fail(400, 'invalid_date', `Não entendi a data de ${what}. Escreva assim: 20/12 às 8h (ou 20/12/2026 às 8h).`);
+    if (ms! < this.now().getTime()) fail(400, 'invalid_date', `A data de ${what} já passou. Confira o dia e o horário.`);
+    return ms!;
+  }
+
+  /** Quando a oferta/pedido vence (ms): saída da carona, do retorno vazio, coleta do frete, viagem agendada. */
+  listingDeparture(col: string, d: Doc): number | null {
+    if (col === 'carpools') return this.carpoolDeparture(d);
+    if (col === 'indrive') return this.privateDeparture(d);
+    const iso = Date.parse(String((col === 'freights' ? d.scheduledAt : d.departureAt) || ''));
+    if (Number.isFinite(iso)) return iso;
+    // Antigos (só o texto digitado): lê o texto a partir da data em que foi criado.
+    const created = Date.parse(String(d.createdAt || '')) || this.now().getTime();
+    return dataHoraLivreMs(String((col === 'freights' ? d.scheduledDate : d.departureDate) || ''), created);
+  }
+
+  /** Já passou do horário (vale para a vitrine: some na hora, antes mesmo da varredura). */
+  private isPast(col: string, d: Doc) {
+    const dep = this.listingDeparture(col, d);
+    return dep !== null && dep <= this.now().getTime();
+  }
+
+  /** Encerrada por vencimento (não aparece em lista nenhuma). */
+  private static expiredOut(d: Doc) {
+    return d.status === 'cancelled' && ['vencida', 'timeout'].includes(String(d.cancelledBy));
+  }
+
+  /**
+   * Oferta que passou do horário sem compromisso: encerra sozinha (some da tela de todos).
+   * Carona com passageiro reservado NÃO: o motorista encerra (regra do dono); só some da vitrine.
+   * Frete com lance aceito e retorno vazio reservado já não estão "abertos": não entram aqui.
+   */
+  private async expireListing(col: string, d: Doc): Promise<boolean> {
+    const open = col === 'carpools' ? 'open' : col === 'emptyTrucks' ? 'available' : 'open_bids';
+    if (!this.isPast(col, d)) return false;
+    if (col === 'carpools') {
+      const bookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', String(d.id)]], 50);
+      if (bookings.some((b) => CARPOOL_ACTIVE.includes(String(b.status)))) return false;
+    }
+    return this.store.transaction(async (tx) => {
+      const cur = await tx.get<Doc>(col, String(d.id));
+      if (!cur || cur.status !== open) return false;
+      tx.update(col, String(d.id), { status: 'cancelled', cancelledBy: 'vencida', cancelledAt: this.iso() });
+      return true;
+    });
   }
 
   /** Os mais novos de uma pessoa: o banco ordena ANTES do limite (histórico grande não esconde nada). */
@@ -3276,13 +3330,26 @@ export class FrocService {
       if (ok) deals++;
       return ok;
     };
-    await this.forEachDue('rides', 'searching', 'searchDeadline', minutes, expireRide);
-    await this.forEachDue('indrive', 'open', 'expireDeadline', minutes, expireRequest);
+    let vencidas = 0;
+    const expire = (col: string) => async (d: Doc) => {
+      const ok = await this.expireListing(col, d);
+      if (ok) vencidas++;
+      return ok;
+    };
+    await Promise.all([
+      this.forEachDue('rides', 'searching', 'searchDeadline', minutes, expireRide),
+      this.forEachDue('indrive', 'open', 'expireDeadline', minutes, expireRequest),
+      this.forEachDue('carpools', 'open', 'expireDeadline', minutes, expire('carpools')),
+      this.forEachDue('emptyTrucks', 'available', 'expireDeadline', minutes, expire('emptyTrucks')),
+      this.forEachDue('freights', 'open_bids', 'expireDeadline', minutes, expire('freights')),
+    ]);
     // Rede de segurança só no agendador: pedidos antigos (sem o minuto do prazo) ou que passaram
     // enquanto o servidor ficou parado. Cada um confere o próprio prazo antes de cancelar.
     if (force) {
       for (const r of await this.store.query<Doc>('rides', [['status', '==', 'searching']], 300)) await expireRide(r).catch(() => false);
       for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) await expireRequest(r).catch(() => false);
+      for (const [col, st] of [['carpools', 'open'], ['emptyTrucks', 'available'], ['freights', 'open_bids']])
+        for (const d of await this.store.query<Doc>(col, [['status', '==', st]], 300)) await expire(col)(d).catch(() => false);
     }
     // Corrida aceita que não começou em 30 min: valor volta ao passageiro.
     const esquecidas = await this.closeStaleTrips(now, minutes, force).catch((e) => ({ erro: String(e?.message || e) }));
@@ -3292,7 +3359,7 @@ export class FrocService {
     const saques = force ? await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) })) : null;
     const chaves = force ? await this.backfillListingKeys().catch((e) => ({ erro: String(e?.message || e) })) : null;
     const lojas = force ? await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) })) : null;
-    return { ridesCancelled: rides, requestsExpired: deals, esquecidas, webhooks, saques, lojas, chaves };
+    return { ridesCancelled: rides, requestsExpired: deals, vencidas, esquecidas, webhooks, saques, lojas, chaves };
   }
 
   /**
@@ -3316,7 +3383,7 @@ export class FrocService {
         const escrow = Number(ride.escrowCents || 0);
         tx.update('rides', String(ride.id), { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'timeout_driver', cancellationFeePercent: 0, cancellationFee: 0 });
         if (passenger && escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} não começou em ${STALE_ACCEPTED_MIN} min`, 'estorno');
-        return { ...ride, status: 'cancelled', cancelledBy: 'timeout_driver' };
+        return { ...ride, status: 'cancelled', cancelledBy: 'timeout_driver' } as Doc;
       });
       if (!done) return false;
       out.corridasCanceladas++;
@@ -3953,29 +4020,37 @@ export class FrocService {
       ).flat(),
     );
     const uid = auth.uid;
+    // Busca por cidade: só o que ainda não passou do horário.
+    const nowMs = this.now().getTime();
+    for (let i = found.length - 1; i >= 0; i--) {
+      const dep = this.listingDeparture(col, found[i]);
+      if (dep !== null && dep <= nowMs) found.splice(i, 1);
+    }
     if (col === 'carpools') {
       const mine = await this.inStatus('carpoolBookings', 'passengerId', uid, CARPOOL_ACTIVE, 100);
       return { items: found.filter((t) => t.driverId !== uid).map((t) => this.carpoolView(t, uid, mine)) };
     }
     if (col === 'emptyTrucks') return { items: found.filter((t) => t.truckerId !== uid).map((t) => this.truckView(t, uid)) };
     if (col === 'freights') return { items: found.filter((f) => f.clientId !== uid).map((f) => this.freightView(f, uid)) };
-    const nowMs = this.now().getTime();
     return { items: found.filter((r) => r.passengerId !== uid && (this.privateDeparture(r) ?? 0) > nowMs).map((r) => this.indriveView(r, uid)) };
   }
 
   /** Ofertas antigas (antes da busca por região): ganham as chaves de busca. Só no agendador. */
   private async backfillListingKeys() {
     // Já terminou uma vez: não relê as ofertas a cada rodada do agendador.
-    if ((await this.store.get<Doc>('settings', 'listing_keys'))?.done) return 0;
+    if ((await this.store.get<Doc>('settings', 'listing_keys_v2'))?.done) return 0;
     let n = 0;
     for (const [col, status] of [['carpools', 'open'], ['emptyTrucks', 'available'], ['freights', 'open_bids'], ['indrive', 'open']]) {
       for (const d of await this.store.query<Doc>(col, [['status', '==', status]], 300)) {
-        if (d.originRegion || !d.origin || !d.destination) continue;
-        await this.store.update(col, String(d.id), this.listingKeys(d.origin as GeoPoint, d.destination as GeoPoint)).catch(() => undefined);
+        if ((d.originRegion && d.expireDeadline) || !d.origin || !d.destination) continue;
+        const dep = this.listingDeparture(col, d);
+        await this.store
+          .update(col, String(d.id), { ...this.listingKeys(d.origin as GeoPoint, d.destination as GeoPoint), ...(dep !== null ? { expireDeadline: minuteKey(dep) } : {}) })
+          .catch(() => undefined);
         n++;
       }
     }
-    if (n === 0) await this.store.set('settings', 'listing_keys', { done: true, at: this.iso() });
+    if (n === 0) await this.store.set('settings', 'listing_keys_v2', { done: true, at: this.iso() });
     return n;
   }
 
@@ -4034,7 +4109,8 @@ export class FrocService {
       this.myWithdrawals(uid),
     ]);
 
-    const bookedTripIds = new Set(myBookings.filter((b) => b.status === 'paid').map((b) => String(b.tripId)));
+    // Reservas ativas (pagas, embarcadas ou com falta registrada): a carona continua na tela da pessoa.
+    const bookedTripIds = new Set(myBookings.filter((b) => CARPOOL_ACTIVE.includes(String(b.status))).map((b) => String(b.tripId)));
     const bookedTrips = (
       await Promise.all([...bookedTripIds].filter((id) => !openCarpools.some((c) => c.id === id)).map((id) => this.store.get<Doc>('carpools', id)))
     ).filter(Boolean) as Doc[];
@@ -4045,8 +4121,13 @@ export class FrocService {
       ),
     );
 
+    // Vencidos (passaram do horário sem compromisso) não aparecem em lista nenhuma.
     const recent = <T extends Doc>(items: T[], keep: (i: T) => boolean) =>
       byNewest(uniqueById(items)).filter(keep).slice(0, 40);
+    // Carona, frete, retorno vazio e viagem agendada: as vencidas não ficam em lista nenhuma.
+    const listing = <T extends Doc>(items: T[], keep: (i: T) => boolean) => recent(items, (i) => keep(i) && !FrocService.expiredOut(i));
+    // Vitrine pública: só o que ainda não passou do horário.
+    const upcoming = (col: string) => (d: Doc) => !this.isPast(col, d);
     const notOld = (i: Doc) => !['completed', 'cancelled', 'delivered'].includes(String(i.status)) || String(i.createdAt) > new Date(this.now().getTime() - 30 * 864e5).toISOString();
 
     // Tempo real: zonas que o motorista online escuta (pedido novo perto dele).
@@ -4064,18 +4145,19 @@ export class FrocService {
       ).map((r) => this.rideView(r, uid)),
       // Viagens agendadas: as minhas + todos os pedidos abertos do Brasil (o motorista filtra por cidade e data).
       indriveRequests: [
-        ...recent([...myInDrive, ...drivingInDrive], notOld),
+        ...listing([...myInDrive, ...drivingInDrive], notOld),
         ...uniqueById(openInDrive)
           .filter((r) => r.passengerId !== uid && r.status === 'open' && !drivingInDrive.some((d) => d.id === r.id))
           .filter((r) => (this.privateDeparture(r) ?? 0) > this.now().getTime())
           .sort((a, b) => (this.privateDeparture(a) ?? 0) - (this.privateDeparture(b) ?? 0))
           .slice(0, 150),
       ].map((r) => this.indriveView(r, uid)),
-      carpools: recent([...openCarpools, ...myCarpools, ...bookedTrips], notOld).map((c) =>
+      // Vitrine sem vencidas — exceto as da própria pessoa (motorista ou passageiro com reserva).
+      carpools: listing([...(openCarpools as Doc[]).filter((c) => upcoming('carpools')(c) || c.driverId === uid || bookedTripIds.has(String(c.id))), ...myCarpools, ...bookedTrips], notOld).map((c) =>
         this.carpoolView(c, uid, myBookings, driverTripBookings.get(String(c.id))),
       ),
-      emptyTrucks: recent([...availableTrucks, ...myTrucks, ...reservedTrucks], notOld).map((t) => this.truckView(t, uid)),
-      freights: recent([...myFreights, ...wonFreights, ...openFreights.filter((f) => f.clientId !== uid)], notOld).map((f) => this.freightView(f, uid)),
+      emptyTrucks: listing([...(availableTrucks as Doc[]).filter(upcoming('emptyTrucks')), ...myTrucks, ...reservedTrucks], notOld).map((t) => this.truckView(t, uid)),
+      freights: listing([...myFreights, ...wonFreights, ...(openFreights as Doc[]).filter((f) => f.clientId !== uid).filter(upcoming('freights'))], notOld).map((f) => this.freightView(f, uid)),
       transactions,
       withdrawals,
       ...(isMerchant ? { deliveries: byNewest(merchantDeliveries as Doc[]).slice(0, 60).map((r) => this.deliveryView(r)) } : {}),

@@ -14,6 +14,16 @@ export interface SupportMessage {
   by?: string;
 }
 
+/** Reclamação registrada de verdade (com protocolo), visível para a equipe no Admin. */
+export interface SupportTicket {
+  protocolo: string;
+  categoria: string;
+  resumo: string;
+  detalhes: string;
+  status: 'aberta' | 'resolvida';
+  createdAt: string;
+}
+
 export interface SupportChat extends Doc {
   uid: string;
   name: string;
@@ -23,6 +33,7 @@ export interface SupportChat extends Doc {
   needsHuman: boolean;
   reason?: string;
   messages: SupportMessage[];
+  tickets?: SupportTicket[];
   updatedAt: string;
   createdAt: string;
 }
@@ -70,6 +81,34 @@ export class SupportDesk {
     return { ok: true };
   }
 
+  /**
+   * Registra a reclamação (só depois de gravada a Froc pode dizer "registrei"). Devolve o protocolo.
+   * A conversa vai para a equipe ("precisa de gente") com o protocolo no motivo.
+   */
+  async addTicket(user: { uid: string; name?: string; email?: string }, t: { categoria?: unknown; resumo?: unknown; detalhes?: unknown }) {
+    const resumo = String(t.resumo ?? '').trim().slice(0, 300);
+    if (!resumo) throw new Error('resumo_vazio');
+    const day = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '');
+    const protocolo = `FROC-${day}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const ticket: SupportTicket = {
+      protocolo,
+      categoria: String(t.categoria ?? 'outro').trim().slice(0, 40) || 'outro',
+      resumo,
+      detalhes: String(t.detalhes ?? '').trim().slice(0, 1500),
+      status: 'aberta',
+      createdAt: now(),
+    };
+    const chat = (await this.get(user.uid)) ?? (await this.append(user, 'froc', 'Atendimento aberto.', 'Froc'))!;
+    await this.store.update('support', user.uid, {
+      tickets: [...(chat.tickets || []), ticket].slice(-30),
+      needsHuman: true,
+      status: 'open',
+      reason: `[${protocolo}] ${resumo}`.slice(0, 300),
+      updatedAt: now(),
+    });
+    return ticket;
+  }
+
   async close(uid: string) {
     const chat = await this.get(uid);
     if (!chat) return null;
@@ -89,6 +128,7 @@ export class SupportDesk {
         email: c.email,
         needsHuman: c.needsHuman,
         reason: c.reason || '',
+        protocolos: (c.tickets || []).filter((t) => t.status === 'aberta').map((t) => t.protocolo),
         lastMessage: c.messages?.[c.messages.length - 1]?.text?.slice(0, 160) || '',
         updatedAt: c.updatedAt,
       }));

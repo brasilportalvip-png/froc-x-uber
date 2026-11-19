@@ -75,7 +75,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // Perto da pessoa + a cidade digitada, buscada no Brasil inteiro pelo servidor.
-  const allCarpools = useCitySearch('carpools', searchText, carpools);
+  const allCarpools = useCitySearch<CarpoolTrip>('carpools', searchText, carpools);
   const filtered = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     return allCarpools.filter((c) => {

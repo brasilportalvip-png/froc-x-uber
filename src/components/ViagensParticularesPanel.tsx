@@ -133,7 +133,7 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
 
   const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   // Pedidos perto do motorista + a cidade digitada, buscada no Brasil inteiro pelo servidor.
-  const comBusca = useCitySearch('indrive', isDriver ? busca : '', requests);
+  const comBusca = useCitySearch<InDriveRequest>('indrive', isDriver ? busca : '', requests);
   const vitrine = comBusca
     .filter((r) => r.status === 'open' && r.mine !== 'owner')
     .filter((r) => !busca.trim() || norm(`${r.origin.city} ${r.origin.name} ${r.destination.city} ${r.destination.name} ${r.pickupSpot || ''}`).includes(norm(busca.trim())))

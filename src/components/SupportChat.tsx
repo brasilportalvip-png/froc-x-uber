@@ -49,6 +49,16 @@ export const SupportChat: React.FC = () => {
     }
   }, [open, msgs]);
 
+  // Esc fecha a conversa (computador).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const m = text.trim();
@@ -82,9 +92,20 @@ export const SupportChat: React.FC = () => {
       {open && (
         <div className="fixed z-40 right-3 left-3 sm:left-auto bottom-36 lg:bottom-24 sm:w-96 froc-frame froc-pop" role="dialog" aria-label="Atendimento Froc">
           <div className="bg-white dark:bg-[#0b0b0c] flex flex-col max-h-[65vh]">
-            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
-              <div className="font-display font-extrabold froc-logo">Atendimento Froc</div>
-              <div className="text-[11px] text-slate-500">A Froc responde na hora; se precisar, a equipe assume aqui mesmo.</div>
+            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="font-display font-extrabold froc-logo">Atendimento Froc</div>
+                <div className="text-[11px] text-slate-500">A Froc responde na hora; se precisar, a equipe assume aqui mesmo.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Fechar conversa"
+                data-testid="support-close"
+                className="shrink-0 -mr-1 -mt-1 w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto froc-scroll p-3 space-y-2 text-xs">
               {!msgs.length && (
