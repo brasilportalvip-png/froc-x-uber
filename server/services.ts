@@ -88,10 +88,8 @@ const DELIVERY_SEARCH_MIN = 20;
 const SHARE_TTL_MS = 24 * 3600_000;
 const SHARE_AFTER_END_MS = 2 * 3600_000;
 const ACTIVE_RIDE = ['searching', 'accepted', 'arriving', 'in_progress'];
-/** Prazos do encerramento automático (horas): corrida aceita sem começar, corrida sem finalizar, viagem/carona passada. */
-export const STALE_ACCEPTED_H = 3;
-export const STALE_IN_PROGRESS_H = 12;
-export const STALE_TRIP_H = 48;
+/** Corrida aceita que o motorista não iniciou em 30 min: cancelada e 100% de volta ao passageiro. */
+export const STALE_ACCEPTED_MIN = 30;
 
 const DELIVERY_STATUS: Record<string, [DeliveryStatus, string]> = {
   searching: ['procurando_entregador', 'Procurando entregador'],
@@ -3150,10 +3148,9 @@ export class FrocService {
       await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
       deals++;
     }
-    // Dinheiro retido nunca fica preso: o que o motorista esqueceu de encerrar, o sistema encerra.
-    // (no máximo a cada 10 min por servidor, para não gastar leituras do banco à toa)
+    // Corrida aceita que não começou em 30 min: valor volta ao passageiro (confere a cada 2 min).
     let esquecidas: unknown = null;
-    if (force || Date.now() - this.lastStaleSweep > 10 * 60_000) {
+    if (force || Date.now() - this.lastStaleSweep > 2 * 60_000) {
       this.lastStaleSweep = Date.now();
       esquecidas = await this.closeStaleTrips(now).catch((e) => ({ erro: String(e?.message || e) }));
     }
@@ -3166,66 +3163,37 @@ export class FrocService {
   }
 
   /**
-   * Encerramento automático do que ficou parado (o valor retido não fica preso para sempre):
-   *  - corrida aceita/no embarque sem começar por STALE_ACCEPTED_H → cancelada, 100% de volta ao passageiro;
-   *  - corrida iniciada com PIN e não finalizada em STALE_IN_PROGRESS_H → finalizada (o motorista recebe);
-   *  - viagem agendada e carona passadas STALE_TRIP_H do horário → encerradas pelas regras de sempre
-   *    (recebe só quem embarcou com PIN ou faltou com prova de GPS; o resto volta ao passageiro).
-   * Entregas de loja em andamento não são finalizadas sozinhas (dependem do código do cliente).
+   * Corrida aceita (ou com o motorista no embarque) que não começou em STALE_ACCEPTED_MIN minutos:
+   * cancelada sem custo e o valor retido volta 100% para o passageiro, como no Uber.
+   * (Corrida com PIN termina quando o motorista toca em Finalizar; viagens agendadas e caronas,
+   * quando o motorista encerra. Nada disso espera prazo.)
    */
   private async closeStaleTrips(now: number) {
-    const as = (uid: unknown): AuthUser => ({ uid: String(uid), email: '', emailVerified: true });
-    const older = (iso: unknown, hours: number) => {
+    const older = (iso: unknown) => {
       const t = Date.parse(String(iso || ''));
-      return Number.isFinite(t) && now - t > hours * 3600_000;
+      return Number.isFinite(t) && now - t > STALE_ACCEPTED_MIN * 60_000;
     };
-    const out = { corridasCanceladas: 0, corridasFinalizadas: 0, viagens: 0, caronas: 0 };
+    const out = { corridasCanceladas: 0 };
     const waiting = [
       ...(await this.store.query<Doc>('rides', [['status', '==', 'accepted']], 300)),
       ...(await this.store.query<Doc>('rides', [['status', '==', 'arriving']], 300)),
     ];
     for (const r of waiting) {
-      if (!older(r.acceptedAt || r.createdAt, STALE_ACCEPTED_H)) continue;
+      if (!older(r.acceptedAt || r.createdAt)) continue;
       const done = await this.store.transaction(async (tx) => {
         const ride = await tx.get<Doc>('rides', String(r.id));
-        if (!ride || !['accepted', 'arriving'].includes(String(ride.status)) || !older(ride.acceptedAt || ride.createdAt, STALE_ACCEPTED_H)) return null;
+        if (!ride || !['accepted', 'arriving'].includes(String(ride.status)) || !older(ride.acceptedAt || ride.createdAt)) return null;
         const passenger = await tx.get<UserDoc>('users', String(ride.passengerId));
         const escrow = Number(ride.escrowCents || 0);
         tx.update('rides', String(ride.id), { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'timeout_driver', cancellationFeePercent: 0, cancellationFee: 0 });
-        if (passenger && escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} não aconteceu (motorista não iniciou)`, 'estorno');
+        if (passenger && escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} não começou em ${STALE_ACCEPTED_MIN} min`, 'estorno');
         return { ...ride, status: 'cancelled', cancelledBy: 'timeout_driver' };
       });
       if (!done) continue;
       out.corridasCanceladas++;
       if (done.delivery) await this.deliveryEvent(done);
       if (done.driverId) await this.promoteDriverQueue(String(done.driverId)).catch(() => undefined);
-      await this.audit(null, 'corrida_encerrada_pelo_sistema', String(done.id), { motivo: 'motorista não iniciou', estorno: true });
-    }
-    for (const r of await this.store.query<Doc>('rides', [['status', '==', 'in_progress']], 300)) {
-      if (r.delivery || !r.driverId || !older(r.startedAt, STALE_IN_PROGRESS_H)) continue;
-      const ok = await this.rideAction(as(r.driverId), String(r.id), { action: 'complete' }).then(() => true, (e) => (console.warn('Finalização automática falhou:', r.id, e?.message), false));
-      if (ok) {
-        out.corridasFinalizadas++;
-        await this.audit(null, 'corrida_encerrada_pelo_sistema', String(r.id), { motivo: 'motorista não finalizou' });
-      }
-    }
-    for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'matched']], 300)) {
-      const dep = this.privateDeparture(r);
-      if (dep === null || !r.driverId || now < dep + (Number(r.durationMin || 0) * 60_000) + STALE_TRIP_H * 3600_000) continue;
-      const ok = await this.completeInDrive(as(r.driverId), String(r.id)).then(() => true, (e) => (console.warn('Encerramento automático falhou:', r.id, e?.message), false));
-      if (ok) {
-        out.viagens++;
-        await this.audit(null, 'viagem_encerrada_pelo_sistema', String(r.id), { embarque: r.boardingStatus || 'sem_confirmacao' });
-      }
-    }
-    for (const t of await this.store.query<Doc>('carpools', [['status', '==', 'open']], 300)) {
-      const dep = this.carpoolDeparture(t);
-      if (dep === null || now < dep + STALE_TRIP_H * 3600_000) continue;
-      const ok = await this.finishCarpool(as(t.driverId), String(t.id), 'completed').then(() => true, (e) => (console.warn('Encerramento automático falhou:', t.id, e?.message), false));
-      if (ok) {
-        out.caronas++;
-        await this.audit(null, 'carona_encerrada_pelo_sistema', String(t.id));
-      }
+      await this.audit(null, 'corrida_cancelada_sem_inicio', String(done.id), { minutos: STALE_ACCEPTED_MIN, estorno: true });
     }
     return out;
   }
