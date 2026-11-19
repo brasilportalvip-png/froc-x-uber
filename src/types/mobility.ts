@@ -417,6 +417,8 @@ export interface UserProfile {
 }
 
 export interface AppBootstrapState {
+  /** Tempo real: zonas que o motorista online escuta (pedido novo perto dele). */
+  live?: { zones: string[] };
   profile: UserProfile;
   rides: RideOrder[];
   indriveRequests: InDriveRequest[];

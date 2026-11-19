@@ -125,6 +125,8 @@ export function buildApp() {
       firebase: readWebConfig(),
       mapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '',
       paymentsEnabled: Boolean(process.env.MERCADO_PAGO_ACCESS_TOKEN && publicSiteUrl()),
+      // Tempo real: o app escuta os avisos em <prefixo>signals/<uid> (só leitura, só os próprios).
+      firestore: { prefix: COLLECTION_PREFIX, databaseId: process.env.FIRESTORE_DATABASE_ID || '' },
     }),
   });
 }
