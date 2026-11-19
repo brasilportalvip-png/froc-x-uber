@@ -13,6 +13,7 @@
  * - Nada é simulado: sem motorista inventado, sem saldo inventado, sem pagamento sem cobrança.
  */
 import { CARGO_VEHICLE_TYPES } from '../src/data/cargoVehicles.ts';
+import { normalizePixKey, resolvePixKeyType } from '../src/lib/pixKey.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
 import { platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
@@ -42,6 +43,7 @@ import type {
   TruckType,
   UserProfile,
   WalletTransaction,
+  MyWithdrawalView,
 } from '../src/types/mobility.ts';
 import type { Doc, Store, Tx } from './store.ts';
 import { DEFAULT_SETTINGS, REDEEM_VALUE_CENTS, SETTINGS_LIMITS } from './settings.ts';
@@ -108,18 +110,7 @@ function straightKm(a: { lat: number; lng: number }, b: { lat: number; lng: numb
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
 
-/** Descobre o tipo da chave Pix (ou '' se não parece uma chave válida). */
-export function pixKeyKind(key: string): string {
-  const k = key.trim();
-  const digits = k.replace(/\D/g, '');
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(k)) return 'email';
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return 'aleatoria';
-  if (/^\+?55/.test(k.replace(/[\s()-]/g, '')) && (digits.length === 12 || digits.length === 13)) return 'telefone';
-  if (digits.length === 14 && /^[\d./-]+$/.test(k)) return 'cnpj';
-  if (digits.length === 11 && /^[\d.-]+$/.test(k)) return 'cpf';
-  if ((digits.length === 10 || digits.length === 11) && /^[\d\s()+-]+$/.test(k)) return 'telefone';
-  return '';
-}
+export { pixKeyKind } from '../src/lib/pixKey.ts';
 
 /** Mostra só o começo e o fim da chave Pix no extrato. */
 const maskPix = (key: string) => (key.length <= 6 ? key : `${key.slice(0, 3)}…${key.slice(-3)}`);
@@ -796,14 +787,11 @@ export class FrocService {
   async requestWithdrawal(auth: AuthUser, amountReais: unknown, pixKey: unknown, pixKeyType?: unknown) {
     await this.identityGateFor(auth);
     const amountCents = toCents(num(amountReais, MIN_WITHDRAWAL_CENTS / 100, 50000, 'saque'));
-    const key = text(pixKey, 120);
-    const detected = pixKeyKind(key);
-    if (!detected) fail(400, 'invalid_pix_key', 'Chave Pix inválida. Use CPF, CNPJ, e-mail, celular com DDD ou chave aleatória.');
-    const chosen = String(pixKeyType || '');
-    // 11 números pode ser CPF ou celular: vale o tipo escolhido pela pessoa.
-    const ambiguous = key.replace(/\D/g, '').length === 11 && ['cpf', 'telefone'].includes(chosen);
-    if (chosen && chosen !== detected && !ambiguous) fail(400, 'pix_type_mismatch', 'O tipo escolhido não combina com a chave Pix digitada. Confira.');
-    const type = ambiguous ? chosen : detected;
+    const typed = text(pixKey, 120);
+    // A chave digitada manda no tipo (e-mail com "CPF" marcado era recusado e o saque "não funcionava").
+    const type = resolvePixKeyType(typed, String(pixKeyType || ''));
+    if (!type) fail(400, 'invalid_pix_key', 'Chave Pix inválida. Use CPF, CNPJ, e-mail, celular com DDD ou chave aleatória.');
+    const key = normalizePixKey(typed, type as Exclude<typeof type, ''>);
     const id = randomUUID();
     await this.store.transaction(async (tx) => {
       const user = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Usuário');
@@ -816,7 +804,20 @@ export class FrocService {
       tx.update('users', user.uid, { earnedCents: user.earnedCents });
       tx.set('withdrawals', id, { id, uid: user.uid, name: user.name, amountCents, pixKey: key, pixKeyType: type, status: 'pending', createdAt: this.iso() });
     });
-    return { id };
+    return { id, status: 'pending' as const, pixKey: key, pixKeyType: type };
+  }
+
+  /** Pedidos de Pix da própria pessoa, com a situação de cada um (para ela acompanhar no app). */
+  async myWithdrawals(uid: string): Promise<MyWithdrawalView[]> {
+    const items = byNewest(await this.store.query<Doc>('withdrawals', [['uid', '==', uid]], 100)).slice(0, 10);
+    return items.map((w) => ({
+      id: String(w.id),
+      amount: toReais(Number(w.amountCents)),
+      pixKey: maskPix(String(w.pixKey)),
+      pixKeyType: String(w.pixKeyType || ''),
+      status: (['pending', 'approved', 'paid', 'rejected'].includes(String(w.status)) ? String(w.status) : 'pending') as MyWithdrawalView['status'],
+      date: new Date(String(w.createdAt)).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }),
+    }));
   }
 
   // ------------------------------------------- cadastro de motorista/caminhoneiro
@@ -2948,6 +2949,7 @@ export class FrocService {
       openFreights,
       transactions,
       merchantDeliveries,
+      withdrawals,
     ] = await Promise.all([
       q('rides', 'passengerId', uid),
       isDriver ? q('rides', 'driverId', uid) : [],
@@ -2966,6 +2968,7 @@ export class FrocService {
       isTrucker ? q('freights', 'status', 'open_bids', 40) : [],
       this.transactions(uid),
       isMerchant ? q('rides', 'merchantId', uid, 200) : [],
+      this.myWithdrawals(uid),
     ]);
 
     const bookedTripIds = new Set(myBookings.filter((b) => b.status === 'paid').map((b) => String(b.tripId)));
@@ -2997,6 +3000,7 @@ export class FrocService {
       emptyTrucks: recent([...availableTrucks, ...myTrucks, ...reservedTrucks], notOld).map((t) => this.truckView(t, uid)),
       freights: recent([...myFreights, ...wonFreights, ...openFreights.filter((f) => f.clientId !== uid)], notOld).map((f) => this.freightView(f, uid)),
       transactions,
+      withdrawals,
       ...(isMerchant ? { deliveries: byNewest(merchantDeliveries as Doc[]).slice(0, 60).map((r) => this.deliveryView(r)) } : {}),
     };
   }

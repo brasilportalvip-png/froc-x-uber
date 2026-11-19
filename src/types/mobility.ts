@@ -308,6 +308,18 @@ export interface WalletTransaction {
   date: string;
 }
 
+/** Pedido de Pix (saque) da própria pessoa (o admin usa WithdrawalView). */
+export interface MyWithdrawalView {
+  id: string;
+  amount: number;
+  /** Chave mascarada (começo…fim). */
+  pixKey: string;
+  pixKeyType: string;
+  /** pending = em análise · approved = liberado, Pix a enviar · paid = Pix enviado · rejected = recusado e devolvido */
+  status: 'pending' | 'approved' | 'paid' | 'rejected';
+  date: string;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -370,6 +382,8 @@ export interface AppBootstrapState {
   emptyTrucks: EmptyTruckRoute[];
   freights: FreightRequest[];
   transactions: WalletTransaction[];
+  /** Pedidos de Pix da pessoa (últimos 10). */
+  withdrawals?: MyWithdrawalView[];
   /** Entregas da loja (só para contas de loja aprovadas). */
   deliveries?: DeliveryView[];
 }

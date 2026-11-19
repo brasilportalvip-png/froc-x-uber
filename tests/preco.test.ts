@@ -163,7 +163,7 @@ describe('corrida de verdade com o novo preço', () => {
     const q = await svc.quoteRide(ana, SP);
     assert.equal(q.risk?.name, 'Área de teste');
     const x = q.prices.find((p) => p.categoryId === 'froc_x')!;
-    assert.ok(x.breakdown.risk!.amount > 0);
+    assert.ok((x.breakdown.risk as { amount: number }).amount > 0);
   });
 });
 
@@ -189,7 +189,7 @@ describe('Equipe IA no comando: saques e lojas', () => {
     const { id } = await svc.requestWithdrawal(caio, 100, '168.995.350-09', 'cpf');
     await svc.autoProcessWithdrawals();
     assert.equal((await store.get<Record<string, unknown>>('withdrawals', id))?.status, 'paid');
-    assert.deepEqual(sentPix, ['168.995.350-09:10000']);
+    assert.deepEqual(sentPix, ['16899535009:10000'], 'chave vai ao banco só com números');
   });
 
   test('acima do limite, sem CPF verificado ou com multiconta: fica para o Financeiro analisar', async () => {
