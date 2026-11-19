@@ -7,6 +7,7 @@
  *  4. Foto de perfil de quem tem viagem agendada aberta ficava visível para qualquer conta.
  *  5. Token com "kid" inventado fazia o servidor buscar as chaves do Google a cada requisição.
  *  6. Escala Brasil inteiro: buscas por região (zonas) e prazos por minuto, nunca o país inteiro com limite.
+ *  7. Vitrine (caronas, retorno vazio, fretes, viagens agendadas): perto da pessoa + busca por cidade.
  * Rodar: npm test
  */
 import { test, describe, beforeEach } from 'node:test';
@@ -214,5 +215,51 @@ describe('6. escala Brasil inteiro (3 milhões de corridas por dia)', () => {
   test('relatório do Admin conta todos os motoristas online (não para em 1.000)', async () => {
     for (let i = 0; i < 1500; i++) await store.set('users', `on-${i}`, { uid: `on-${i}`, driverOnline: true });
     assert.equal((await svc.adminReports(admin, 30)).driversOnline, 1500);
+  });
+});
+
+describe('7. vitrine (caronas, retorno vazio, fretes, viagens agendadas) no Brasil inteiro', () => {
+  const RIO = { lat: -22.9068, lng: -43.1729 };
+  const PAULISTA = { lat: -23.5614, lng: -46.6559 };
+
+  /** 500 caronas saindo do Rio, gravadas ANTES da carona de São Paulo. */
+  async function lotarRio(n: number) {
+    for (let i = 0; i < n; i++) {
+      const origin = { id: 'rio', name: 'Rio', city: 'Rio de Janeiro', state: 'RJ', zone: 'intercity', kind: 'city', ...RIO };
+      await store.set('carpools', `crio-${i}`, { id: `crio-${i}`, driverId: `m${i}`, status: 'open', origin, destination: origin, departureAt: new Date(SAIDA_MS).toISOString(), availableSeats: 3, totalSeats: 3, pricePerSeat: 50, originRegion: createGridGeo().regionOf(RIO.lat, RIO.lng), originCityKey: 'rio de janeiro', destCityKey: 'rio de janeiro' });
+    }
+  }
+
+  test('passageira em SP vê a carona que sai de SP mesmo com 500 caronas abertas no Rio', async () => {
+    await lotarRio(500);
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    const view = await svc.bootstrap(ana, PAULISTA);
+    assert.ok(view.carpools.some((c) => c.id === t.id), 'a carona de SP aparece');
+    assert.ok(!view.carpools.some((c) => c.id.startsWith('crio-')), 'as do Rio não lotam a lista de quem está em SP');
+  });
+
+  test('busca por cidade acha a cidade no Brasil inteiro (com ou sem acento)', async () => {
+    await lotarRio(500);
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    const porDestino = await svc.searchListings(ana, 'carpools', 'campinas');
+    assert.ok(porDestino.items.some((c) => (c as { id: string }).id === t.id));
+    const rio = await svc.searchListings(ana, 'carpools', 'RIO DE JANEIRO');
+    assert.ok(rio.items.length >= 100, 'acha as caronas do Rio buscando pela cidade');
+    assert.deepEqual((await svc.searchListings(ana, 'carpools', 'ab')).items, [], 'menos de 3 letras não busca');
+  });
+
+  test('viagem agendada: motorista em SP vê o pedido de SP; passageiro comum não usa a busca de motorista', async () => {
+    const req = await svc.createInDrive(ana, { ...ROTA, date: SAIDA, time: '08:00', passengerOffer: 400, shareMode: 'individual', seats: 1 });
+    const feed = await svc.bootstrap(caio, PAULISTA);
+    assert.ok(feed.indriveRequests.some((r) => r.id === req.id));
+    assert.ok((await svc.searchListings(caio, 'indrive', 'São Paulo')).items.some((r) => (r as { id: string }).id === req.id));
+    assert.deepEqual((await svc.searchListings(bia, 'indrive', 'São Paulo')).items, []);
+  });
+
+  test('ofertas antigas (sem as chaves de busca) recebem as chaves pelo agendador', async () => {
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    await store.update('carpools', t.id, { originRegion: null, originCityKey: null, destCityKey: null });
+    await svc.sweep(true);
+    assert.equal((await store.get('carpools', t.id))!.originCityKey, 'sao paulo');
   });
 });

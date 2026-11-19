@@ -8,6 +8,7 @@ import type { GeoPoint, InDriveRequest, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
 import { SosButton } from './SosButton.tsx';
 import { TripSafetyBar } from './TripSafetyBar.tsx';
+import { useCitySearch } from '../lib/citySearch.ts';
 import { choosePoint, getCurrentCoords, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
 
 /**
@@ -131,7 +132,9 @@ export const ViagensParticularesPanel: React.FC<Props> = ({
   const [gpsError, setGpsError] = useState('');
 
   const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  const vitrine = requests
+  // Pedidos perto do motorista + a cidade digitada, buscada no Brasil inteiro pelo servidor.
+  const comBusca = useCitySearch('indrive', isDriver ? busca : '', requests);
+  const vitrine = comBusca
     .filter((r) => r.status === 'open' && r.mine !== 'owner')
     .filter((r) => !busca.trim() || norm(`${r.origin.city} ${r.origin.name} ${r.destination.city} ${r.destination.name} ${r.pickupSpot || ''}`).includes(norm(busca.trim())))
     .filter((r) => !dia || r.date === dia.split('-').reverse().join('/'))

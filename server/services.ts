@@ -100,6 +100,10 @@ const DELIVERY_STATUS: Record<string, [DeliveryStatus, string]> = {
   cancelled: ['cancelada', 'Cancelada'],
 };
 
+/** Cidade sem acento e em minúsculas ("São Paulo" → "sao paulo"): chave da busca por cidade. */
+export const cityKey = (city: unknown) =>
+  String(city ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
 /** Minuto (UTC, "2026-11-19T15:42"): os prazos são buscados no banco pelo minuto em que vencem. */
 export const minuteKey = (ms: number) => new Date(ms).toISOString().slice(0, 16);
 /** Até quantos minutos para trás a varredura recupera prazos (servidor parado, deploy). */
@@ -2073,6 +2077,7 @@ export class FrocService {
       escrowCents: 0,
       createdAt: this.iso(),
     };
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
     await this.store.set('indrive', id, doc);
     return this.indriveView(doc, auth.uid);
   }
@@ -2479,6 +2484,7 @@ export class FrocService {
       status: 'open',
       createdAt: this.iso(),
     };
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
     await this.store.set('carpools', id, doc);
     return this.carpoolView(doc, auth.uid, [], []);
   }
@@ -2788,6 +2794,7 @@ export class FrocService {
       status: 'available',
       createdAt: this.iso(),
     };
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
     await this.store.set('emptyTrucks', id, doc);
     return this.truckView(doc, auth.uid);
   }
@@ -2882,6 +2889,7 @@ export class FrocService {
       escrowCents: 0,
       createdAt: this.iso(),
     };
+    Object.assign(doc, this.listingKeys(doc.origin as GeoPoint, doc.destination as GeoPoint));
     await this.store.set('freights', id, doc);
     return this.freightView(doc, auth.uid);
   }
@@ -2968,6 +2976,11 @@ export class FrocService {
   // ------------------------------------------- H3: preço dinâmico e localização
 
   /** Multiplicador do preço na região: mais pedidos que motoristas por perto = preço sobe. */
+  /** Chaves de busca de uma oferta/pedido intermunicipal: região de saída e cidades de origem e destino. */
+  private listingKeys(origin: GeoPoint, destination: GeoPoint) {
+    return { originRegion: this.geo.regionOf(origin.lat, origin.lng), originCityKey: cityKey(origin.city), destCityKey: cityKey(destination.city) };
+  }
+
   /** Pedidos procurando motorista nas zonas em volta (busca por região, nunca o Brasil inteiro). */
   private async searchingNear(cell: string, k: number): Promise<Doc[]> {
     const zones = zonesAround(this.geo, cell, k);
@@ -3211,8 +3224,9 @@ export class FrocService {
     // Equipe IA no comando: saques dentro das regras e lojas com CNPJ ativo, sem esperar o dono.
     // Só no agendador (força=true): não deixa a tela de ninguém esperando consultas externas.
     const saques = force ? await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) })) : null;
+    const chaves = force ? await this.backfillListingKeys().catch((e) => ({ erro: String(e?.message || e) })) : null;
     const lojas = force ? await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) })) : null;
-    return { ridesCancelled: rides, requestsExpired: deals, esquecidas, webhooks, saques, lojas };
+    return { ridesCancelled: rides, requestsExpired: deals, esquecidas, webhooks, saques, lojas, chaves };
   }
 
   /**
@@ -3820,7 +3834,77 @@ export class FrocService {
     return this.store.query<Doc>('rides', [['status', '==', 'searching']], 50);
   }
 
-  async bootstrap(auth: AuthUser) {
+  /**
+   * Vitrine (caronas, fretes, retorno vazio, viagens agendadas): o que sai perto da pessoa
+   * (~60 km), buscado por região no banco. Sem localização, uma amostra nacional.
+   */
+  private async nearListings(col: string, status: string, regions: string[] | null, limit: number): Promise<Doc[]> {
+    if (!regions) return this.store.query<Doc>(col, [['status', '==', status]], limit);
+    const lists = await Promise.all(regions.map((r) => this.store.query<Doc>(col, [['status', '==', status], ['originRegion', '==', r]], limit)));
+    return lists.flat();
+  }
+
+  /** Onde a pessoa está: GPS recente do motorista ou o ponto que o app enviou. */
+  private regionsFor(user: UserDoc, near?: { lat?: unknown; lng?: unknown }): string[] | null {
+    const fresh = typeof user.driverLat === 'number' && typeof user.driverLng === 'number' && this.now().getTime() - Date.parse(String(user.locationAt || 0)) < LOCATION_FRESH_MS;
+    if (fresh) return this.geo.regionsAround(user.driverLat!, user.driverLng!);
+    const lat = Number(near?.lat);
+    const lng = Number(near?.lng);
+    if (near?.lat !== undefined && near?.lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -34.5 && lat <= 5.9 && lng >= -74.5 && lng <= -28.5)
+      return this.geo.regionsAround(lat, lng);
+    return null;
+  }
+
+  /**
+   * Busca por cidade (origem ou destino) na vitrine, direto no banco: a pessoa acha a cidade que
+   * procura mesmo com milhões de ofertas no Brasil.
+   */
+  async searchListings(auth: AuthUser, kind: unknown, city: unknown) {
+    const key = cityKey(city);
+    if (key.length < 3) return { items: [] };
+    const user = await this.ensureUser(auth);
+    const cfg: Record<string, [string, string, boolean]> = {
+      carpools: ['carpools', 'open', true],
+      emptyTrucks: ['emptyTrucks', 'available', true],
+      freights: ['freights', 'open_bids', user.truckerStatus === 'approved'],
+      indrive: ['indrive', 'open', user.driverStatus === 'approved'],
+    };
+    const c = cfg[String(kind)] ?? fail(400, 'invalid_kind', 'Tipo de busca inválido.');
+    if (!c[2]) return { items: [] };
+    const [col, status] = c;
+    const found = uniqueById(
+      (
+        await Promise.all([
+          this.store.query<Doc>(col, [['status', '==', status], ['originCityKey', '==', key]], 100),
+          this.store.query<Doc>(col, [['status', '==', status], ['destCityKey', '==', key]], 100),
+        ])
+      ).flat(),
+    );
+    const uid = auth.uid;
+    if (col === 'carpools') {
+      const mine = await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', uid]], 300);
+      return { items: found.filter((t) => t.driverId !== uid).map((t) => this.carpoolView(t, uid, mine)) };
+    }
+    if (col === 'emptyTrucks') return { items: found.filter((t) => t.truckerId !== uid).map((t) => this.truckView(t, uid)) };
+    if (col === 'freights') return { items: found.filter((f) => f.clientId !== uid).map((f) => this.freightView(f, uid)) };
+    const nowMs = this.now().getTime();
+    return { items: found.filter((r) => r.passengerId !== uid && (this.privateDeparture(r) ?? 0) > nowMs).map((r) => this.indriveView(r, uid)) };
+  }
+
+  /** Ofertas antigas (antes da busca por região): ganham as chaves de busca. Só no agendador. */
+  private async backfillListingKeys() {
+    let n = 0;
+    for (const [col, status] of [['carpools', 'open'], ['emptyTrucks', 'available'], ['freights', 'open_bids'], ['indrive', 'open']]) {
+      for (const d of await this.store.query<Doc>(col, [['status', '==', status]], 300)) {
+        if (d.originRegion || !d.origin || !d.destination) continue;
+        await this.store.update(col, String(d.id), this.listingKeys(d.origin as GeoPoint, d.destination as GeoPoint)).catch(() => undefined);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  async bootstrap(auth: AuthUser, near?: { lat?: unknown; lng?: unknown }) {
     await this.settings();
     await this.sweep().catch((e) => console.warn('Varredura de prazos falhou:', e));
     const user = await this.ensureUser(auth);
@@ -3829,6 +3913,7 @@ export class FrocService {
     const isTrucker = user.truckerStatus === 'approved';
     const isMerchant = user.merchantStatus === 'approved';
     const q = (col: string, field: string, value: unknown, limit = 100) => this.store.query<Doc>(col, [[field, '==', value]], limit);
+    const regions = this.regionsFor(user, near);
 
     const [
       myRides,
@@ -3856,16 +3941,17 @@ export class FrocService {
       isDriver && user.driverOnline ? this.dispatchFeed(user) : [],
       q('indrive', 'passengerId', uid),
       isDriver ? q('indrive', 'driverId', uid) : [],
-      isDriver ? q('indrive', 'status', 'open', 300) : [],
-      q('carpools', 'status', 'open', 60),
+      // Vitrine perto da pessoa (busca por região); outras cidades pela busca (searchListings).
+      isDriver ? this.nearListings('indrive', 'open', regions, regions ? 60 : 300) : [],
+      this.nearListings('carpools', 'open', regions, regions ? 30 : 60),
       isDriver ? q('carpools', 'driverId', uid) : [],
       q('carpoolBookings', 'passengerId', uid, 300),
-      q('emptyTrucks', 'status', 'available', 60),
+      this.nearListings('emptyTrucks', 'available', regions, regions ? 30 : 60),
       isTrucker ? q('emptyTrucks', 'truckerId', uid) : [],
       q('emptyTrucks', 'reservedById', uid),
       q('freights', 'clientId', uid),
       isTrucker ? q('freights', 'acceptedTruckerId', uid) : [],
-      isTrucker ? q('freights', 'status', 'open_bids', 40) : [],
+      isTrucker ? this.nearListings('freights', 'open_bids', regions, regions ? 30 : 40) : [],
       this.transactions(uid),
       isMerchant ? q('rides', 'merchantId', uid, 200) : [],
       this.myWithdrawals(uid),
