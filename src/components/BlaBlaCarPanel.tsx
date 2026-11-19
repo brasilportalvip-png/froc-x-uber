@@ -5,6 +5,7 @@ import { choosePoint, getCurrentCoords, isChoosePoint, isPlaceMissing, startPoin
 import { CARPOOL_POLICY, CARPOOL_POLICY_TEXT } from '../data/carpoolPolicy.ts';
 import type { CarpoolTrip, GeoPoint, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
+import { useCitySearch } from '../lib/citySearch.ts';
 
 interface BlaBlaCarPanelProps {
   role: UserRole;
@@ -73,9 +74,11 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   const [pubMusic, setPubMusic] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  // Perto da pessoa + a cidade digitada, buscada no Brasil inteiro pelo servidor.
+  const allCarpools = useCitySearch('carpools', searchText, carpools);
   const filtered = useMemo(() => {
     const q = searchText.trim().toLowerCase();
-    return carpools.filter((c) => {
+    return allCarpools.filter((c) => {
       if (!q) return true;
       return (
         c.origin.city.toLowerCase().includes(q) ||
@@ -83,7 +86,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
         c.driverName.toLowerCase().includes(q)
       );
     });
-  }, [carpools, searchText]);
+  }, [allCarpools, searchText]);
 
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();

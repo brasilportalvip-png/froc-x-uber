@@ -96,7 +96,10 @@ export default function App() {
       if (manual) setOrigin(() => locatingPoint());
       try {
         const point = await currentLocationPoint();
+        const firstFix = !gpsPoint.current;
         gpsPoint.current = point;
+        // Primeira localização: atualiza a vitrine para o que sai perto da pessoa.
+        if (firstFix) window.dispatchEvent(new Event('froc:gps-ready'));
         // Só troca se a pessoa ainda não escolheu outro ponto de partida enquanto o GPS respondia.
         setOrigin((prev) => (isOriginPending(prev) || isGpsOrigin(prev) ? point : prev));
         // Destino ainda vazio acompanha a partida (o mapa fica em volta da pessoa).
@@ -130,7 +133,9 @@ export default function App() {
       if (Date.now() - lastGeocode.current < 10_000 && prev) return;
       lastGeocode.current = Date.now();
       void pointAt(c.lat, c.lng).then((point) => {
+        const firstFix = !gpsPoint.current;
         gpsPoint.current = point;
+        if (firstFix) window.dispatchEvent(new Event('froc:gps-ready'));
         setOrigin((o) => (isOriginPending(o) || isGpsOrigin(o) ? point : o));
         setDestination((d) => (isUnsetDestination(d) ? unsetDestination(point) : d));
       });
@@ -208,7 +213,10 @@ export default function App() {
   const failures = useRef(0);
   const loadBootstrap = useCallback(async () => {
     try {
-      const data = await api<AppBootstrapState>('/api/bootstrap');
+      // A localização vai junto: caronas, fretes e viagens agendadas vêm de perto da pessoa.
+      const p = gpsPoint.current;
+      const near = p && Number.isFinite(p.lat) && Number.isFinite(p.lng) ? `?lat=${p.lat.toFixed(3)}&lng=${p.lng.toFixed(3)}` : '';
+      const data = await api<AppBootstrapState>(`/api/bootstrap${near}`);
       setState(data);
       setError(null);
       failures.current = 0;
@@ -260,9 +268,15 @@ export default function App() {
       }
     };
     document.addEventListener('visibilitychange', onVisible);
+    const onGps = () => {
+      lastLoad = Date.now();
+      void loadBootstrap();
+    };
+    window.addEventListener('froc:gps-ready', onGps);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('froc:gps-ready', onGps);
     };
   }, [user, loadBootstrap]);
 

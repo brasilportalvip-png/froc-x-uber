@@ -17,6 +17,10 @@ export interface GeoIndex {
    * zona: o servidor nunca lê o Brasil inteiro para achar o que está perto.
    */
   zoneOf(cell: string): string;
+  /** Região grande (~1.800 km², raio de ~25 km) de um ponto: vitrine de caronas, fretes e viagens. */
+  regionOf(lat: number, lng: number): string;
+  /** A região do ponto e as vizinhas (cobre ~60 km em volta). */
+  regionsAround(lat: number, lng: number): string[];
 }
 
 /** Zonas que cobrem os hexágonos até k passos de um ponto (normalmente 1 a 7). */
@@ -30,6 +34,7 @@ export const SURGE_RING = 3;
 /** Carros por perto (~6 km) que o passageiro vê no mapa. */
 export const NEARBY_RING = 10;
 export const ZONE_RESOLUTION = 6;
+export const REGION_RESOLUTION = 4;
 
 export async function createH3Geo(): Promise<GeoIndex> {
   const h3 = await import('h3-js');
@@ -37,6 +42,8 @@ export async function createH3Geo(): Promise<GeoIndex> {
     cellOf: (lat, lng) => h3.latLngToCell(lat, lng, H3_RESOLUTION),
     ring: (cell, k) => h3.gridDisk(cell, k),
     zoneOf: (cell) => h3.cellToParent(cell, ZONE_RESOLUTION),
+    regionOf: (lat, lng) => h3.latLngToCell(lat, lng, REGION_RESOLUTION),
+    regionsAround: (lat, lng) => h3.gridDisk(h3.latLngToCell(lat, lng, REGION_RESOLUTION), 1),
   };
 }
 
@@ -56,6 +63,14 @@ export function createGridGeo(step = 0.006): GeoIndex {
     zoneOf: (cell) => {
       const [, a, b] = cell.split(':');
       return `z:${Math.floor(Number(a) / 6)}:${Math.floor(Number(b) / 6)}`;
+    },
+    regionOf: (lat, lng) => `r:${Math.floor(lat / (step * 40))}:${Math.floor(lng / (step * 40))}`,
+    regionsAround: (lat, lng) => {
+      const a = Math.floor(lat / (step * 40));
+      const b = Math.floor(lng / (step * 40));
+      const out: string[] = [];
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) out.push(`r:${a + i}:${b + j}`);
+      return out;
     },
   };
 }

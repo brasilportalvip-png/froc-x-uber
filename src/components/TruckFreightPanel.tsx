@@ -7,6 +7,7 @@ import { formatBRL } from '../data/locations.ts';
 import { choosePoint, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
 import type { EmptyTruckRoute, FreightRequest, GeoPoint, TruckType, UserProfile, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
+import { useCitySearch } from '../lib/citySearch.ts';
 
 interface TruckFreightPanelProps {
   role: UserRole;
@@ -121,9 +122,10 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [bidPrices, setBidPrices] = useState<Record<string, string>>({});
   const [bidNotes, setBidNotes] = useState<Record<string, string>>({});
 
+  const allTrucks = useCitySearch('emptyTrucks', searchCity, emptyTrucks);
   const filteredTrucks = useMemo(() => {
     const q = searchCity.trim().toLowerCase();
-    return emptyTrucks.filter((t) => {
+    return allTrucks.filter((t) => {
       if (!q) return true;
       return (
         t.origin.city.toLowerCase().includes(q) ||
@@ -131,7 +133,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
         t.truckType.toLowerCase().includes(q)
       );
     });
-  }, [emptyTrucks, searchCity]);
+  }, [allTrucks, searchCity]);
 
   const handlePublishEmpty = async (e: React.FormEvent) => {
     e.preventDefault();

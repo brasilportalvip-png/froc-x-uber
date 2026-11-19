@@ -351,7 +351,9 @@ export function createApp(options: AppOptions) {
       }
     };
 
-  api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req))));
+  api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req), { lat: req.query.lat, lng: req.query.lng })));
+  // Busca por cidade na vitrine (caronas, fretes, retorno vazio, viagens agendadas).
+  api.get('/search', rateLimit(60, 60_000), wrap(async (req) => (await service()).searchListings(a(req), req.query.kind, req.query.city)));
   api.patch('/profile', wrap(async (req) => (await service()).updateProfile(a(req), req.body || {})));
   // CPF: poucas tentativas por dia (ninguém fica testando CPF dos outros).
   api.post(
