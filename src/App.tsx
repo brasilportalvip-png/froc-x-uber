@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { APIProvider } from '@vis.gl/react-google-maps';
-import { Car, HandCoins, Map as MapIcon, Moon, Shield, Sun, Truck, Users, Wallet } from 'lucide-react';
+import { Car, HandCoins, Map as MapIcon, Moon, Shield, Sun, Truck, Users, Volume2, VolumeX, Wallet } from 'lucide-react';
 import { AdminPanel } from './components/AdminPanel.tsx';
 import { Landing } from './components/Landing.tsx';
 import { SupportChat } from './components/SupportChat.tsx';
@@ -29,6 +29,8 @@ import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchSignals, watchUser } from './lib/session.ts';
 import type { AppBootstrapState, AppModule, GeoPoint, NearbyDriver, UserProfile, UserRole } from './types/mobility.ts';
 import { initialRole, loadRole, modeOf, roleForMode, saveRole } from './lib/appMode.ts';
+import { falar, setVozLigada, vozLigada } from './lib/frocVoz.ts';
+import type { DadosFala, SituacaoFroc } from './data/frocVoz.ts';
 
 export default function App() {
   const [state, setState] = useState<AppBootstrapState | null>(null);
@@ -71,6 +73,11 @@ export default function App() {
   // B começa vazio (Para onde vamos?) até a pessoa escolher o destino.
   const [destination, setDestination] = useState<GeoPoint>(() => unsetDestination(locatingPoint()));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sistema Froc (voz): fala com o primeiro nome da pessoa. Liga/desliga no botão do alto-falante.
+  const [vozOn, setVozOn] = useState(() => vozLigada());
+  const stateRef = useRef<AppBootstrapState | null>(null);
+  const voz = (situacao: SituacaoFroc, dados: DadosFala = {}) => falar(situacao, { nome: stateRef.current?.profile.name, ...dados });
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -236,6 +243,7 @@ export default function App() {
     void api('/api/device', { body: {} }).catch(() => undefined);
   }, [user]);
 
+  stateRef.current = state;
   // Atualização rápida só quando algo está acontecendo (economiza CPU do servidor).
   const pollFast = useRef(false);
   pollFast.current = Boolean(
@@ -419,7 +427,15 @@ export default function App() {
   const handleCreateRide = (payload: object) => run(() => post('/api/rides', payload), 'Corrida solicitada! Procurando motorista...');
   const handleRideAction = (rideId: string, action: string, extra?: Record<string, string | number>) =>
     run(
-      () => api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } }),
+      async () => {
+        await api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } });
+        // Voz da Froc para o motorista (o passageiro ouve pelas mudanças da corrida).
+        const ride = stateRef.current?.rides.find((r) => r.id === rideId);
+        if (action === 'driver_accept') voz('corrida_aceita');
+        if (action === 'start' && ride) voz('embarque_confirmado', { destino: ride.destination.city || ride.destination.name });
+        if (action === 'complete' && ride) voz('corrida_encerrada', { valor: ride.price });
+        if (action === 'arriving') voz('chegou_embarque');
+      },
       ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!', arriving: 'Passageiro avisado na tela: a espera começou a contar.', no_show: 'Corrida encerrada: passageiro não apareceu. O valor caiu no seu saldo.' } as Record<string, string>)[action],
     );
   // Selfie de segurança: a cada 2h com o motorista online (ou antes de ficar online, se venceu).
@@ -449,7 +465,10 @@ export default function App() {
       setFaceCheckOpen(true);
       return Promise.resolve();
     }
-    return run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
+    return run(async () => {
+      await api('/api/profile', { method: 'PATCH', body: { driverOnline: online } });
+      voz(online ? 'motorista_online' : 'motorista_offline');
+    }, online ? 'Você está online.' : 'Você está offline.');
   };
 
   const handleCreateInDrive = (payload: object) => run(() => post('/api/indrive', payload), 'Pedido lançado! Os motoristas já podem mandar propostas.');
@@ -561,6 +580,15 @@ export default function App() {
   const [, setCallTick] = useState(0);
   const isDriverOnline = Boolean(state?.profile.driverOnline && state.profile.driverStatus === 'approved' && role === 'driver');
   const call = isDriverOnline && state ? nextCall(state.rides, seenCalls.current) : null;
+  // Corrida nova tocando: a Froc avisa com a distância até o embarque.
+  const spokenCall = useRef('');
+  useEffect(() => {
+    if (!call || spokenCall.current === call.id) return;
+    spokenCall.current = call.id;
+    const km = myPos ? metersBetween(myPos, call.origin) / 1000 : undefined;
+    voz('nova_corrida', km === undefined ? {} : { km });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [call?.id]);
   const dismissCall = (id: string) => {
     seenCalls.current.add(id);
     setCallTick((n) => n + 1);
@@ -570,6 +598,7 @@ export default function App() {
     const busy = state ? drivingRides(state.rides).length : 0;
     try {
       await api(`/api/rides/${ride.id}`, { method: 'PATCH', body: { action: 'driver_accept' } });
+      voz('corrida_aceita');
       setFlash(
         busy
           ? { title: 'Corrida na sua fila', body: 'Ela começa sozinha quando você terminar a atual.', tone: 'ok' }
@@ -594,7 +623,8 @@ export default function App() {
         // Manda a posição antes: o servidor confere a distância com o GPS mais recente.
         await api('/api/driver/location', { body: { lat: myPos.lat, lng: myPos.lng } });
         await api(`/api/rides/${ride.id}`, { method: 'PATCH', body: { action: 'arriving' } });
-        alertUser('Você chegou ao embarque', 'Peça o PIN ao passageiro.', { beeps: 2 });
+        alertUser('Você chegou ao embarque', 'Peça o PIN ao passageiro.', { beeps: 1 });
+        voz('chegou_embarque');
         setFlash({ title: 'Você chegou! Passageiro avisado.', body: 'Peça o PIN de 4 números para iniciar.', tone: 'ok' });
       } catch {
         arriveSent.current.delete(ride.id); // tenta de novo no próximo movimento
@@ -636,6 +666,11 @@ export default function App() {
         alertUser('Seu motorista chegou', 'O 1º minuto de espera é grátis.', { vibrate: [500, 150, 500, 150, 500], beeps: 3 });
         setFlash({ title: 'Seu motorista chegou!', body: `Informe o PIN ${r.pinCode} ao motorista.`, tone: 'ok' });
       }
+      // Voz da Froc para o passageiro (igual ao Uber: motorista a caminho, chegou, cinto, chegamos).
+      if (prev.status[r.id] === 'searching' && r.status === 'accepted') voz('motorista_a_caminho', { minutos: r.etaMin ?? undefined });
+      if (prev.status[r.id] && prev.status[r.id] !== 'arriving' && r.status === 'arriving') voz('motorista_chegou');
+      if (prev.status[r.id] && prev.status[r.id] !== 'in_progress' && r.status === 'in_progress') voz('cinto');
+      if (prev.status[r.id] && prev.status[r.id] !== 'completed' && r.status === 'completed') voz('viagem_concluida');
       if (prev.status[r.id] === 'searching' && r.status === 'accepted')
         setFlash({ title: 'Motorista a caminho!', body: `${r.driverName || 'Seu motorista'} · ${r.vehicleModel || ''} ${r.vehiclePlate || ''}`.trim(), tone: 'ok' });
     }
@@ -869,6 +904,21 @@ export default function App() {
                   </button>
                 ))}
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !vozOn;
+                  setVozLigada(next);
+                  setVozOn(next);
+                  showToast(next ? 'Voz da Froc ligada.' : 'Voz da Froc desligada.');
+                }}
+                aria-label={vozOn ? 'Desligar a voz da Froc' : 'Ligar a voz da Froc'}
+                aria-pressed={vozOn}
+                className="w-10 h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0 cursor-pointer"
+              >
+                {vozOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
 
               <button
                 type="button"
@@ -1125,13 +1175,19 @@ export default function App() {
             await loadBootstrap();
             if (goOnlineAfterCheck) {
               setGoOnlineAfterCheck(false);
-              await run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: true } }), 'Você está online.');
+              await run(async () => {
+                await api('/api/profile', { method: 'PATCH', body: { driverOnline: true } });
+                voz('motorista_online');
+              }, 'Você está online.');
             }
           }}
           onGoOffline={() => {
             setFaceCheckOpen(false);
             setGoOnlineAfterCheck(false);
-            void run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: false } }), 'Você está offline.');
+            void run(async () => {
+              await api('/api/profile', { method: 'PATCH', body: { driverOnline: false } });
+              voz('motorista_offline');
+            }, 'Você está offline.');
           }}
         />
       )}
@@ -1146,7 +1202,10 @@ export default function App() {
             await loadBootstrap();
             if (goOnlineAfterCheck) {
               setGoOnlineAfterCheck(false);
-              await run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: true } }), 'Reconhecimento salvo. Você está online.');
+              await run(async () => {
+                await api('/api/profile', { method: 'PATCH', body: { driverOnline: true } });
+                voz('motorista_online');
+              }, 'Reconhecimento salvo. Você está online.');
             } else showToast('Reconhecimento facial salvo.');
           }}
         />

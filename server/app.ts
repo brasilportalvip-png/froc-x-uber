@@ -17,6 +17,9 @@ import type { Store } from './store.ts';
 import type { IdentityReviewer } from './ai/identityCheck.ts';
 import { GUIDE_RENDERERS } from './guidePages.ts';
 import { authenticateApiKey, createApiKey, listApiKeys, revokeApiKey } from './merchants.ts';
+import type { FrocVoice } from './voz.ts';
+import { SITUACOES, montarFala } from '../src/data/frocVoz.ts';
+import type { SituacaoFroc } from '../src/data/frocVoz.ts';
 
 export interface PlatformParts {
   store: Store;
@@ -42,6 +45,8 @@ export interface AppOptions {
   configStatus?: () => Record<string, unknown>;
   /** Diagnóstico do Firebase (projetos e chave), sem segredos. */
   diagnostics?: () => Promise<Record<string, unknown>>;
+  /** Sistema Froc: voz neural da marca (opcional). */
+  voice?: () => Promise<FrocVoice>;
   /** Explica por que um token foi recusado. */
   explainTokenError?: (error: unknown) => { status: number; message: string; reason: string };
 }
@@ -358,6 +363,33 @@ export function createApp(options: AppOptions) {
       }
     };
 
+  // Sistema Froc (voz): o app diz a situação e a versão; o servidor monta a fala com o nome real
+  // da pessoa e a hora de Brasília e devolve o áudio na voz da Froc (guardado depois da 1ª vez).
+  api.post(
+    '/voz',
+    rateLimit(30, 60_000),
+    guard('voz', 800, 864e5, 'Limite de falas de hoje atingido.'),
+    wrap(async (req, res) => {
+      const b = (req.body || {}) as Record<string, unknown>;
+      const situacao = String(b.situacao || '') as SituacaoFroc;
+      if (!SITUACOES.includes(situacao)) throw new AppError(400, 'invalid_situacao', 'Situação inválida.');
+      const user = await (await service()).ensureUser(a(req));
+      const d = (b.dados && typeof b.dados === 'object' ? b.dados : {}) as Record<string, unknown>;
+      const texto = montarFala(
+        situacao,
+        { variante: Number(b.variante) || 0, incentivos: Array.isArray(b.incentivos) ? b.incentivos.slice(0, 3).map(Number) : undefined },
+        { nome: user.name, valor: Number(d.valor) || undefined, minutos: Number(d.minutos) || undefined, km: d.km === undefined ? undefined : Number(d.km), destino: typeof d.destino === 'string' ? d.destino : undefined },
+      );
+      const voice = options.voice ? await options.voice().catch(() => null) : null;
+      if (!voice?.configured) throw new AppError(503, 'voz_indisponivel', 'Voz neural desligada: use a voz do aparelho.');
+      const audio = await voice.audio(texto).catch((e) => {
+        console.warn('Voz Froc falhou:', String(e?.message || e).slice(0, 200));
+        throw new AppError(503, 'voz_indisponivel', 'Voz neural indisponível agora: use a voz do aparelho.');
+      });
+      res.set('Content-Type', audio.contentType).set('Cache-Control', 'private, max-age=86400').set('X-Froc-Cache', audio.cached ? 'hit' : 'miss');
+      res.send(Buffer.from(audio.bytes));
+    }),
+  );
   api.get('/bootstrap', wrap(async (req) => (await service()).bootstrap(a(req), { lat: req.query.lat, lng: req.query.lng })));
   // Busca por cidade na vitrine (caronas, fretes, retorno vazio, viagens agendadas).
   api.get('/search', rateLimit(60, 60_000), wrap(async (req) => (await service()).searchListings(a(req), req.query.kind, req.query.city)));
