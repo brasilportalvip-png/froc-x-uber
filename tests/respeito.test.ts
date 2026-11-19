@@ -33,6 +33,12 @@ const payments: PaymentsGateway = {
     return null;
   },
 };
+/** Dia (dd/mm/aaaa) e hora (hh:mm) em Brasília daqui a N horas, a partir do relógio do teste. */
+const agendaEm = (nowMs: number, hours: number) => {
+  const d = new Date(nowMs + hours * 3600_000 - 3 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return { date: `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`, time: `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` };
+};
 const sec = (n: number) => {
   clock += n * 1000;
 };
@@ -205,16 +211,17 @@ describe('tempo de espera no embarque', () => {
   });
 });
 
-describe('negociação (inDrive)', () => {
-  test('cancelar depois do acordo segue a mesma regra', async () => {
-    await svc.createInDrive(ana, { ...SP, passengerOffer: 30 });
+describe('viagens particulares', () => {
+  test('cancelar segue a regra das caronas: com menos de 2h e fora do arrependimento, nada volta', async () => {
+    await svc.createInDrive(ana, { ...SP, ...agendaEm(clock, 5), passengerOffer: 30 });
     const req = (await svc.bootstrap(ana)).indriveRequests[0];
     const withOffer = await svc.sendInDriveOffer(caio, req.id, { offeredPrice: 30, etaMin: 5 });
     await svc.acceptInDriveOffer(ana, req.id, withOffer.offers[0].id);
-    sec(150);
+    const caioAntes = await balance(caio);
+    sec(4 * 3600); // falta 1h para a saída
     await svc.cancelInDrive(ana, req.id);
     assert.equal(await balance(ana), 70);
-    assert.equal(cents(await balance(caio)), 3000);
+    assert.equal(cents(await balance(caio)), cents(caioAntes) + 2100 + 600, 'motorista recebe 70% e a caução volta');
   });
 });
 

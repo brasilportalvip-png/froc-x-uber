@@ -45,7 +45,7 @@ test.describe('Visitante na página inicial', () => {
     expect(bg, 'cor de fundo da página').toBe('rgb(5, 5, 5)');
     await expect(page.locator('header .froc-logo'), 'logo no topo').toBeVisible();
     // exact: o título principal também contém "Corridas" e "caronas".
-    for (const s of ['Corridas', 'Negociar', 'Caronas', 'Cargas e fretes'])
+    for (const s of ['Corridas', 'Viagens particulares', 'Caronas', 'Cargas e fretes'])
       await expect(page.locator('#servicos').locator('..').getByRole('heading', { name: s, exact: true }), `cartão ${s}`).toBeVisible();
     await expect(page.getByText(/vans, furgões e utilitários: mudança/), 'vans e utilitários em Cargas').toBeVisible();
   });

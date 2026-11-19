@@ -127,15 +127,14 @@ export function riskZoneFor(points: { lat: number; lng: number }[], zones: RiskZ
 // ------------------------------------------------------------------ leilão do km
 
 export type RainLevel = 'sem_chuva' | 'fraca' | 'moderada' | 'forte';
-export type RideCategoryKey = 'froc_x' | 'froc_99' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
+export type RideCategoryKey = 'froc_x' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
 
 /** Faixa do km do motorista (limpo). Carros R$ 2–5; motos R$ 1,50–2,50. */
 export const KM_RANGE = { carro: { min: 2, max: 5 }, moto: { min: 1.5, max: 2.5 } } as const;
 
 /** Ponto de partida do km de cada categoria, sem nenhum fator (dentro da faixa). */
 export const KM_BASE: Record<RideCategoryKey, { kind: keyof typeof KM_RANGE; base: number }> = {
-  froc_99: { kind: 'carro', base: 2.0 },
-  froc_x: { kind: 'carro', base: 2.2 },
+  froc_x: { kind: 'carro', base: 2.0 },
   froc_comfort: { kind: 'carro', base: 2.9 },
   froc_moto: { kind: 'moto', base: 1.5 },
   froc_delivery: { kind: 'moto', base: 1.6 },
@@ -305,7 +304,7 @@ export function priceRide(o: {
 
 export const PRICING_TEXT = [
   'O preço é calculado na hora, como um leilão automático: o valor do km sobe com a madrugada, os picos da manhã e da noite, o almoço, a noite, o fim de semana, os feriados, a chuva e a procura na região.',
-  'Carros: o motorista recebe de R$ 2 a R$ 5 por km rodado. Motos: de R$ 1,50 a R$ 2,50 por km. Corrida curta conta no mínimo 3 km.',
+  'Corridas muito curtas contam no mínimo 3 km.',
   'O passageiro vê o preço fechado antes de pedir e o motivo quando está mais caro (ex.: chuva, feriado, pico).',
   'Área de risco: acréscimo de 10% a 30% que vai inteiro para o motorista.',
   'O motorista vê quanto vai receber antes de aceitar a corrida.',

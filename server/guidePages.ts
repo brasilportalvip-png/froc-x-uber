@@ -86,7 +86,7 @@ ${cta}`;
 export function renderHowItWorks(site: string) {
   const body = `${crumbs('Como funciona')}
 <h1>Como funciona a ${SITE_NAME}</h1>
-<p class="lead">Um app só para corridas, negociar o preço, caronas entre cidades, fretes e mudanças — e entregas para lojas. Em todo o Brasil.</p>
+<p class="lead">Um app só para corridas, viagens particulares, caronas entre cidades, fretes e mudanças — e entregas para lojas. Em todo o Brasil.</p>
 ${HOW_IT_WORKS.map((h) => `<h2>${e(h.title)}</h2>${list(h.steps, true)}`).join('')}
 <h2>Quanto custa e quanto fica com cada um</h2>${list(PRICING_TEXT)}
 <h2>Segurança em toda viagem</h2>
@@ -103,7 +103,7 @@ ${cta}`;
     site,
     'como-funciona',
     'Como funciona a Froc X Uber: corridas, caronas, fretes e entregas',
-    'Passo a passo de corridas, negociação de preço, caronas, fretes, mudanças e entregas para lojas. Mapa ao vivo, PIN, SOS, gravação e link para a família acompanhar.',
+    'Passo a passo de corridas, viagens particulares, caronas, fretes, mudanças e entregas para lojas. Mapa ao vivo, PIN, SOS, gravação e link para a família acompanhar.',
     body,
     HOW_IT_WORKS.map((h) => ({
       '@context': 'https://schema.org',

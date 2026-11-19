@@ -55,7 +55,7 @@ export function minVehicleYear(maxYears: number, now = new Date()) {
 export const REQUIREMENTS: LegalSection[] = [
   {
     id: 'motorista',
-    title: 'Motorista de aplicativo (corridas, negociação e caronas)',
+    title: 'Motorista de aplicativo (corridas, viagens particulares e caronas)',
     summary:
       'A lei federal do transporte remunerado privado individual de passageiros exige CNH com EAR, veículo dentro das regras da cidade, CRLV em dia e certidão negativa de antecedentes criminais.',
     items: [
@@ -184,7 +184,7 @@ export const QUALITY_CONTROL = [
 
 export const HOW_IT_WORKS: { title: string; steps: string[] }[] = [
   {
-    title: 'Corridas (como Uber e 99)',
+    title: 'Corridas',
     steps: [
       'Abra o app: a partida já vem com o seu endereço atual.',
       'Digite o destino, escolha a categoria e veja o preço antes de pedir.',
@@ -195,15 +195,16 @@ export const HOW_IT_WORKS: { title: string; steps: string[] }[] = [
     ],
   },
   {
-    title: 'Negociar (como inDrive)',
+    title: 'Viagens particulares',
     steps: [
-      'Informe partida, destino e quanto quer pagar (há um piso que cobre combustível e tempo).',
-      'Motoristas próximos mandam propostas; você escolhe a melhor.',
-      'Depois do acordo, tudo funciona como uma corrida: mapa ao vivo, SOS e compartilhamento.',
+      'Diga de onde sai, para onde vai, o dia e a hora (ex.: aeroporto de Campinas às 12h15 para o Rio de Janeiro), quantas pessoas e quanto quer pagar.',
+      'Escolha: viagem individual (o carro só para você) ou aceito compartilhar (divide o carro com outras pessoas e paga menos).',
+      'Motoristas de todo o Brasil que vão passar pela sua cidade mandam propostas; você escolhe a melhor e a viagem fica agendada.',
+      'Valem as mesmas regras das caronas: valor retido na carteira, caução do motorista, PIN de embarque e cancelamento justo para os dois lados.',
     ],
   },
   {
-    title: 'Caronas (como BlaBlaCar)',
+    title: 'Caronas',
     steps: [
       'Motoristas aprovados publicam viagens entre cidades com data, horário, vagas e preço por vaga.',
       'Você reserva pagando pela carteira; o valor fica retido. O motorista deixa uma caução de 20% de cada reserva.',
@@ -242,7 +243,7 @@ export const FAQ: [string, string][] = [
   ['O mapa mostra os carros andando?', 'Sim. Antes de pedir, você vê os motoristas online perto de você (posição aproximada, por privacidade). Depois do aceite, vê o carro do seu motorista se movendo até você e durante a viagem.'],
   ['Minha loja pode usar a entrega da Froc?', 'Pode. Crie a conta, envie o CNPJ na aba Conta > Froc para lojas e, depois de aprovado, chame entregas pelo painel ou integre seu sistema pela API (veja /desenvolvedores).'],
   ['Quanto o motorista recebe?', 'O motorista vê quanto vai receber antes de aceitar cada corrida, e o valor cai na carteira dele assim que a corrida termina. O passageiro vê o preço final antes de pedir.'],
-  ['Por que o preço muda conforme o horário?', 'O preço funciona como um leilão automático: o valor do km sobe na madrugada (+35%), no pico da manhã (+25%), no almoço (+15%), no pico da noite (+30%), à noite (+15%), na sexta e no sábado à noite (+40%), no fim de semana (+10%), nos feriados (+25%), com chuva (+10% a +35%) e com muita procura na região. O km do motorista fica sempre entre R$ 2 e R$ 5 nos carros e entre R$ 1,50 e R$ 2,50 nas motos. O app mostra o motivo antes de você pedir. Em áreas de risco há um acréscimo que vai inteiro para o motorista.'],
+  ['Por que o preço muda conforme o horário?', 'O preço funciona como um leilão automático: o valor do km sobe na madrugada (+35%), no pico da manhã (+25%), no almoço (+15%), no pico da noite (+30%), à noite (+15%), na sexta e no sábado à noite (+40%), no fim de semana (+10%), nos feriados (+25%), com chuva (+10% a +35%) e com muita procura na região. O app mostra o motivo antes de você pedir. Em áreas de risco há um acréscimo que vai inteiro para o motorista.'],
   ['Como funciona o pagamento?', 'Tudo pela carteira Froc. Você recarrega por Pix ou cartão (Mercado Pago). Ao pedir, o valor sai do seu saldo (tinha R$ 100, corrida de R$ 20, fica com R$ 80) e a Froc guarda. Quando a corrida termina, vai sozinho para a conta do motorista. Cancelou antes? Volta para você.'],
   ['Posso pagar em dinheiro ou fazer Pix direto para o motorista?', 'Não. Para acabar com golpes de troco, cobrança por fora e corrida fantasma, todo pagamento passa pela carteira Froc. Se alguém pedir pagamento por fora, não pague e avise o Atendimento.'],
   ['Como o motorista recebe e tira o dinheiro?', 'O ganho cai no saldo dele assim que finaliza a viagem. Ele pode usar o saldo no próprio app ou transferir por Pix para qualquer conta (dele ou de outra pessoa), a partir de R$ 20. Só os ganhos podem ir para Pix; saldo de recarga é para usar no app.'],

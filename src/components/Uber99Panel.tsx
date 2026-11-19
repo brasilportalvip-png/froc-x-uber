@@ -68,7 +68,6 @@ interface Quote {
 // Importadas pelo Vite: o caminho /src/... não existe no site publicado.
 const FLEET_IMAGES: Record<RideCategoryId, string> = {
   froc_x: sedanImg,
-  froc_99: sedanImg,
   froc_comfort: sedanImg,
   froc_moto: motoImg,
   froc_delivery: motoImg,
@@ -185,8 +184,8 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             </div>
           </div>
           <div className="text-right shrink-0">
-            <div className="text-[11px] text-slate-400">Taxa Froc por corrida</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono-num">R$ 2 a R$ 8 · o resto é seu</div>
+            <div className="text-[11px] text-slate-400">Seu ganho</div>
+            <div className="text-sm font-bold text-emerald-400">Aparece antes de aceitar</div>
           </div>
         </div>
 

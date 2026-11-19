@@ -61,6 +61,12 @@ async function approve(user: AuthUser, kind: 'driver' | 'trucker') {
 const SP = { originId: 'sp-paulista', destinationId: 'sp-pinheiros' };
 const INTERCITY = { originId: 'sp-tiete', destinationId: 'br-campinas' };
 
+/** Dia (dd/mm/aaaa) e hora (hh:mm) em Brasília daqui a N horas, a partir do relógio do teste. */
+const agendaEm = (nowMs: number, hours: number) => {
+  const d = new Date(nowMs + hours * 3600_000 - 3 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return { date: `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`, time: `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` };
+};
 /** Relógio dos testes: hora real + avanço (para "passar" do horário de saída das caronas). */
 let clockOffset = 0;
 /** Data da carona (dd/mm/aaaa, Brasília) daqui a N dias. */
@@ -280,7 +286,7 @@ describe('1) corrida estilo Uber/99', () => {
     await approve(driver, 'driver');
     await svc.updateProfile(driver, { driverOnline: true });
     await topUp(passenger, 100);
-    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_99', paymentMethod: 'froc_pay' });
+    const ride = await svc.createRide(passenger, { ...SP, categoryId: 'froc_x', paymentMethod: 'froc_pay' });
     await svc.rideAction(driver, ride.id, { action: 'driver_accept' });
     const back = await svc.rideAction(driver, ride.id, { action: 'cancel' });
     assert.equal(back.status, 'searching');
@@ -315,12 +321,12 @@ describe('1) corrida estilo Uber/99', () => {
   });
 });
 
-describe('2) negociação estilo inDrive', () => {
-  test('motoristas mandam proposta, passageiro escolhe, valor retido e liberado', async () => {
+describe('2) viagens particulares', () => {
+  test('motoristas mandam proposta, passageiro escolhe, valor retido e liberado com PIN', async () => {
     await approve(driver, 'driver');
     await approve(other, 'driver');
     await topUp(passenger, 60);
-    const req = await svc.createInDrive(passenger, { ...SP, passengerOffer: 20, paymentMethod: 'froc_pay' });
+    const req = await svc.createInDrive(passenger, { ...SP, ...agendaEm(Date.now(), 3), passengerOffer: 20, paymentMethod: 'froc_pay' });
     assert.equal(req.offers.length, 0, 'nenhuma proposta inventada');
     await svc.sendInDriveOffer(driver, req.id, { offeredPrice: 25, etaMin: 4 });
     await svc.sendInDriveOffer(driver, req.id, { offeredPrice: 23, etaMin: 4 });
@@ -333,16 +339,17 @@ describe('2) negociação estilo inDrive', () => {
     await svc.acceptInDriveOffer(passenger, req.id, cheapest.id);
     assert.equal(await balance(passenger), 39);
     await expectError(svc.completeInDrive(driver, req.id), 'forbidden');
+    const pin = (await svc.bootstrap(passenger)).indriveRequests.find((r) => r.id === req.id)!.boardingPin!;
+    await svc.boardInDrive(other, req.id, pin);
+    clockOffset = 3.5 * 3600_000; // passou do horário marcado
     await svc.completeInDrive(other, req.id);
-    const feeCents = Number((await store.get<Record<string, unknown>>('indrive', req.id))!.platformFeeCents);
-    assert.ok(feeCents >= 200 && feeCents <= 800);
-    assert.equal(await balance(other), (2100 - feeCents) / 100);
+    assert.equal(await balance(other), 14.7, 'Froc fica com 30% do valor combinado; caução volta');
   });
 
   test('cancelar depois de aceitar devolve o valor', async () => {
     await approve(driver, 'driver');
     await topUp(passenger, 30);
-    const req = await svc.createInDrive(passenger, { ...SP, passengerOffer: 20, paymentMethod: 'froc_pay' });
+    const req = await svc.createInDrive(passenger, { ...SP, ...agendaEm(Date.now(), 48), passengerOffer: 20, paymentMethod: 'froc_pay' });
     const after = await svc.sendInDriveOffer(driver, req.id, { offeredPrice: 22 });
     await svc.acceptInDriveOffer(passenger, req.id, after.offers[0].id);
     await svc.cancelInDrive(passenger, req.id);

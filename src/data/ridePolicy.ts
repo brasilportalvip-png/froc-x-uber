@@ -61,4 +61,4 @@ export const RIDE_POLICY_TEXT = {
 };
 
 export const policyKnowledgeText = () =>
-  `${RIDE_POLICY_TEXT.title} (corridas; cobrança automática pela carteira): ${[...RIDE_POLICY_TEXT.cancel, ...RIDE_POLICY_TEXT.wait].join(' ')} Na negociação (estilo inDrive) vale a mesma regra de cancelamento, contada a partir do acordo. Nas entregas de lojas, a loja segue a regra de cancelamento; não há taxa de espera. A taxa vai para o motorista com o mesmo desconto da comissão de uma corrida normal.`;
+  `${RIDE_POLICY_TEXT.title} (corridas; cobrança automática pela carteira): ${[...RIDE_POLICY_TEXT.cancel, ...RIDE_POLICY_TEXT.wait].join(' ')} Nas viagens particulares agendadas valem as regras das caronas (caução, cancelamento conforme a antecedência, PIN de embarque). Nas entregas de lojas, a loja segue a regra de cancelamento; não há taxa de espera. A taxa vai para o motorista com o mesmo desconto da comissão de uma corrida normal.`;

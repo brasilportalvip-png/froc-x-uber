@@ -114,8 +114,8 @@ describe('ganho da Froc: R$ 2 a R$ 8, nunca mais de 30%', () => {
 describe('preço da corrida (leilão automático)', () => {
   test('motorista recebe o km limpo; a Froc soma R$ 2–8 por cima', () => {
     const p = priceRide({ categoryId: 'froc_x', distanceKm: 10, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: null });
-    assert.equal(p.perKm, 2.2);
-    assert.equal(p.driverEarning, 22);
+    assert.equal(p.perKm, 2);
+    assert.equal(p.driverEarning, 20);
     assert.ok(p.platformFee >= 2 && p.platformFee <= 8);
     assert.equal(p.total, Math.round((p.driverEarning + p.platformFee) * 100) / 100);
   });
@@ -126,7 +126,7 @@ describe('preço da corrida (leilão automático)', () => {
     const base = { categoryId: 'froc_x' as const, distanceKm: 10, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true };
     const semRisco = priceRide({ ...base, risk: null });
     const comRisco = priceRide({ ...base, risk: zone });
-    assert.equal(Math.round((comRisco.driverEarning - semRisco.driverEarning) * 100) / 100, 4.4, '20% de R$ 22 vão para o motorista');
+    assert.equal(Math.round((comRisco.driverEarning - semRisco.driverEarning) * 100) / 100, 4, '20% de R$ 20 vão para o motorista');
     assert.equal(comRisco.platformFee - semRisco.platformFee, 1, 'Froc ganha só R$ 1 a mais');
     assert.equal(riskZoneFor([{ lat: -23.561, lng: -46.651 }], [{ ...zone, when: 'noite' }], at('2026-11-18T18:00:00Z')), null, 'zona só de noite não vale às 15h');
   });

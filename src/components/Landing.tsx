@@ -6,13 +6,13 @@ import { LAUNCH_LABEL, SHARE_TEXT, saveIntent, type SignupIntent } from '../lib/
 
 const SERVICES = [
   { icon: Car, title: 'Corridas', text: 'Peça um carro ou moto na hora, com preço calculado antes e PIN de segurança no embarque.' },
-  { icon: HandCoins, title: 'Negociar', text: 'Você propõe o valor da corrida e os motoristas da região respondem com ofertas.' },
+  { icon: HandCoins, title: 'Viagens particulares', text: 'Agende uma viagem para qualquer cidade do Brasil, só para você ou compartilhada, e combine o valor com motoristas que vão passar por lá.' },
   { icon: Users, title: 'Caronas', text: 'Viagens entre cidades de todo o Brasil dividindo o custo com quem vai pro mesmo destino.' },
   { icon: Truck, title: 'Cargas e fretes', text: 'Caminhões, vans, furgões e utilitários: mudança, carreto e frete de retorno mais barato.' },
 ];
 
 const FAQ = [
-  ['O Froc X Uber funciona em que cidades?', 'Em todo o Brasil. Corridas e negociação funcionam em qualquer endereço; caronas e fretes ligam qualquer cidade do país.'],
+  ['O Froc X Uber funciona em que cidades?', 'Em todo o Brasil. Corridas funcionam em qualquer endereço; viagens particulares, caronas e fretes ligam qualquer cidade do país.'],
   ['Como funciona o pagamento?', 'Tudo pela carteira Froc: você recarrega por Pix ou cartão (Mercado Pago) e paga com o saldo. Não existe dinheiro na mão, o que acaba com golpes de troco e de cobrança por fora. O valor fica guardado pela Froc e vai para o motorista quando a viagem termina.'],
   ['Como faço para ser motorista ou cadastrar meu veículo de carga?', 'Crie sua conta, escolha Motorista ou Caminhoneiro, envie CNH, documento do veículo (e RNTRC para frete) e aguarde a aprovação da equipe.'],
   ['É seguro?', 'Todo motorista passa por análise de documentos, o embarque usa PIN, há botão SOS com localização, avaliação dos dois lados e atendimento pela equipe Froc.'],
