@@ -51,12 +51,15 @@ export function createTokenVerifier(options: { projectId: string; fetchCerts?: C
   if (!projectId) throw new Error('projectId do Firebase não encontrado (confira FIREBASE_SERVICE_ACCOUNT_KEY).');
   const fetchCerts = options.fetchCerts ?? fetchGoogleCerts;
   const now = options.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
-  let cache: { certs: Record<string, string>; expiresAt: number } | null = null;
+  let cache: { certs: Record<string, string>; expiresAt: number; fetchedAt: number } | null = null;
 
   const certFor = async (kid: string) => {
-    if (!cache || cache.expiresAt <= now() || !cache.certs[kid]) {
+    // Chave desconhecida só baixa de novo se a última busca tiver mais de 60 s
+    // (token falso com "kid" inventado não faz o servidor ir ao Google a cada requisição).
+    const unknownKid = cache && !cache.certs[kid] && now() - cache.fetchedAt >= 60;
+    if (!cache || cache.expiresAt <= now() || unknownKid) {
       const fresh = await fetchCerts();
-      cache = { certs: fresh.certs, expiresAt: now() + Math.max(60, fresh.maxAgeSeconds) };
+      cache = { certs: fresh.certs, expiresAt: now() + Math.max(60, fresh.maxAgeSeconds), fetchedAt: now() };
     }
     const pem = cache.certs[kid];
     if (!pem) throw new TokenError('auth/argument-error', 'Token assinado com chave desconhecida.');

@@ -416,7 +416,7 @@ export function createApp(options: AppOptions) {
   api.post('/freights/:id/cancel', wrap(async (req) => ({ freight: await (await service()).finishFreight(a(req), id(req), 'cancel') })));
 
   api.post('/wallet/topup', limited, guard('topup', 15, 3600_000, 'Muitas recargas em uma hora. Tente mais tarde.'), wrap(async (req) => (await service()).createTopup(a(req), req.body?.amount)));
-  api.post('/wallet/topups/:id/confirm', wrap(async (req) => (await service()).confirmTopup(id(req), a(req).uid)));
+  api.post('/wallet/topups/:id/confirm', rateLimit(30, 60_000), wrap(async (req) => (await service()).confirmTopup(id(req), a(req).uid)));
   api.post('/wallet/withdraw', limited, guard('withdraw', 5, 864e5, 'Limite de 5 pedidos de saque por dia.'), wrap(async (req) => (await service()).requestWithdrawal(a(req), req.body?.amount, req.body?.pixKey, req.body?.pixKeyType)));
 
   api.post(
