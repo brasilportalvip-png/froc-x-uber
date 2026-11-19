@@ -1,7 +1,8 @@
 /**
  * Auditoria de 19/11/2026: problemas encontrados no pente fino e corrigidos.
  *  1. Cancelar 2+ reservas na mesma carona (leitura depois de escrita: o Firestore recusava).
- *  2. Dinheiro retido preso: corrida/viagem/carona que o motorista esqueceu de encerrar.
+ *  2. Corrida aceita e não iniciada em 30 min: o valor volta inteiro ao passageiro (como no Uber).
+ *     Corrida com PIN termina e paga na hora em que o motorista finaliza; nada espera prazo.
  *  3. Pedido de corrida em dobro (toque duplo) cobrava duas vezes.
  *  4. Foto de perfil de quem tem viagem agendada aberta ficava visível para qualquer conta.
  *  5. Token com "kid" inventado fazia o servidor buscar as chaves do Google a cada requisição.
@@ -10,7 +11,7 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '../server/store.ts';
-import { AppError, FrocService, STALE_ACCEPTED_H, STALE_IN_PROGRESS_H, STALE_TRIP_H } from '../server/services.ts';
+import { AppError, FrocService, STALE_ACCEPTED_MIN } from '../server/services.ts';
 import type { AuthUser } from '../server/services.ts';
 import { createGridGeo } from '../server/geo.ts';
 import { createTokenVerifier } from '../server/firebaseToken.ts';
@@ -69,59 +70,49 @@ describe('1. caronas: cancelar várias reservas de uma vez', () => {
   });
 });
 
-describe('2. dinheiro retido nunca fica preso', () => {
-  test('corrida aceita e nunca iniciada: cancelada e 100% de volta ao passageiro', async () => {
+describe('2. corrida aceita e não iniciada (30 min) e corrida com PIN', () => {
+  const MIN = 60_000;
+  test('aceita e não iniciada em 30 min: cancelada e 100% de volta ao passageiro', async () => {
+    assert.equal(STALE_ACCEPTED_MIN, 30);
     clock = Date.parse('2026-11-18T18:00:00Z');
     await svc.updateProfile(caio, { driverOnline: true });
     const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
     await svc.rideAction(caio, r.id, { action: 'driver_accept' });
-    clock += (STALE_ACCEPTED_H - 1) * H;
+    clock += 29 * MIN;
     await svc.sweep(true);
-    assert.equal((await store.get('rides', r.id))!.status, 'accepted', 'antes do prazo nada muda');
-    clock += 2 * H;
+    assert.equal((await store.get('rides', r.id))!.status, 'accepted', 'antes de 30 min nada muda');
+    clock += 2 * MIN;
     await svc.sweep(true);
     const ride = (await store.get('rides', r.id))!;
     assert.equal(ride.status, 'cancelled');
     assert.equal(ride.cancelledBy, 'timeout_driver');
-    assert.equal(await saldo(ana), 500);
+    assert.equal(await saldo(ana), 500, 'valor inteiro de volta');
+    assert.equal(await saldo(caio), 0);
   });
 
-  test('corrida iniciada com PIN e não finalizada: finalizada e o motorista recebe', async () => {
+  test('corrida com PIN: o motorista finaliza e recebe na hora; o sistema não mexe em corrida iniciada', async () => {
     clock = Date.parse('2026-11-18T18:00:00Z');
     await svc.updateProfile(caio, { driverOnline: true });
     const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
     await svc.rideAction(caio, r.id, { action: 'driver_accept' });
     const pin = String((await store.get('rides', r.id))!.pinCode);
     await svc.rideAction(caio, r.id, { action: 'start', pin });
-    clock += (STALE_IN_PROGRESS_H + 1) * H;
+    clock += 40 * MIN;
     await svc.sweep(true);
+    assert.equal((await store.get('rides', r.id))!.status, 'in_progress', 'corrida em andamento continua');
+    await svc.rideAction(caio, r.id, { action: 'complete' });
     assert.equal((await store.get('rides', r.id))!.status, 'completed');
-    assert.ok((await saldo(caio)) > 0, 'motorista recebeu');
+    assert.ok((await saldo(caio)) > 0, 'motorista recebeu na hora');
   });
 
-  test('carona passada e esquecida: quem não embarcou recebe de volta, caução volta', async () => {
+  test('carona e viagem agendada: terminam quando o motorista encerra (sem prazo do sistema)', async () => {
     const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
     await svc.bookCarpool(ana, t.id, 1);
-    clock = SAIDA_MS + (STALE_TRIP_H - 1) * H;
+    clock = SAIDA_MS + 3 * H;
     await svc.sweep(true);
-    assert.equal((await store.get('carpools', t.id))!.status, 'open');
-    clock = SAIDA_MS + (STALE_TRIP_H + 1) * H;
-    await svc.sweep(true);
+    assert.equal((await store.get('carpools', t.id))!.status, 'open', 'o sistema não encerra sozinho');
+    await svc.finishCarpool(caio, t.id, 'completed');
     assert.equal((await store.get('carpools', t.id))!.status, 'completed');
-    assert.equal(await saldo(ana), 500);
-    assert.equal(await saldo(caio), 0);
-  });
-
-  test('viagem agendada passada e esquecida: sem embarque confirmado, o valor volta', async () => {
-    const req = await svc.createInDrive(ana, { ...ROTA, date: SAIDA, time: '08:00', passengerOffer: 400, shareMode: 'individual', seats: 1 });
-    const withOffer = await svc.sendInDriveOffer(caio, req.id, { offeredPrice: 400, etaMin: 10 });
-    await svc.acceptInDriveOffer(ana, req.id, withOffer.offers[0].id);
-    assert.equal(await saldo(ana), 100);
-    clock = SAIDA_MS + (STALE_TRIP_H + 3) * H;
-    await svc.sweep(true);
-    assert.equal((await store.get('indrive', req.id))!.status, 'completed');
-    assert.equal(await saldo(ana), 500);
-    assert.equal(await saldo(caio), 0, 'caução devolvida');
   });
 });
 
