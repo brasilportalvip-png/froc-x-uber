@@ -12,7 +12,7 @@ export interface GeoPoint {
   kind: 'avenue' | 'airport' | 'terminal' | 'neighborhood' | 'city' | 'hub';
 }
 
-export type RideCategoryId = 'froc_x' | 'froc_99' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
+export type RideCategoryId = 'froc_x' | 'froc_comfort' | 'froc_moto' | 'froc_delivery';
 
 /**
  * Todo pagamento é pela carteira Froc (recarregada por Pix/cartão no Mercado Pago).
@@ -189,6 +189,27 @@ export interface InDriveRequest {
   matchedAt?: string;
   offers: InDriveOffer[];
   createdAt: string;
+  /** Viagem particular agendada (pedidos antigos não têm). */
+  date?: string;
+  time?: string;
+  departureAt?: string;
+  durationMin?: number;
+  /** Ponto de encontro (ex.: "Aeroporto de Viracopos, desembarque"). */
+  pickupSpot?: string;
+  /** individual = o carro só para quem pediu; compartilhada = aceita dividir o carro. */
+  shareMode?: 'individual' | 'compartilhada';
+  seats?: number;
+  agreedPriceCents?: number;
+  /** Para o motorista: quanto ele recebe. */
+  driverEarning?: number;
+  /** waiting = aguardando embarque; boarded = embarcou com PIN; no_show = não apareceu (GPS). */
+  boardingStatus?: 'waiting' | 'boarded' | 'no_show' | null;
+  /** Só o passageiro vê. */
+  boardingPin?: string;
+  departed?: boolean;
+  cancelPreview?: { refund?: number; paid?: number; penaltyPct?: number; penalty?: number; deposit?: number };
+  /** O último motorista desistiu (o pedido voltou a ficar aberto). */
+  lastDriverCancel?: { at: string; penaltyPct: number; penaltyCents: number };
 }
 
 export interface CarpoolTrip {
@@ -471,6 +492,7 @@ export interface PlatformSettingsView {
   rainSurgeEnabled: boolean;
   carpoolCommissionPercent: number;
   freightCommissionPercent: number;
+  privateCommissionPercent: number;
 }
 
 export interface AdminOverview {

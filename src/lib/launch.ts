@@ -45,4 +45,4 @@ export function takeIntent(): SignupIntent | null {
 }
 
 export const SHARE_TEXT =
-  'Vem aí o Froc X Uber: corridas, preço negociado, caronas e fretes num app só. Inauguração em 10/03/2027. Cadastre-se: https://froc-x-uber.vercel.app';
+  'Vem aí o Froc X Uber: corridas, viagens particulares, caronas e fretes num app só. Inauguração em 10/03/2027. Cadastre-se: https://froc-x-uber.vercel.app';

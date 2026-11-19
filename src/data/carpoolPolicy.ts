@@ -84,7 +84,7 @@ export const CARPOOL_POLICY_TEXT = [
   'Ao reservar, o valor da vaga fica retido na Froc até a viagem acontecer.',
   'O motorista deixa uma caução de 20% de cada reserva bloqueada no saldo dele até a viagem. Ela volta quando a viagem acontece ou quando ele cancela com mais de 24h de antecedência. Nas 3 primeiras caronas a caução pode deixar o saldo negativo; depois é preciso ter saldo.',
   'Passageiro que cancela: mais de 24h antes recebe 100% de volta; entre 24h e 2h antes, 50% (os outros 50% vão para o motorista); com menos de 2h ou se não aparecer, não recebe de volta. Quem reservou há menos de 1 hora pode desistir sem custo.',
-  'Motorista que cancela: o passageiro sempre recebe 100% de volta. Entre 24h e 2h antes, o motorista paga multa de 10% de cada reserva; com menos de 2h, 20%. A multa sai da caução e vai inteira para o passageiro; a Froc não fica com nada.',
+  'Motorista que cancela: o passageiro sempre recebe 100% de volta. Entre 24h e 2h antes, o motorista paga multa de 10% de cada reserva; com menos de 2h, 20%. A multa sai da caução e vai inteira para o passageiro.',
   '3 cancelamentos com multa em 30 dias deixam o motorista 7 dias sem publicar caronas.',
   'No embarque, o passageiro mostra o PIN de 4 números e o motorista digita no app. Sem PIN e sem prova de que o passageiro faltou, o valor volta para o passageiro.',
   'Passageiro que não aparece: o motorista espera 15 minutos no ponto de encontro e toca "Não apareceu"; o app confere pelo GPS se ele estava lá.',

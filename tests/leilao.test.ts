@@ -75,13 +75,13 @@ describe('fatores do leilão', () => {
 
 describe('km do motorista dentro da faixa', () => {
   const base = { distanceKm: 10, demand: 1, maxSurge: 3, timeSurgeEnabled: true, risk: null };
-  const carros = ['froc_99', 'froc_x', 'froc_comfort'] as const;
+  const carros = ['froc_x', 'froc_comfort'] as const;
   const motos = ['froc_moto', 'froc_delivery'] as const;
 
   test('horário calmo: carro a partir de R$ 2/km, moto a partir de R$ 1,50/km', () => {
     for (const c of carros) assert.ok(priceRide({ ...base, categoryId: c, date: QUARTA_15H }).perKm >= KM_RANGE.carro.min, c);
     for (const c of motos) assert.ok(priceRide({ ...base, categoryId: c, date: QUARTA_15H }).perKm >= KM_RANGE.moto.min, c);
-    assert.equal(priceRide({ ...base, categoryId: 'froc_99', date: QUARTA_15H }).perKm, 2);
+    assert.equal(priceRide({ ...base, categoryId: 'froc_x', date: QUARTA_15H }).perKm, 2);
     assert.equal(priceRide({ ...base, categoryId: 'froc_moto', date: QUARTA_15H }).perKm, 1.5);
   });
 
@@ -138,8 +138,8 @@ describe('ganho da Froc somado ao preço (motorista recebe limpo)', () => {
   });
   test('textos públicos explicam o leilão sem contar o ganho da Froc', () => {
     const t = PRICING_TEXT.join(' ');
-    assert.match(t, /R\$ 2 a R\$ 5 por km/);
-    assert.match(t, /R\$ 1,50 a R\$ 2,50/);
+    assert.ok(!/R\$ 2 a R\$ 5/.test(t), 'km do motorista é do domínio da Froc (pedido do dono)');
+    assert.ok(!/R\$ 1,50 a R\$ 2,50/.test(t));
     assert.match(t, /chuva/);
     assert.match(t, /feriados/);
     assert.ok(!FEE_LEAK.test(t), 'ganho da Froc é sigiloso');

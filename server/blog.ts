@@ -52,7 +52,7 @@ export const GUIDE_SLUGS = ['como-funciona', 'regras-e-requisitos', 'perguntas-f
 /** Pauta: cada dia um assunto diferente, girando entre serviço, cidade e tema. */
 export const TOPIC_SERVICES = [
   'corrida por aplicativo barata',
-  'negociar preço de corrida',
+  'viagem particular entre cidades',
   'carona intermunicipal dividindo custos',
   'frete barato com retorno vazio',
   'mudança residencial com van ou caminhão',
@@ -193,7 +193,7 @@ export function autoFixSeo<T extends SeoFields>(p: T): T {
 }
 
 const POST_PROMPT = (topic: string, existingTitles: string[]) => `
-Escreva UM artigo de blog original para o site ${SITE_NAME} (app 4 em 1: corridas, negociação de preço, caronas entre cidades e cargas/fretes com caminhão, van, furgão e utilitário — em todo o Brasil; inauguração em 10/03/2027).
+Escreva UM artigo de blog original para o site ${SITE_NAME} (app 4 em 1: corridas, viagens particulares agendadas entre cidades (valor combinado com o motorista), caronas entre cidades e cargas/fretes com caminhão, van, furgão e utilitário — em todo o Brasil; inauguração em 10/03/2027).
 Assunto do dia: "${topic}".
 Objetivo: ser realmente útil para quem pesquisa isso no Google e no Bing (responder a dúvida de verdade, com dicas práticas), e convidar a pessoa a se cadastrar no ${SITE_NAME}.
 Regras de SEO (obrigatórias):
@@ -593,7 +593,7 @@ export const SERVICE_PAGES: ServicePage[] = [
     title: 'Corrida por aplicativo em todo o Brasil | Froc X Uber',
     description: 'Peça corrida de carro ou moto com preço antes de embarcar, PIN de segurança, SOS e pagamento seguro pela carteira (Pix ou cartão). Crie sua conta grátis.',
     h1: 'Corrida por aplicativo com preço justo e segurança',
-    intro: 'No Froc X Uber você pede uma corrida por aplicativo em qualquer cidade do Brasil e vê o preço antes de confirmar. São cinco categorias — do carro econômico ao conforto, além de moto e entregas — com embarque protegido por PIN.',
+    intro: 'No Froc X Uber você pede uma corrida por aplicativo em qualquer cidade do Brasil e vê o preço antes de confirmar. São quatro categorias — carro econômico, carro executivo, moto e entregas — com embarque protegido por PIN.',
     points: [
       ['Preço antes de pedir', 'O valor aparece antes de você confirmar, calculado pela distância e pelo tempo do trajeto.'],
       ['PIN no embarque', 'O motorista só inicia a viagem com o PIN de 4 dígitos que você informa. Nada de entrar no carro errado.'],
@@ -602,7 +602,7 @@ export const SERVICE_PAGES: ServicePage[] = [
     ],
     faq: [
       ['Funciona na minha cidade?', 'Sim: qualquer endereço do Brasil pode ser origem ou destino. A disponibilidade de motoristas cresce conforme a região.'],
-      ['Posso negociar o preço?', 'Sim, na aba Negociar você propõe o valor e os motoristas respondem com ofertas.'],
+      ['Posso combinar o preço de uma viagem?', 'Sim, em Viagens particulares você agenda a viagem, diz quanto quer pagar e os motoristas respondem com propostas.'],
       ['Como é a segurança?', 'Motoristas com documentos analisados, PIN no embarque, SOS, compartilhamento da viagem e avaliação.'],
     ],
     cta: 'Crie sua conta grátis e peça sua primeira corrida.',
@@ -648,11 +648,11 @@ export const SERVICE_PAGES: ServicePage[] = [
   {
     slug: 'seja-motorista',
     title: 'Seja motorista parceiro do Froc X Uber | Cadastre-se',
-    description: 'Dirija com carro, moto, van ou caminhão no Froc X Uber: corridas, negociação, caronas e fretes num app só. Cadastro com análise rápida de documentos.',
+    description: 'Dirija com carro, moto, van ou caminhão no Froc X Uber: corridas, viagens particulares, caronas e fretes num app só. Cadastro com análise rápida de documentos.',
     h1: 'Seja motorista ou transportador parceiro',
-    intro: 'Quer ser motorista de aplicativo ou ganhar dinheiro com seu veículo de carga? No Froc X Uber você recebe corridas, negocia preços, oferece caronas entre cidades e faz fretes — tudo com a mesma conta.',
+    intro: 'Quer ser motorista de aplicativo ou ganhar dinheiro com seu veículo de carga? No Froc X Uber você recebe corridas, faz viagens particulares agendadas, oferece caronas entre cidades e faz fretes — tudo com a mesma conta.',
     points: [
-      ['4 fontes de renda', 'Corridas, negociação de preço, caronas intermunicipais e fretes/mudanças.'],
+      ['4 fontes de renda', 'Corridas, viagens particulares, caronas intermunicipais e fretes/mudanças.'],
       ['Receba na carteira', 'O valor cai na sua carteira quando o serviço termina; saque por Pix.'],
       ['Regras claras', 'A comissão aparece no app antes de cada serviço.'],
       ['Cadastro simples', 'Envie CNH e documento do veículo pelo celular; transportadores enviam também ANTT/RNTRC.'],

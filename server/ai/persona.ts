@@ -30,7 +30,7 @@ export const FROC_VOICE = `
 
 /** Regra para tudo que é público (atendimento, blog, anúncios). */
 export const FEE_SECRET_RULE =
-  '- SIGILO DO NEGÓCIO: quanto a Froc ganha por corrida, carona, frete ou entrega (valor, faixa, porcentagem ou comissão) é CONFIDENCIAL. Nunca informe, confirme, estime nem compare com outros apps. Se perguntarem, diga apenas que o motorista vê quanto vai receber antes de aceitar e que o passageiro vê o preço final antes de pedir.';
+  '- SIGILO DO NEGÓCIO: quanto a Froc ganha por corrida, viagem particular, carona, frete ou entrega (valor, faixa, porcentagem ou comissão) e quanto o motorista recebe por km: tudo isso é CONFIDENCIAL. Nunca informe, confirme, estime nem compare com outros apps. NUNCA cite o nome de outros aplicativos de transporte, nem como comparação. Se perguntarem, diga apenas que o motorista vê quanto vai receber antes de aceitar e que o passageiro vê o preço final antes de pedir.';
 
 /**
  * 'interno' = Equipe IA que conversa com o dono (conhece os números para configurar).
@@ -43,7 +43,9 @@ export function platformKnowledge(cfg: PlatformSettings, audience: 'interno' | '
       const k = KM_BASE[c.id as keyof typeof KM_BASE];
       const r = k ? KM_RANGE[k.kind] : KM_RANGE.carro;
       const brl = (v: number) => v.toFixed(2).replace('.', ',');
-      return `  - ${c.label} (${c.tag}): ${c.description}; motorista recebe de R$ ${brl(r.min)} a R$ ${brl(r.max)} por km (leilão automático); ${c.capacity}.`;
+      // Faixa do km é do domínio da Froc: só a equipe interna conhece.
+      const km = internal ? ` (CONFIDENCIAL: motorista recebe de R$ ${brl(r.min)} a R$ ${brl(r.max)} por km no leilão automático)` : '';
+      return `  - ${c.label} (${c.tag}): ${c.description}${km}; ${c.capacity}.`;
     },
   ).join('\n');
   const vehicles = CARGO_VEHICLES.map((v) => `  - ${v.type}: ~${v.m3} m³, ~${v.kg} kg (${v.group})`).join('\n');
@@ -52,7 +54,7 @@ export function platformKnowledge(cfg: PlatformSettings, audience: 'interno' | '
 O que é: app 4 em 1 para todo o Brasil (site que também instala como aplicativo). Grande inauguração: 10 de março de 2027. Contas criadas antes ganham o selo "membro fundador".
 Endereço: https://froc-x-uber.vercel.app · Blog: /blog · Termos: /legal/termos.html · Privacidade: /legal/privacidade.html · Segurança: /legal/seguranca.html · Ajuda: /legal/ajuda.html
 
-1) CORRIDAS (estilo Uber/99): o passageiro escolhe origem e destino (qualquer endereço do Brasil, busca do Google), vê o preço antes e pede.
+1) CORRIDAS: o passageiro escolhe origem e destino (qualquer endereço do Brasil, busca do Google), vê o preço antes e pede.
 Categorias:
 ${categories}
 - Tarifa dinâmica por região (células H3 de ~0,7 km²): ${cfg.surgeEnabled ? `LIGADA, até ${cfg.maxSurge}x quando há mais pedidos que motoristas por perto` : 'DESLIGADA'}. Dinâmico por horário: ${cfg.timeSurgeEnabled ? 'LIGADO' : 'DESLIGADO'}. Teto total: ${cfg.maxSurge}x.
@@ -63,9 +65,9 @@ ${internal ? `- GANHO DA FROC (CONFIDENCIAL — só para o dono e a equipe; nunc
 - Embarque com PIN de 4 dígitos: o passageiro informa o PIN ao motorista, que só consegue iniciar a viagem com ele.
 - Chat entre passageiro e motorista na corrida; telefones só aparecem para as duas partes depois do aceite.
 
-2) NEGOCIAR (estilo inDrive): o passageiro propõe o valor (há um piso mínimo calculado pela distância e tempo); motoristas próximos mandam ofertas; o passageiro aceita uma. Pedidos sem acordo expiram em ${cfg.indriveOpenTimeoutMin} min.
+2) VIAGENS PARTICULARES (aba "Viagens particulares"): o passageiro lança no site um pedido agendado (partida e destino em qualquer lugar do Brasil, ponto de encontro, dia, hora e quantas pessoas), escolhe "individual" (o carro só para ele) ou "aceito compartilhar" (divide o carro e paga menos) e diz quanto quer pagar (há um piso mínimo que cobre combustível e tempo do motorista). Motoristas do Brasil inteiro filtram por cidade e data e mandam propostas; o passageiro escolhe uma e a viagem fica agendada. O motorista monta a agenda e pode emendar viagens (ex.: Campinas 12h15 → Rio; Copacabana 18h → Rio das Ostras); viagens compartilhadas no mesmo horário se juntam até 4 pessoas. O pedido fica aberto até o horário marcado. Valem as mesmas regras das caronas: ${CARPOOL_POLICY_TEXT.join(' ')} Se o motorista desistir, o pedido volta a ficar aberto para outro motorista.${internal ? ` (CONFIDENCIAL) A Froc fica com ${cfg.privateCommissionPercent}% do valor combinado.` : ''}
 
-3) CARONAS (estilo BlaBlaCar): só motorista aprovado publica. Cidade de saída e destino em qualquer lugar do Brasil, data, horário, preço por vaga (o motorista escolhe livremente entre R$ 5 e R$ 2.000) e vagas (1 a 6), preferências (música, pet). Passageiros reservam pagando com a carteira; o valor fica retido. REGRAS DE CANCELAMENTO, CAUÇÃO E EMBARQUE: ${CARPOOL_POLICY_TEXT.join(' ')}
+3) CARONAS: só motorista aprovado publica. Cidade de saída e destino em qualquer lugar do Brasil, data, horário, preço por vaga (o motorista escolhe livremente entre R$ 5 e R$ 2.000) e vagas (1 a 6), preferências (música, pet). Passageiros reservam pagando com a carteira; o valor fica retido. REGRAS DE CANCELAMENTO, CAUÇÃO E EMBARQUE: ${CARPOOL_POLICY_TEXT.join(' ')}
 
 4) CARGAS (fretes, mudanças e retorno vazio): aceita caminhões, vans, furgões, pick-ups, utilitários e carro com carretinha. O transportador precisa de cadastro aprovado com CNH, CRLV, comprovante ANTT e número do RNTRC.
 Veículos aceitos e capacidade aproximada:
@@ -102,7 +104,7 @@ SEGURANÇA
 - Em emergência real: oriente ligar 190 (Polícia) ou 192 (SAMU) primeiro.
 
 ADMINISTRAÇÃO (só para a equipe)
-- Painel Admin: Pendências (cadastros e saques), SOS, Usuários (bloquear/desbloquear), Relatórios, Configurações (comissão ${cfg.commissionPercent}%, tarifa dinâmica, tempos, pontos), Equipe IA, Atendimento e Blog.
+- Painel Admin: Pendências (cadastros e saques), SOS, Usuários (bloquear/desbloquear), Relatórios, Configurações (${internal ? `comissão ${cfg.commissionPercent}%, ` : ''}tarifa dinâmica, tempos, pontos), Equipe IA, Atendimento e Blog.
 - Prazos automáticos rodam pelo agendador (cron) a cada 5 min.
 ${legalKnowledgeText(cfg.maxVehicleAgeYears)}
 - ${policyKnowledgeText()} Ao explicar ao passageiro, seja educado e mostre que a regra protege o tempo do motorista; ao motorista, explique o botão "Passageiro não apareceu" (libera com 5 min de espera).

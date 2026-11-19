@@ -24,6 +24,7 @@ const INTERCITY = { originId: 'sp-tiete', destinationId: 'br-campinas' };
 
 let svc: FrocService;
 let clock: number;
+let store: MemoryStore;
 let approved: Map<string, number>;
 
 const payments: PaymentsGateway = {
@@ -54,6 +55,12 @@ async function approve(u: AuthUser, kind: 'driver' | 'trucker') {
   await svc.applyAsProvider(u, kind, { ...LEGAL, phone: '11988887777', vehicle: 'Onix Prata', plate: 'ABC1D23', truckType: 'Truck Baú', rntrc: '123456789' });
   await svc.reviewApplication(admin, u.uid, kind, 'approved', '');
 }
+/** Dia (dd/mm/aaaa) e hora (hh:mm) em Brasília daqui a N horas, a partir do relógio do teste. */
+const agendaEm = (nowMs: number, hours: number) => {
+  const d = new Date(nowMs + hours * 3600_000 - 3 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return { date: `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`, time: `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` };
+};
 const minutes = (n: number) => {
   clock += n * 60_000;
 };
@@ -61,7 +68,8 @@ const minutes = (n: number) => {
 beforeEach(async () => {
   clock = Date.parse('2026-11-15T12:00:00Z');
   approved = new Map();
-  svc = new FrocService(new MemoryStore(), {
+  store = new MemoryStore();
+  svc = new FrocService(store, {
     now: () => new Date(clock),
     payments,
     adminEmails: ['dono@froc.com'],
@@ -132,11 +140,14 @@ describe('prazos automáticos (papel do Cadence)', () => {
     assert.equal((await svc.bootstrap(ana)).rides.find((r) => r.id === ride.id)!.status, 'cancelled');
   });
 
-  test('negociação aberta expira; prazo configurável no admin', async () => {
+  test('viagem particular aberta fica na vitrine até o horário marcado; pedido antigo expira pelo prazo do admin', async () => {
     await svc.updateSettings(admin, { indriveOpenTimeoutMin: 5 });
-    await svc.createInDrive(ana, { ...SP, passengerOffer: 20, paymentMethod: 'froc_pay' });
+    await svc.createInDrive(ana, { ...SP, ...agendaEm(clock, 2), passengerOffer: 20, paymentMethod: 'froc_pay' });
+    await store.set('indrive', 'antigo', { id: 'antigo', passengerId: 'x', status: 'open', offers: [], createdAt: new Date(clock).toISOString() });
     minutes(6);
-    assert.equal((await svc.sweep(true)).requestsExpired, 1);
+    assert.equal((await svc.sweep(true)).requestsExpired, 1, 'só o antigo, sem data marcada');
+    minutes(120);
+    assert.equal((await svc.sweep(true)).requestsExpired, 1, 'passou do horário: sai da vitrine');
   });
 });
 
@@ -213,7 +224,7 @@ describe('admin: usuários e bloqueio', () => {
 describe('pisos de preço', () => {
   test('negociação e frete abaixo do mínimo são recusados', async () => {
     await approve(tonhao, 'trucker');
-    await expectError(svc.createInDrive(ana, { originId: 'sp-tiete', destinationId: 'br-campinas', passengerOffer: 20, paymentMethod: 'froc_pay' }), 'below_floor');
+    await expectError(svc.createInDrive(ana, { originId: 'sp-tiete', destinationId: 'br-campinas', ...agendaEm(clock, 24), passengerOffer: 20, paymentMethod: 'froc_pay' }), 'below_floor');
     assert.ok(negotiationFloor(90) > 100);
     await expectError(
       svc.createFreight(ana, { ...INTERCITY, estimatedWeightKg: 100, proposedBudget: 100, scheduledDate: 'Sábado' }),

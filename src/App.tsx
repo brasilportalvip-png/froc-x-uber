@@ -9,7 +9,7 @@ import { takeIntent } from './lib/launch.ts';
 import { currentLocationPoint, isGpsOrigin, isOriginPending, isUnsetDestination, locatingPoint, metersBetween, needLocationPoint, pointAt, unsetDestination, watchCoords } from './lib/currentLocation.ts';
 import { BlaBlaCarPanel } from './components/BlaBlaCarPanel.tsx';
 import { GoogleMapsView } from './components/GoogleMapsView.tsx';
-import { InDrivePanel } from './components/InDrivePanel.tsx';
+import { ViagensParticularesPanel } from './components/ViagensParticularesPanel.tsx';
 import { InteractiveMap } from './components/InteractiveMap.tsx';
 import { ProviderOnboarding } from './components/ProviderOnboarding.tsx';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton.tsx';
@@ -331,12 +331,15 @@ export default function App() {
     return run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
   };
 
-  const handleCreateInDrive = (payload: object) => run(() => post('/api/indrive', payload), 'Oferta publicada para os motoristas!');
+  const handleCreateInDrive = (payload: object) => run(() => post('/api/indrive', payload), 'Pedido lançado! Os motoristas já podem mandar propostas.');
   const handleSendDriverOffer = (requestId: string, offeredPrice: number, etaMin: number, note: string) =>
     run(() => post(`/api/indrive/${requestId}/offers`, { offeredPrice, etaMin, note }), 'Proposta enviada ao passageiro!');
-  const handleAcceptInDrive = (requestId: string, offerId: string) => run(() => post(`/api/indrive/${requestId}/accept`, { offerId }), 'Negociação fechada!');
+  const handleAcceptInDrive = (requestId: string, offerId: string) => run(() => post(`/api/indrive/${requestId}/accept`, { offerId }), 'Viagem combinada!');
   const handleCompleteInDrive = (id: string) => run(() => post(`/api/indrive/${id}/complete`), 'Viagem finalizada!');
-  const handleCancelInDrive = (id: string) => run(() => post(`/api/indrive/${id}/cancel`), 'Pedido cancelado.');
+  const handleCancelInDrive = (id: string) => run(() => post(`/api/indrive/${id}/cancel`), 'Cancelado. Veja no extrato quanto voltou.');
+  const handleBoardInDrive = (id: string, pin: string) => run(() => post(`/api/indrive/${id}/board`, { pin }), 'Embarque confirmado!');
+  const handleNoShowInDrive = (id: string, lat: number, lng: number) => run(() => post(`/api/indrive/${id}/no-show`, { lat, lng }), 'Registrado: passageiro não apareceu.');
+  const handleDriverCancelInDrive = (id: string) => run(() => post(`/api/indrive/${id}/driver-cancel`), 'Você desistiu. O passageiro foi reembolsado e o pedido voltou para outros motoristas.');
 
   const handleBookCarpool = (tripId: string, seats: number) => run(() => post(`/api/carpools/${tripId}/book`, { seats }), 'Vaga reservada!');
   const handlePublishCarpool = (payload: object) => run(() => post('/api/carpools', payload), 'Carona publicada!');
@@ -494,7 +497,7 @@ export default function App() {
           {(
             [
               { id: 'rides', label: 'Corridas' },
-              { id: 'indrive', label: 'Negociar' },
+              { id: 'indrive', label: 'Viagens particulares' },
               { id: 'carpool', label: 'Caronas' },
               { id: 'freight', label: 'Cargas' },
               { id: 'wallet', label: 'Conta' },
@@ -592,19 +595,19 @@ export default function App() {
           {state && (
             <div className="hidden lg:grid grid-cols-4 gap-4 absolute bottom-4 right-4 left-64 z-10 rounded-2xl bg-white/92 dark:bg-[#111013]/92 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-5 py-3 shadow-sm">
               <div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">Uber / 99</div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">Corridas</div>
                 <div className="text-sm font-bold font-mono-num text-slate-900 dark:text-white">
                   {state.rides.filter((r) => r.status !== 'cancelled').length} corridas
                 </div>
               </div>
               <div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">Leilão inDrive</div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">Viagens particulares</div>
                 <div className="text-sm font-bold font-mono-num text-sky-600 dark:text-sky-400">
-                  {state.indriveRequests.filter((r) => r.status === 'open').length} ofertas abertas
+                  {state.indriveRequests.filter((r) => r.status === 'open').length} pedidos abertos
                 </div>
               </div>
               <div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">BlaBlaCar</div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">Caronas</div>
                 <div className="text-sm font-bold font-mono-num text-emerald-600 dark:text-emerald-400">
                   {state.carpools.reduce((acc, c) => acc + c.availableSeats, 0)} assentos livres
                 </div>
@@ -750,26 +753,22 @@ export default function App() {
                 )}
 
                 {(role === 'passenger' || roleApproved) && activeModule === 'indrive' && (
-                  <InDrivePanel
+                  <ViagensParticularesPanel
                     role={role}
-                    profile={state.profile}
                     origin={origin}
-                    destination={destination}
                     requests={state.indriveRequests}
-                    mapsEnabled={useGoogleMaps}
-                    liveDistanceKm={liveDistanceKm}
-                    onChangeOrigin={setOrigin}
-                    onChangeDestination={setDestination}
-                    onSwapLocations={() => {
-                      const prevO = origin;
-                      setOrigin(destination);
-                      setDestination(prevO);
-                    }}
                     onCreateRequest={handleCreateInDrive}
                     onSendDriverOffer={handleSendDriverOffer}
                     onAcceptOffer={handleAcceptInDrive}
                     onCompleteRequest={handleCompleteInDrive}
                     onCancelRequest={handleCancelInDrive}
+                    onBoard={handleBoardInDrive}
+                    onNoShow={handleNoShowInDrive}
+                    onDriverCancel={handleDriverCancelInDrive}
+                    onPreviewRoute={(o, d) => {
+                      setOrigin(o);
+                      setDestination(d);
+                    }}
                   />
                 )}
 
@@ -858,7 +857,7 @@ export default function App() {
         {(
           [
             { id: 'rides', label: 'Corridas', Icon: Car },
-            { id: 'indrive', label: 'inDrive', Icon: HandCoins },
+            { id: 'indrive', label: 'Particular', Icon: HandCoins },
             { id: 'carpool', label: 'Caronas', Icon: Users },
             { id: 'freight', label: 'Cargas', Icon: Truck },
             { id: 'wallet', label: 'Conta', Icon: Wallet },

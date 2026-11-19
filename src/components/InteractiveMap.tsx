@@ -535,7 +535,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
-          Caronas BlaBlaCar
+          Caronas
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-3 h-2 rounded-xs bg-amber-500 inline-block" />

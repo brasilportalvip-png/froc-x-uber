@@ -102,7 +102,7 @@ function assertMoneyConserved(step: string) {
   const saldos = sum(all('users').map((u) => Number(u.balanceCents || 0)));
   const retido =
     sum(all('rides').map((r) => Number(r.escrowCents || 0))) +
-    sum(all('indrive').map((r) => Number(r.escrowCents || 0))) +
+    sum(all('indrive').map((r) => Number(r.escrowCents || 0) + (r.status === 'matched' ? Number(r.depositCents || 0) : 0))) +
     sum(all('emptyTrucks').map((r) => Number(r.escrowCents || 0))) +
     sum(all('freights').map((r) => Number(r.escrowCents || 0))) +
     // Caronas: valor da vaga (passageiro) + caução do motorista ficam retidos até a viagem.
@@ -219,7 +219,7 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   await expectError(svc.trackShare(share.token), 'expired');
 
   // ---------------------------------------------------------- 5. cancelamento tardio (50%)
-  const r2 = await svc.createRide(ana, { ...SP, categoryId: 'froc_99' });
+  const r2 = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
   await svc.rideAction(caio, r2.id, { action: 'driver_accept' });
   tick(90);
   const cancelled = await svc.rideAction(ana, r2.id, { action: 'cancel' });
@@ -227,12 +227,20 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   assertMoneyConserved('cancelamento com taxa');
 
   // ---------------------------------------------------------- 6. negociação
-  const req = await svc.createInDrive(ana, { ...SP, passengerOffer: 30 });
+  const saidaVp = clock + 3 * 3600_000;
+  const dVp = new Date(saidaVp - 3 * 3600_000);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const req = await svc.createInDrive(ana, { ...SP, date: `${p2(dVp.getUTCDate())}/${p2(dVp.getUTCMonth() + 1)}/${dVp.getUTCFullYear()}`, time: `${p2(dVp.getUTCHours())}:${p2(dVp.getUTCMinutes())}`, passengerOffer: 30 });
   const offered = await svc.sendInDriveOffer(caio, req.id, { offeredPrice: 32, etaMin: 4 });
   await svc.acceptInDriveOffer(ana, req.id, offered.offers[0].id);
-  assertMoneyConserved('negociação aceita');
+  assertMoneyConserved('viagem particular combinada (valor + caução retidos)');
+  const vpPin = (await svc.bootstrap(ana)).indriveRequests.find((r) => r.id === req.id)!.boardingPin!;
+  const antesVp = clock;
+  clock = saidaVp + 5 * 60000; // 5 min depois do horário: saiu
+  await svc.boardInDrive(caio, req.id, vpPin);
   await svc.completeInDrive(caio, req.id);
-  assertMoneyConserved('negociação concluída');
+  assertMoneyConserved('viagem particular concluída');
+  clock = antesVp;
 
   // ---------------------------------------------------------- 7. carona
   const trip = await svc.publishCarpool(caio, { ...INTERCITY, date: '21/11/2026', departureTime: '08:00', totalSeats: 3, pricePerSeat: 45 });

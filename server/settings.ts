@@ -29,6 +29,8 @@ export interface PlatformSettings {
   /** % do valor total que fica com a Froc nas caronas e nos fretes/retorno vazio. */
   carpoolCommissionPercent: number;
   freightCommissionPercent: number;
+  /** % do valor combinado que fica com a Froc nas viagens particulares. */
+  privateCommissionPercent: number;
   /** Valor máximo de UM saque que a Equipe IA libera sozinha (R$). Acima disso o Financeiro analisa antes. */
   autoPayoutLimit: number;
 }
@@ -51,6 +53,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   rainSurgeEnabled: true,
   carpoolCommissionPercent: 30,
   freightCommissionPercent: 30,
+  privateCommissionPercent: 30,
 };
 
 export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 'boolean'> = {
@@ -71,6 +74,7 @@ export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 
   rainSurgeEnabled: 'boolean',
   carpoolCommissionPercent: [0, 50],
   freightCommissionPercent: [0, 50],
+  privateCommissionPercent: [0, 50],
 };
 
 export const REDEEM_VALUE_CENTS = 500;

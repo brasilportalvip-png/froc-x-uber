@@ -17,6 +17,7 @@ import { normalizePixKey, resolvePixKeyType } from '../src/lib/pixKey.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
 import { holidayAt, platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
+import { privateTripFloor } from '../src/data/privateTrips.ts';
 import { CARPOOL_POLICY, departureMs, depositCentsFor, driverPenaltyPct, hoursUntil, kmBetween, passengerRefundPct, strikesAfter } from '../src/data/carpoolPolicy.ts';
 import type { PriceBreakdown, RainLevel, RideCategoryKey, RiskZoneLike } from '../src/data/pricing.ts';
 import type { RainLookup } from './weather.ts';
@@ -1667,19 +1668,54 @@ export class FrocService {
     return this.rideView(result.ride, auth.uid);
   }
 
-  // ------------------------------------------------- 2) negociação inDrive
+  // ------------------------------------------------- 2) viagens particulares (agendadas, valor combinado)
+  //
+  // O passageiro agenda uma viagem para qualquer cidade do Brasil (dia, hora, pessoas), escolhe
+  // "individual" (carro só dele) ou "compartilhada" (divide o carro) e diz quanto quer pagar.
+  // Motoristas do Brasil inteiro filtram por cidade, mandam propostas e montam a agenda do dia
+  // (dá para emendar viagens: Campinas 12h15 → Rio, Copacabana 18h → Rio das Ostras).
+  // Valem as regras das caronas: valor retido, caução do motorista, cancelamento justo, PIN e "não apareceu".
+  // Pedidos antigos (sem data marcada) seguem a regra antiga.
+
+  private privateDeparture(r: Doc): number | null {
+    const iso = Date.parse(String(r.departureAt || ''));
+    return Number.isFinite(iso) ? iso : null;
+  }
+
+  /** Piso de preço (mesma conta da tela: src/data/privateTrips.ts). */
+  private privateFloor(distanceKm: number, shareMode: string, seats: number) {
+    return privateTripFloor(distanceKm, shareMode, seats);
+  }
 
   private indriveView(r: Doc, uid: string): InDriveRequest {
-    const { escrowCents: _e, platformFeeCents: _f, ...rest } = r;
+    const { escrowCents: _e, platformFeeCents: _f, boardingPin, wrongPins: _w, depositCents, ...rest } = r;
     const mine = involvement(uid, r.passengerId, r.driverId);
-    // Na negociação o preço é combinado às claras; só o detalhe da taxa fica escondido.
     if (mine === 'owner') delete (rest as Doc).driverEarning;
     const offers = (Array.isArray(r.offers) ? r.offers : []) as Doc[];
+    const now = this.now().getTime();
+    const dep = this.privateDeparture(r);
+    const hours = dep === null ? Infinity : hoursUntil(dep, now);
+    const matched = r.status === 'matched';
+    const amount = Number(r.agreedPriceCents || 0);
+    let cancelPreview: InDriveRequest['cancelPreview'];
+    if (matched && dep !== null && r.boardingStatus !== 'boarded') {
+      if (mine === 'owner') {
+        const pct = passengerRefundPct(hours, (now - Date.parse(String(r.matchedAt))) / 60000);
+        cancelPreview = { refund: toReais(Math.round((amount * pct) / 100)), paid: toReais(amount) };
+      } else if (mine === 'provider') {
+        const pct = driverPenaltyPct(hours);
+        cancelPreview = { penaltyPct: pct, penalty: toReais(Math.min(Number(depositCents || 0), Math.round((amount * pct) / 100))), deposit: toReais(Number(depositCents || 0)) };
+      }
+    }
     return {
       ...(rest as unknown as InDriveRequest),
       mine,
       // Motorista só vê a própria proposta; o passageiro vê todas.
       offers: (mine === 'owner' ? offers : offers.filter((o) => o.driverId === uid)) as unknown as InDriveRequest['offers'],
+      // PIN de embarque: só o passageiro vê.
+      boardingPin: mine === 'owner' && matched ? String(boardingPin || '') || undefined : undefined,
+      departed: dep !== null && now >= dep,
+      cancelPreview,
     };
   }
 
@@ -1689,17 +1725,23 @@ export class FrocService {
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const method = paymentMethod(body.paymentMethod);
     const distanceKm = calculateDistanceKm(origin, destination);
+    const time = /^\d{2}:\d{2}$/.test(String(body.time)) ? String(body.time) : fail(400, 'invalid_time', 'Informe a hora da viagem (ex.: 12:15).');
+    const date = text(body.date, 20) || fail(400, 'invalid_date', 'Informe o dia da viagem.');
+    const dep = departureMs(date, time) ?? fail(400, 'invalid_date', 'Data inválida. Use dia/mês/ano, ex.: 27/11/2026.');
+    if (dep <= this.now().getTime() + 15 * 60000) fail(400, 'past_date', 'Escolha um horário com pelo menos 15 minutos de antecedência.');
+    const shareMode = body.shareMode === 'compartilhada' ? 'compartilhada' : 'individual';
+    const seats = Math.round(num(body.seats ?? 1, 1, 6, 'pessoas'));
     const suggestedPrice = round2(5.5 + distanceKm * 2.15 + 4);
-    const minimum = negotiationFloor(distanceKm);
-    const offer = round2(num(body.passengerOffer, 8, 5000, 'oferta'));
+    const minimum = this.privateFloor(distanceKm, shareMode, seats);
+    const offer = round2(num(body.passengerOffer, 8, 20000, 'oferta'));
     if (offer < minimum)
-      fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km é ${brl(minimum)} (cobre combustível e tempo do motorista).`);
+      fail(400, 'below_floor', `A oferta mínima para ${distanceKm} km (${shareMode === 'individual' ? 'viagem individual' : `${seats} pessoa(s), compartilhada`}) é ${brl(minimum)}: cobre combustível e tempo do motorista.`);
     const user = await this.ensureUser(auth);
     if (method === 'froc_pay' && user.balanceCents < toCents(offer))
       fail(402, 'insufficient_balance', `Saldo insuficiente: sua carteira tem ${brl(user.balanceCents / 100)}. Recarregue por Pix ou cartão.`);
-    const open = await this.store.query<Doc>('indrive', [['passengerId', '==', auth.uid]], 200);
-    if (open.some((r) => r.status === 'open' || r.status === 'matched'))
-      fail(409, 'request_in_progress', 'Você já tem um pedido de negociação em andamento.');
+    const mine = await this.store.query<Doc>('indrive', [['passengerId', '==', auth.uid]], 200);
+    if (mine.filter((r) => r.status === 'open' || r.status === 'matched').length >= 5)
+      fail(409, 'too_many_requests', 'Você já tem 5 viagens particulares agendadas ou aguardando proposta.');
     const id = randomUUID();
     const doc: Doc = {
       id,
@@ -1707,7 +1749,14 @@ export class FrocService {
       passengerName: user.name,
       origin,
       destination,
+      pickupSpot: text(body.pickupSpot, 120),
       distanceKm,
+      durationMin: estimateDurationMin(distanceKm, 'highway'),
+      date,
+      time,
+      departureAt: new Date(dep).toISOString(),
+      shareMode,
+      seats,
       suggestedPrice,
       minimumPrice: minimum,
       passengerOffer: offer,
@@ -1722,17 +1771,31 @@ export class FrocService {
     return this.indriveView(doc, auth.uid);
   }
 
+  private assertNotSuspended(driver: UserDoc) {
+    if (driver.carpoolSuspendedUntil && Date.parse(String(driver.carpoolSuspendedUntil)) > this.now().getTime()) {
+      const ate = new Date(String(driver.carpoolSuspendedUntil)).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      fail(403, 'carpool_suspended', `Você cancelou ${CARPOOL_POLICY.strikesToSuspend} viagens com menos de 24h em ${CARPOOL_POLICY.strikeWindowDays} dias. Pode voltar a pegar viagens agendadas a partir de ${ate}.`);
+    }
+  }
+
   async sendInDriveOffer(auth: AuthUser, id: string, body: Record<string, unknown>) {
     const driver = await this.approvedUser(auth, 'driver');
-    const offeredPrice = round2(num(body.offeredPrice, 8, 5000, 'proposta'));
+    this.assertNotSuspended(driver);
+    const offeredPrice = round2(num(body.offeredPrice, 8, 20000, 'proposta'));
     const reqDoc = await this.store.get<Doc>('indrive', id);
-    if (reqDoc && offeredPrice < negotiationFloor(Number(reqDoc.distanceKm)))
-      fail(400, 'below_floor', `A proposta mínima é ${brl(negotiationFloor(Number(reqDoc.distanceKm)))}.`);
+    const floor = reqDoc
+      ? reqDoc.departureAt
+        ? this.privateFloor(Number(reqDoc.distanceKm), String(reqDoc.shareMode), Number(reqDoc.seats || 1))
+        : negotiationFloor(Number(reqDoc.distanceKm))
+      : 0;
+    if (offeredPrice < floor) fail(400, 'below_floor', `A proposta mínima é ${brl(floor)}.`);
     const etaMin = Math.round(num(body.etaMin ?? 5, 1, 60, 'tempo'));
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
       if (r.passengerId === auth.uid) fail(403, 'own_request', 'Você não pode responder ao próprio pedido.');
       if (r.status !== 'open') fail(409, 'closed', 'Este pedido não está mais aberto.');
+      const dep = this.privateDeparture(r);
+      if (dep !== null && dep <= this.now().getTime()) fail(409, 'departed', 'O horário desta viagem já passou.');
       const others = ((r.offers as Doc[]) || []).filter((o) => o.driverId !== auth.uid);
       const offer = {
         id: randomUUID(),
@@ -1754,11 +1817,42 @@ export class FrocService {
     return this.indriveView(req, auth.uid);
   }
 
+  /**
+   * Agenda do motorista: viagem individual ocupa o carro sozinha; compartilhadas no mesmo horário
+   * podem se juntar até 4 pessoas. Considera a duração da viagem + 1h de folga.
+   */
+  private async privateAgendaConflict(driverId: string, r: Doc): Promise<string | null> {
+    const dep = this.privateDeparture(r);
+    if (dep === null) return null;
+    const window = (x: Doc) => {
+      const d = this.privateDeparture(x) ?? 0;
+      return [d, d + (Number(x.durationMin || 60) + 60) * 60000] as const;
+    };
+    const [a0, a1] = window(r);
+    const agenda = (await this.store.query<Doc>('indrive', [['driverId', '==', driverId]], 200)).filter((x) => x.status === 'matched' && x.id !== r.id && this.privateDeparture(x) !== null);
+    const overlapping = agenda.filter((x) => {
+      const [b0, b1] = window(x);
+      return a0 < b1 && b0 < a1;
+    });
+    if (!overlapping.length) return null;
+    if (r.shareMode !== 'compartilhada' || overlapping.some((x) => x.shareMode !== 'compartilhada'))
+      return 'Esse motorista já tem outra viagem nesse horário. Escolha outra proposta.';
+    const seats = overlapping.reduce((acc, x) => acc + Number(x.seats || 1), 0) + Number(r.seats || 1);
+    if (seats > 4) return 'O carro desse motorista já está cheio nesse horário. Escolha outra proposta.';
+    return null;
+  }
+
   async acceptInDriveOffer(auth: AuthUser, id: string, offerId: unknown) {
-    // Ganho da Froc no preço combinado (mesmo "leilão" de R$ 2–8 das corridas).
     const pre = (await this.store.get<Doc>('indrive', id)) ?? fail(404, 'not_found', 'Pedido não encontrado.');
-    const chosen = ((pre.offers as Doc[]) || []).find((o) => o.id === offerId);
-    const feeInfo = await this.feeForAgreedPrice(Number(chosen?.offeredPrice || pre.passengerOffer || 0), pre.origin as GeoPoint, Number(pre.distanceKm || 0));
+    const chosen = ((pre.offers as Doc[]) || []).find((o) => o.id === offerId) ?? fail(400, 'invalid_offer', 'Proposta inválida.');
+    const scheduled = this.privateDeparture(pre) !== null;
+    // Pedidos antigos (sem data): ganho fixo da Froc como nas corridas.
+    const feeInfo = scheduled ? null : await this.feeForAgreedPrice(Number(chosen.offeredPrice || pre.passengerOffer || 0), pre.origin as GeoPoint, Number(pre.distanceKm || 0));
+    if (scheduled) {
+      const conflict = await this.privateAgendaConflict(String(chosen.driverId), pre);
+      if (conflict) fail(409, 'driver_busy', conflict);
+    }
+    const cfg = await this.settings();
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
       if (r.passengerId !== auth.uid) fail(403, 'forbidden', 'Só quem fez o pedido pode aceitar.');
@@ -1766,24 +1860,84 @@ export class FrocService {
       const offer = ((r.offers as Doc[]) || []).find((o) => o.id === offerId) ?? fail(400, 'invalid_offer', 'Proposta inválida.');
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
       const cents = toCents(Number(offer.offeredPrice));
-      const patch: Doc = {
-        platformFeeCents: toCents(feeInfo.fee),
-        driverEarning: round2(Number(offer.offeredPrice) - feeInfo.fee),
-        status: 'matched',
-        acceptedOfferId: offer.id,
-        driverId: offer.driverId,
-        agreedPriceCents: cents,
-        matchedAt: this.iso(),
-      };
-      if (r.paymentMethod === 'froc_pay') {
-        this.debit(tx, passenger, cents, `Negociação · ${offer.driverName} · valor retido`, 'indrive');
-        patch.escrowCents = cents;
+      const patch: Doc = { status: 'matched', acceptedOfferId: offer.id, driverId: offer.driverId, agreedPriceCents: cents, matchedAt: this.iso() };
+      if (scheduled) {
+        const driver = await this.mustGet<UserDoc>(tx, 'users', String(offer.driverId), 'Motorista');
+        if (this.privateDeparture(r)! <= this.now().getTime()) fail(409, 'departed', 'O horário desta viagem já passou.');
+        if (passenger.balanceCents < cents) fail(402, 'insufficient_balance', `Saldo insuficiente: sua carteira tem ${brl(passenger.balanceCents / 100)}. Recarregue por Pix ou cartão.`);
+        // Caução do motorista (20%), igual às caronas: nas 3 primeiras viagens pode ficar negativo.
+        const deposit = depositCentsFor(cents);
+        const canGoNegative = (driver.carpoolsDone ?? 0) < CARPOOL_POLICY.debtAllowedTrips;
+        if (driver.balanceCents < deposit && !canGoNegative)
+          fail(409, 'driver_no_deposit', 'Esse motorista ainda não tem a caução para novas viagens. Escolha outra proposta.');
+        const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
+        this.debit(tx, passenger, cents, `Viagem particular ${route} · ${offer.driverName} · valor retido`, 'indrive');
+        this.debit(tx, driver, deposit, `Caução · viagem particular ${route} com ${passenger.name} (volta quando a viagem acontecer)`, 'caucao', canGoNegative);
+        const pct = cfg.privateCommissionPercent;
+        Object.assign(patch, {
+          escrowCents: cents,
+          depositCents: deposit,
+          boardingPin: String(randomInt(1000, 10000)),
+          boardingStatus: 'waiting',
+          commissionPct: pct,
+          driverEarning: toReais(this.providerCut(cents, pct)),
+        });
+      } else {
+        Object.assign(patch, { platformFeeCents: toCents(feeInfo!.fee), driverEarning: round2(Number(offer.offeredPrice) - feeInfo!.fee) });
+        if (r.paymentMethod === 'froc_pay') {
+          this.debit(tx, passenger, cents, `Negociação · ${offer.driverName} · valor retido`, 'indrive');
+          patch.escrowCents = cents;
+        }
       }
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
       return r;
     });
     return this.indriveView(req, auth.uid);
+  }
+
+  /** Embarque com o PIN do passageiro (trava depois de 5 erros). */
+  async boardInDrive(auth: AuthUser, id: string, pinValue: unknown) {
+    const pin = String(pinValue ?? '').replace(/\D/g, '');
+    const result = await this.store.transaction(async (tx) => {
+      const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Viagem');
+      if (r.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da viagem confirma o embarque.');
+      if (r.status !== 'matched' || r.boardingStatus !== 'waiting') fail(409, 'invalid_state', 'Esta viagem não está aguardando embarque.');
+      const wrong = Number(r.wrongPins || 0);
+      if (wrong >= CARPOOL_POLICY.maxWrongPins) fail(423, 'pin_locked', 'Muitos PINs errados. Fale com o Atendimento para liberar o embarque.');
+      if (pin.length !== 4 || pin !== String(r.boardingPin)) {
+        tx.update('indrive', id, { wrongPins: wrong + 1 });
+        return { ok: false as const, left: CARPOOL_POLICY.maxWrongPins - wrong - 1, r };
+      }
+      const patch = { boardingStatus: 'boarded', boardedAt: this.iso(), wrongPins: 0 };
+      Object.assign(r, patch);
+      tx.update('indrive', id, patch);
+      return { ok: true as const, r };
+    });
+    if (!result.ok) fail(400, 'wrong_pin', `PIN errado. Peça o PIN de 4 números no app do passageiro (${Math.max(0, result.left)} tentativa(s) restante(s)).`);
+    return this.indriveView(result.r, auth.uid);
+  }
+
+  /** Passageiro não apareceu: 15 min depois do horário, com o motorista a até 3 km da partida (GPS). */
+  async noShowInDrive(auth: AuthUser, id: string, latValue: unknown, lngValue: unknown) {
+    const lat = num(latValue, -90, 90, 'latitude');
+    const lng = num(lngValue, -180, 180, 'longitude');
+    const r = await this.store.transaction(async (tx) => {
+      const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Viagem');
+      if (r.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da viagem pode fazer isso.');
+      if (r.status !== 'matched' || r.boardingStatus !== 'waiting') fail(409, 'invalid_state', 'Esta viagem não está aguardando embarque.');
+      const dep = this.privateDeparture(r) ?? Infinity;
+      if (this.now().getTime() < dep + CARPOOL_POLICY.noShowWaitMinutes * 60000)
+        fail(409, 'too_early', `Espere ${CARPOOL_POLICY.noShowWaitMinutes} minutos depois do horário no ponto de partida antes de marcar que o passageiro não apareceu.`);
+      const far = kmBetween({ lat, lng }, r.origin as GeoPoint);
+      if (far > CARPOOL_POLICY.noShowRadiusKm)
+        fail(409, 'not_at_pickup', `Pelo GPS você está a ${far.toFixed(1).replace('.', ',')} km do ponto de partida. Vá até lá para marcar que o passageiro não apareceu.`);
+      const patch = { boardingStatus: 'no_show', noShowAt: this.iso(), noShowLat: lat, noShowLng: lng, noShowKm: round2(far) };
+      Object.assign(r, patch);
+      tx.update('indrive', id, patch);
+      return r;
+    });
+    return this.indriveView(r, auth.uid);
   }
 
   async completeInDrive(auth: AuthUser, id: string) {
@@ -1794,32 +1948,128 @@ export class FrocService {
       if (r.status !== 'matched') fail(409, 'invalid_state', 'Esta viagem não está em andamento.');
       const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
       const passenger = await tx.get<UserDoc>('users', String(r.passengerId));
-      const amount = r.paymentMethod === 'froc_pay' ? Number(r.escrowCents) : Number(r.agreedPriceCents);
-      const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso() };
+      const dep = this.privateDeparture(r);
+      if (dep === null) {
+        // Pedido antigo, sem data marcada: regra antiga.
+        const amount = r.paymentMethod === 'froc_pay' ? Number(r.escrowCents) : Number(r.agreedPriceCents);
+        const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso() };
+        Object.assign(r, patch);
+        tx.update('indrive', id, patch);
+        this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Viagem particular', 'indrive', typeof r.platformFeeCents === 'number' ? Number(r.platformFeeCents) : undefined);
+        return r;
+      }
+      if (this.now().getTime() < dep) fail(409, 'not_departed', 'A viagem ainda não saiu. Confirme depois do horário marcado.');
+      const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
+      const amount = Number(r.escrowCents || 0);
+      const proven = r.boardingStatus === 'boarded' || r.boardingStatus === 'no_show';
+      if (proven) {
+        const pct = Number(r.commissionPct ?? this.cfg.privateCommissionPercent);
+        this.creditEarning(tx, driver, this.providerCut(amount, pct), `Ganho · viagem particular ${route}${r.boardingStatus === 'no_show' ? ' (passageiro não apareceu)' : ''}`);
+        this.platformRevenue(tx, 'viagem_particular', amount, amount - this.providerCut(amount, pct));
+        if (r.boardingStatus === 'boarded') this.awardPoints(tx, passenger ?? null, amount);
+        driver.carpoolsDone = (driver.carpoolsDone ?? 0) + 1;
+        driver.completedTrips += 1;
+        tx.update('users', driver.uid, { carpoolsDone: driver.carpoolsDone, completedTrips: driver.completedTrips });
+      } else if (passenger && amount > 0) {
+        // Sem PIN e sem prova de que o passageiro faltou: o valor volta para ele.
+        this.credit(tx, passenger, amount, `Estorno · viagem particular ${route} sem embarque confirmado`, 'estorno');
+      }
+      this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · viagem particular ${route}`);
+      const patch = { status: 'completed', escrowCents: 0, completedAt: this.iso(), paidToDriver: proven };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      this.payProvider(tx, driver, passenger, amount, r.paymentMethod as PaymentMethod, 'Corrida negociada', 'indrive', typeof r.platformFeeCents === 'number' ? Number(r.platformFeeCents) : undefined);
       return r;
     });
     return this.indriveView(req, auth.uid);
   }
 
+  /** Passageiro cancela: aberto = sem custo; agendado = 100% / 50% / 0% conforme a antecedência (regra das caronas). */
   async cancelInDrive(auth: AuthUser, id: string) {
+    await this.settings();
     const req = await this.store.transaction(async (tx) => {
       const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Pedido');
       if (r.passengerId !== auth.uid) fail(403, 'forbidden', 'Só quem fez o pedido pode cancelar.');
       if (r.status !== 'open' && r.status !== 'matched') fail(409, 'invalid_state', 'Não é possível cancelar agora.');
+      if (r.boardingStatus === 'boarded') fail(409, 'invalid_state', 'Você já embarcou: a viagem não pode mais ser cancelada.');
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
       const escrow = Number(r.escrowCents || 0);
-      // Mesma regra das corridas, contando a partir do acordo com o motorista.
+      const dep = this.privateDeparture(r);
+      if (r.status === 'matched' && dep !== null) {
+        const driver = await this.mustGet<UserDoc>(tx, 'users', String(r.driverId), 'Motorista');
+        const now = this.now().getTime();
+        const refundPct = passengerRefundPct(hoursUntil(dep, now), (now - Date.parse(String(r.matchedAt))) / 60000);
+        const refund = Math.round((escrow * refundPct) / 100);
+        const kept = escrow - refund;
+        const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
+        if (refund > 0) this.credit(tx, passenger, refund, refundPct === 100 ? `Estorno · viagem particular ${route} cancelada` : `Estorno ${refundPct}% · viagem particular ${route} cancelada com menos de 24h`, 'estorno');
+        if (kept > 0) {
+          const pct = Number(r.commissionPct ?? this.cfg.privateCommissionPercent);
+          this.creditEarning(tx, driver, this.providerCut(kept, pct), `Ganho · ${passenger.name} cancelou a viagem particular ${route} (${100 - refundPct}% do valor)`);
+          this.platformRevenue(tx, 'cancelamento_viagem_particular', kept, kept - this.providerCut(kept, pct));
+        }
+        this.returnDeposit(tx, driver, Number(r.depositCents || 0), `Caução devolvida · ${passenger.name} cancelou a viagem particular`);
+        const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'passenger', refundPct };
+        Object.assign(r, patch);
+        tx.update('indrive', id, patch);
+        return r;
+      }
+      // Aberto (sem acordo) ou pedido antigo: regra antiga.
       const pct = r.status === 'matched' ? this.rideCancelPercent({ ...r, status: 'accepted', etaMin: 60 }, 'matchedAt') : 0;
       const fee = Math.round((escrow * pct) / 100);
       const driver = fee > 0 ? await this.mustGet<UserDoc>(tx, 'users', String(r.driverId), 'Motorista') : null;
       const patch = { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancellationFeePercent: pct, cancellationFee: toReais(fee) };
       Object.assign(r, patch);
       tx.update('indrive', id, patch);
-      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · negociação cancelada (taxa ${pct}%)` : 'Estorno · negociação cancelada', 'estorno');
-      if (driver) this.payCancellation(tx, driver, fee, pct, 'Corrida negociada', 'indrive', false, typeof r.platformFeeCents === 'number');
+      if (escrow - fee > 0) this.credit(tx, passenger, escrow - fee, pct ? `Estorno parcial · viagem cancelada (taxa ${pct}%)` : 'Estorno · viagem particular cancelada', 'estorno');
+      if (driver) this.payCancellation(tx, driver, fee, pct, 'Viagem particular', 'indrive', false, typeof r.platformFeeCents === 'number');
+      return r;
+    });
+    return this.indriveView(req, auth.uid);
+  }
+
+  /**
+   * Motorista desiste de uma viagem agendada: o passageiro recebe 100% de volta + multa da caução
+   * (10% entre 24h e 2h; 20% com menos de 2h) e o pedido VOLTA A FICAR ABERTO para outros motoristas.
+   */
+  async driverCancelInDrive(auth: AuthUser, id: string) {
+    const req = await this.store.transaction(async (tx) => {
+      const r = await this.mustGet<Doc>(tx, 'indrive', id, 'Viagem');
+      if (r.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da viagem pode desistir dela.');
+      if (r.status !== 'matched' || this.privateDeparture(r) === null) fail(409, 'invalid_state', 'Esta viagem não pode ser cancelada pelo motorista.');
+      if (r.boardingStatus === 'boarded') fail(409, 'invalid_state', 'O passageiro já embarcou.');
+      const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
+      const passenger = await this.mustGet<UserDoc>(tx, 'users', String(r.passengerId), 'Passageiro');
+      const now = this.now().getTime();
+      const penaltyPct = driverPenaltyPct(hoursUntil(this.privateDeparture(r)!, now));
+      const escrow = Number(r.escrowCents || 0);
+      const deposit = Number(r.depositCents || 0);
+      const penalty = Math.min(deposit, Math.round((escrow * penaltyPct) / 100));
+      const route = `${(r.origin as GeoPoint).city} → ${(r.destination as GeoPoint).city}`;
+      if (escrow > 0) this.credit(tx, passenger, escrow, `Estorno · motorista desistiu da viagem particular ${route}`, 'estorno');
+      if (penalty > 0) this.credit(tx, passenger, penalty, `Compensação · motorista desistiu da viagem ${route} com menos de 24h`, 'compensacao');
+      this.returnDeposit(tx, driver, deposit - penalty, penalty > 0 ? `Caução devolvida (menos multa de ${penaltyPct}%) · viagem ${route}` : `Caução devolvida · viagem ${route} cancelada com antecedência`);
+      if (penalty > 0) {
+        const earned = driver.earnedCents ?? this.withdrawable(driver);
+        const { strikes, suspendedUntil } = strikesAfter(driver.carpoolStrikes ?? [], now);
+        tx.update('users', driver.uid, { earnedCents: Math.max(0, earned - penalty), carpoolStrikes: strikes, ...(suspendedUntil ? { carpoolSuspendedUntil: suspendedUntil } : {}) });
+      }
+      // O pedido volta para a vitrine (sem a proposta de quem desistiu) para outro motorista pegar.
+      const patch: Doc = {
+        status: 'open',
+        driverId: null,
+        acceptedOfferId: null,
+        agreedPriceCents: 0,
+        escrowCents: 0,
+        depositCents: 0,
+        boardingPin: null,
+        boardingStatus: null,
+        driverEarning: null,
+        matchedAt: null,
+        offers: ((r.offers as Doc[]) || []).filter((o) => o.driverId !== auth.uid),
+        lastDriverCancel: { at: this.iso(), penaltyPct, penaltyCents: penalty },
+      };
+      Object.assign(r, patch);
+      tx.update('indrive', id, patch);
       return r;
     });
     return this.indriveView(req, auth.uid);
@@ -2599,7 +2849,9 @@ export class FrocService {
       }
     }
     for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'open']], 300)) {
-      if (now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) continue;
+      // Viagem particular agendada fica aberta até o horário marcado; pedido antigo expira pelo tempo.
+      const dep = this.privateDeparture(r);
+      if (dep !== null ? now < dep : now - Date.parse(String(r.createdAt)) < cfg.indriveOpenTimeoutMin * 60_000) continue;
       await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
       deals++;
     }
@@ -2910,7 +3162,7 @@ export class FrocService {
       status,
       statusLabel,
       active: !ended,
-      categoryLabel: String(trip.categoryLabel || (kind === 'indrive' ? 'Corrida negociada' : 'Corrida')),
+      categoryLabel: String(trip.categoryLabel || (kind === 'indrive' ? 'Viagem particular' : 'Corrida')),
       origin: point(trip.origin),
       destination: point(trip.destination),
       passengerFirstName: delivery ? firstName(delivery.recipientName) : firstName(trip.passengerName),
@@ -3179,7 +3431,7 @@ export class FrocService {
       isDriver && user.driverOnline ? q('rides', 'status', 'searching', 30) : [],
       q('indrive', 'passengerId', uid),
       isDriver ? q('indrive', 'driverId', uid) : [],
-      isDriver ? q('indrive', 'status', 'open', 30) : [],
+      isDriver ? q('indrive', 'status', 'open', 300) : [],
       q('carpools', 'status', 'open', 60),
       isDriver ? q('carpools', 'driverId', uid) : [],
       q('carpoolBookings', 'passengerId', uid, 300),
@@ -3216,7 +3468,15 @@ export class FrocService {
         [...myRides.filter((r) => !r.merchantId), ...drivingRides, ...this.nearby(user, queueRides).filter((r) => r.passengerId !== uid && this.vehicleFits(user, r))],
         notOld,
       ).map((r) => this.rideView(r, uid)),
-      indriveRequests: recent([...myInDrive, ...drivingInDrive, ...openInDrive.filter((r) => r.passengerId !== uid)], notOld).map((r) => this.indriveView(r, uid)),
+      // Viagens particulares: as minhas + todos os pedidos abertos do Brasil (o motorista filtra por cidade e data).
+      indriveRequests: [
+        ...recent([...myInDrive, ...drivingInDrive], notOld),
+        ...uniqueById(openInDrive)
+          .filter((r) => r.passengerId !== uid && r.status === 'open' && !drivingInDrive.some((d) => d.id === r.id))
+          .filter((r) => (this.privateDeparture(r) ?? 0) > this.now().getTime())
+          .sort((a, b) => (this.privateDeparture(a) ?? 0) - (this.privateDeparture(b) ?? 0))
+          .slice(0, 150),
+      ].map((r) => this.indriveView(r, uid)),
       carpools: recent([...openCarpools, ...myCarpools, ...bookedTrips], notOld).map((c) =>
         this.carpoolView(c, uid, myBookings, driverTripBookings.get(String(c.id))),
       ),

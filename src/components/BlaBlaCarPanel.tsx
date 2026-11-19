@@ -118,7 +118,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs text-slate-600 dark:text-slate-300">
-          <strong className="text-slate-900 dark:text-white">Caronas estilo BlaBlaCar:</strong> divida viagem entre cidades e estados.
+          <strong className="text-slate-900 dark:text-white">Caronas:</strong> divida viagem entre cidades e estados.
         </div>
         {role === 'driver' && canPublish && (
         <button
@@ -217,7 +217,7 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
             disabled={busyId === 'publish'}
             className="w-full min-h-[46px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-sm font-bold hover:opacity-95 transition cursor-pointer"
           >
-            {busyId === 'publish' ? 'Publicando...' : 'Publicar Carona no Froc BlaBlaCar'}
+            {busyId === 'publish' ? 'Publicando...' : 'Publicar carona'}
           </button>
         </form>
       ) : (
