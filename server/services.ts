@@ -88,6 +88,10 @@ const DELIVERY_SEARCH_MIN = 20;
 const SHARE_TTL_MS = 24 * 3600_000;
 const SHARE_AFTER_END_MS = 2 * 3600_000;
 const ACTIVE_RIDE = ['searching', 'accepted', 'arriving', 'in_progress'];
+/** Prazos do encerramento automático (horas): corrida aceita sem começar, corrida sem finalizar, viagem/carona passada. */
+export const STALE_ACCEPTED_H = 3;
+export const STALE_IN_PROGRESS_H = 12;
+export const STALE_TRIP_H = 48;
 
 const DELIVERY_STATUS: Record<string, [DeliveryStatus, string]> = {
   searching: ['procurando_entregador', 'Procurando entregador'],
@@ -270,6 +274,8 @@ interface UserDoc extends Doc {
   merchantCnpj?: string;
   /** Quanto do saldo veio de ganhos (só isso pode ser sacado). Ausente = conta antiga (usa o saldo). */
   earnedCents?: number;
+  /** Última corrida pedida (trava contra pedido em dobro dentro da transação). */
+  lastRideId?: string;
   ridePolicyAccepted?: string;
   ridePolicyAcceptedAt?: string;
   cpfStatus?: CpfStatus;
@@ -427,6 +433,7 @@ export class FrocService {
   private cfg: PlatformSettings = { ...DEFAULT_SETTINGS };
   private cfgLoadedAt = 0;
   private lastSweep = 0;
+  private lastStaleSweep = 0;
   private onlineCache: { at: number; users: UserDoc[] } = { at: 0, users: [] };
   private riskCache: { at: number; zones: RiskZoneLike[] } = { at: 0, zones: [] };
 
@@ -1211,7 +1218,11 @@ export class FrocService {
     const myRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', a]], 100);
     if (myRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === b))) return true;
     const theirRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', b]], 100);
-    return theirRequests.some((r) => r.status === 'open' || ((r.offers as Doc[]) || []).some((o) => o.driverId === a));
+    if (theirRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === a))) return true;
+    // Pedido aberto: só motorista aprovado (quem pode mandar proposta) vê a foto de quem pediu.
+    if (!theirRequests.some((r) => r.status === 'open')) return false;
+    const viewer = await this.store.get<UserDoc>('users', a);
+    return viewer?.driverStatus === 'approved' && !viewer.blocked;
   }
 
   /** Equipe: conferências de rosto pendentes (com as duas fotos). */
@@ -1671,6 +1682,11 @@ export class FrocService {
     const id = randomUUID();
     const ride = await this.store.transaction(async (tx) => {
       const user = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Usuário');
+      // Toque duplo / rede repetindo: a conferência acima roda fora da transação; esta trava
+      // (no documento da pessoa, que a transação já grava) impede duas corridas cobradas juntas.
+      const last = user.lastRideId ? await tx.get<Doc>('rides', String(user.lastRideId)) : null;
+      if (last && ACTIVE_RIDE.includes(String(last.status))) fail(409, 'ride_in_progress', 'Você já tem uma corrida em andamento.');
+      tx.update('users', user.uid, { lastRideId: id });
       // Registro do aceite das regras de cancelamento e espera (mostradas antes do 1º pedido).
       if (body.acceptPolicy === true && user.ridePolicyAccepted !== RIDE_POLICY_VERSION)
         tx.update('users', user.uid, { ridePolicyAccepted: RIDE_POLICY_VERSION, ridePolicyAcceptedAt: this.iso() });
@@ -2525,8 +2541,12 @@ export class FrocService {
       const route = `${(t.origin as GeoPoint).city} → ${(t.destination as GeoPoint).city}`;
       const pct = this.cfg.carpoolCommissionPercent;
       let seats = 0;
-      for (const ref of mine) {
-        const b = await this.mustGet<Doc>(tx, 'carpoolBookings', String(ref.id), 'Reserva');
+      // Firestore: todas as leituras antes de qualquer escrita (com 2+ reservas na mesma carona
+      // a leitura dentro do laço, depois do primeiro estorno, derrubava o cancelamento).
+      const fresh: Doc[] = [];
+      for (const ref of mine) fresh.push(await this.mustGet<Doc>(tx, 'carpoolBookings', String(ref.id), 'Reserva'));
+      if (!fresh.some((b) => b.status === 'paid')) fail(409, 'invalid_state', 'Esta reserva já foi cancelada ou confirmada.');
+      for (const b of fresh) {
         if (b.status !== 'paid') continue;
         seats += Number(b.seats);
         const amount = Number(b.amountCents);
@@ -3130,12 +3150,84 @@ export class FrocService {
       await this.store.update('indrive', String(r.id), { status: 'cancelled', cancelledAt: this.iso(), cancelledBy: 'timeout' });
       deals++;
     }
+    // Dinheiro retido nunca fica preso: o que o motorista esqueceu de encerrar, o sistema encerra.
+    // (no máximo a cada 10 min por servidor, para não gastar leituras do banco à toa)
+    let esquecidas: unknown = null;
+    if (force || Date.now() - this.lastStaleSweep > 10 * 60_000) {
+      this.lastStaleSweep = Date.now();
+      esquecidas = await this.closeStaleTrips(now).catch((e) => ({ erro: String(e?.message || e) }));
+    }
     const webhooks = this.deps.webhooks ? await this.deps.webhooks.retryDue().catch(() => null) : null;
     // Equipe IA no comando: saques dentro das regras e lojas com CNPJ ativo, sem esperar o dono.
     // Só no agendador (força=true): não deixa a tela de ninguém esperando consultas externas.
     const saques = force ? await this.autoProcessWithdrawals().catch((e) => ({ erro: String(e?.message || e) })) : null;
     const lojas = force ? await this.autoReviewMerchants().catch((e) => ({ erro: String(e?.message || e) })) : null;
-    return { ridesCancelled: rides, requestsExpired: deals, webhooks, saques, lojas };
+    return { ridesCancelled: rides, requestsExpired: deals, esquecidas, webhooks, saques, lojas };
+  }
+
+  /**
+   * Encerramento automático do que ficou parado (o valor retido não fica preso para sempre):
+   *  - corrida aceita/no embarque sem começar por STALE_ACCEPTED_H → cancelada, 100% de volta ao passageiro;
+   *  - corrida iniciada com PIN e não finalizada em STALE_IN_PROGRESS_H → finalizada (o motorista recebe);
+   *  - viagem agendada e carona passadas STALE_TRIP_H do horário → encerradas pelas regras de sempre
+   *    (recebe só quem embarcou com PIN ou faltou com prova de GPS; o resto volta ao passageiro).
+   * Entregas de loja em andamento não são finalizadas sozinhas (dependem do código do cliente).
+   */
+  private async closeStaleTrips(now: number) {
+    const as = (uid: unknown): AuthUser => ({ uid: String(uid), email: '', emailVerified: true });
+    const older = (iso: unknown, hours: number) => {
+      const t = Date.parse(String(iso || ''));
+      return Number.isFinite(t) && now - t > hours * 3600_000;
+    };
+    const out = { corridasCanceladas: 0, corridasFinalizadas: 0, viagens: 0, caronas: 0 };
+    const waiting = [
+      ...(await this.store.query<Doc>('rides', [['status', '==', 'accepted']], 300)),
+      ...(await this.store.query<Doc>('rides', [['status', '==', 'arriving']], 300)),
+    ];
+    for (const r of waiting) {
+      if (!older(r.acceptedAt || r.createdAt, STALE_ACCEPTED_H)) continue;
+      const done = await this.store.transaction(async (tx) => {
+        const ride = await tx.get<Doc>('rides', String(r.id));
+        if (!ride || !['accepted', 'arriving'].includes(String(ride.status)) || !older(ride.acceptedAt || ride.createdAt, STALE_ACCEPTED_H)) return null;
+        const passenger = await tx.get<UserDoc>('users', String(ride.passengerId));
+        const escrow = Number(ride.escrowCents || 0);
+        tx.update('rides', String(ride.id), { status: 'cancelled', escrowCents: 0, cancelledAt: this.iso(), cancelledBy: 'timeout_driver', cancellationFeePercent: 0, cancellationFee: 0 });
+        if (passenger && escrow > 0) this.credit(tx, passenger, escrow, `Estorno · ${ride.categoryLabel} não aconteceu (motorista não iniciou)`, 'estorno');
+        return { ...ride, status: 'cancelled', cancelledBy: 'timeout_driver' };
+      });
+      if (!done) continue;
+      out.corridasCanceladas++;
+      if (done.delivery) await this.deliveryEvent(done);
+      if (done.driverId) await this.promoteDriverQueue(String(done.driverId)).catch(() => undefined);
+      await this.audit(null, 'corrida_encerrada_pelo_sistema', String(done.id), { motivo: 'motorista não iniciou', estorno: true });
+    }
+    for (const r of await this.store.query<Doc>('rides', [['status', '==', 'in_progress']], 300)) {
+      if (r.delivery || !r.driverId || !older(r.startedAt, STALE_IN_PROGRESS_H)) continue;
+      const ok = await this.rideAction(as(r.driverId), String(r.id), { action: 'complete' }).then(() => true, (e) => (console.warn('Finalização automática falhou:', r.id, e?.message), false));
+      if (ok) {
+        out.corridasFinalizadas++;
+        await this.audit(null, 'corrida_encerrada_pelo_sistema', String(r.id), { motivo: 'motorista não finalizou' });
+      }
+    }
+    for (const r of await this.store.query<Doc>('indrive', [['status', '==', 'matched']], 300)) {
+      const dep = this.privateDeparture(r);
+      if (dep === null || !r.driverId || now < dep + (Number(r.durationMin || 0) * 60_000) + STALE_TRIP_H * 3600_000) continue;
+      const ok = await this.completeInDrive(as(r.driverId), String(r.id)).then(() => true, (e) => (console.warn('Encerramento automático falhou:', r.id, e?.message), false));
+      if (ok) {
+        out.viagens++;
+        await this.audit(null, 'viagem_encerrada_pelo_sistema', String(r.id), { embarque: r.boardingStatus || 'sem_confirmacao' });
+      }
+    }
+    for (const t of await this.store.query<Doc>('carpools', [['status', '==', 'open']], 300)) {
+      const dep = this.carpoolDeparture(t);
+      if (dep === null || now < dep + STALE_TRIP_H * 3600_000) continue;
+      const ok = await this.finishCarpool(as(t.driverId), String(t.id), 'completed').then(() => true, (e) => (console.warn('Encerramento automático falhou:', t.id, e?.message), false));
+      if (ok) {
+        out.caronas++;
+        await this.audit(null, 'carona_encerrada_pelo_sistema', String(t.id));
+      }
+    }
+    return out;
   }
 
   // ------------------------------------------------------------- SOS e pontos
@@ -3703,7 +3795,9 @@ export class FrocService {
     ] = await Promise.all([
       q('rides', 'passengerId', uid),
       isDriver ? q('rides', 'driverId', uid) : [],
-      isDriver && user.driverOnline ? q('rides', 'status', 'searching', 30) : [],
+      // Pedidos do Brasil inteiro; o filtro por região vem depois. Com só 30, num horário de muito
+      // movimento o motorista podia não receber nenhum pedido da cidade dele.
+      isDriver && user.driverOnline ? q('rides', 'status', 'searching', 150) : [],
       q('indrive', 'passengerId', uid),
       isDriver ? q('indrive', 'driverId', uid) : [],
       isDriver ? q('indrive', 'status', 'open', 300) : [],
