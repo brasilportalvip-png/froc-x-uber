@@ -82,9 +82,13 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
 
   if (status === 'approved')
     return (
-      <div className="rounded-2xl border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm flex gap-2">
-        <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-        <span>Cadastro de {title} aprovado.</span>
+      <div className="space-y-2">
+        <div className="rounded-2xl border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm flex gap-2">
+          <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+          <span>Cadastro de {title} aprovado.</span>
+        </div>
+        {/* Motorista aprovado antes do reconhecimento facial existir: faz agora para poder ficar online. */}
+        {needsFace && <FaceEnroll enrolled={false} onDone={async () => void (await onRefresh?.())} />}
       </div>
     );
 

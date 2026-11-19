@@ -138,6 +138,21 @@ export const FaceEnroll: React.FC<{ enrolled: boolean; onDone: () => Promise<voi
   );
 };
 
+/** Janela do reconhecimento facial (motorista aprovado que ainda não fez e tentou ficar online). */
+export const FaceEnrollModal: React.FC<{ onDone: () => Promise<void> | void; onClose: () => void }> = ({ onDone, onClose }) => (
+  <div role="dialog" aria-modal="true" aria-label="Reconhecimento facial" className={shell}>
+    <div className={card}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-extrabold text-slate-900 dark:text-white">Antes de ficar online</h3>
+        <button type="button" aria-label="Fechar" onClick={onClose} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+      <FaceEnroll enrolled={false} onDone={onDone} />
+    </div>
+  </div>
+);
+
 /** Verificação de segurança a cada 2h com o motorista trabalhando. */
 export const FaceCheckModal: React.FC<{ onDone: () => Promise<void> | void; onGoOffline: () => void }> = ({ onDone, onGoOffline }) => {
   const [busy, setBusy] = useState(false);

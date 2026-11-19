@@ -20,7 +20,7 @@ import { MerchantPanel } from './components/MerchantPanel.tsx';
 import { HelpLinks } from './components/HelpLinks.tsx';
 import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
 import { IdentityDocUpload, IdentityGate } from './components/IdentityGate.tsx';
-import { FaceCheckModal, PhotoGate } from './components/FaceGates.tsx';
+import { FaceCheckModal, FaceEnrollModal, PhotoGate } from './components/FaceGates.tsx';
 import { alertUser, askNotificationPermission } from './lib/alerts.ts';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
@@ -329,9 +329,25 @@ export default function App() {
   // Selfie de segurança: a cada 2h com o motorista online (ou antes de ficar online, se venceu).
   const [faceCheckOpen, setFaceCheckOpen] = useState(false);
   const [goOnlineAfterCheck, setGoOnlineAfterCheck] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  // Motorista já aprovado sem reconhecimento facial: a janela abre sozinha uma vez (o rosto vira a foto dele).
+  const enrollAsked = useRef(false);
+  const needsEnroll = Boolean(state?.profile.photoRequired && state.profile.driverStatus === 'approved' && !state.profile.faceEnrolled);
+  useEffect(() => {
+    if (needsEnroll && !enrollAsked.current) {
+      enrollAsked.current = true;
+      setEnrollOpen(true);
+    }
+  }, [needsEnroll]);
   const handleSetOnline = (online: boolean) => {
     // Ao ficar online: libera som e notificação para avisar de novas corridas com o app minimizado.
     if (online) askNotificationPermission();
+    // Motorista aprovado antes do reconhecimento facial existir: faz agora e já fica online.
+    if (online && state?.profile.photoRequired && state.profile.driverStatus === 'approved' && !state.profile.faceEnrolled) {
+      setGoOnlineAfterCheck(true);
+      setEnrollOpen(true);
+      return Promise.resolve();
+    }
     if (online && state?.profile.faceCheckDue) {
       setGoOnlineAfterCheck(true);
       setFaceCheckOpen(true);
@@ -903,7 +919,7 @@ export default function App() {
       {state && state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus) && (
         <IdentityGate profile={state.profile} onDone={loadBootstrap} onLogout={() => void handleLogout()} />
       )}
-      {state && state.profile.photoRequired && !state.profile.hasPhoto && !state.profile.faceEnrolled && !(state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus)) && (
+      {state && state.profile.photoRequired && !state.profile.hasPhoto && !state.profile.faceEnrolled && state.profile.driverStatus !== 'approved' && !(state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus)) && (
         <PhotoGate mode="required" onDone={loadBootstrap} onLogout={() => void handleLogout()} />
       )}
       {state && (faceCheckOpen || (state.profile.faceCheckDue && state.profile.driverOnline)) && (
@@ -920,6 +936,22 @@ export default function App() {
             setFaceCheckOpen(false);
             setGoOnlineAfterCheck(false);
             void run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: false } }), 'Você está offline.');
+          }}
+        />
+      )}
+      {state && enrollOpen && (
+        <FaceEnrollModal
+          onClose={() => {
+            setEnrollOpen(false);
+            setGoOnlineAfterCheck(false);
+          }}
+          onDone={async () => {
+            setEnrollOpen(false);
+            await loadBootstrap();
+            if (goOnlineAfterCheck) {
+              setGoOnlineAfterCheck(false);
+              await run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: true } }), 'Reconhecimento salvo. Você está online.');
+            } else showToast('Reconhecimento facial salvo.');
           }}
         />
       )}

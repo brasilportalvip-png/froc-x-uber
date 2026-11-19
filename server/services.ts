@@ -619,9 +619,10 @@ export class FrocService {
       if (patch.driverOnline === true && user.driverStatus !== 'approved' && user.truckerStatus !== 'approved')
         fail(403, 'not_approved', 'Seu cadastro de motorista ainda não foi aprovado.');
       if (patch.driverOnline === true) {
-        this.identityGate(user);
-        // Quem vai trabalhar precisa estar com o rosto conferido (a cada 2h).
+        // Quem vai trabalhar precisa estar com o rosto conferido (a cada 2h). O reconhecimento facial
+        // vem antes da foto: ele mesmo vira a foto de perfil do motorista.
         if (user.driverStatus === 'approved') this.assertFaceOk(user);
+        this.identityGate(user);
       }
       if (patch.driverOnline === true && user.cnhExpiry && user.cnhExpiry < this.iso().slice(0, 10))
         fail(403, 'cnh_expired', 'Sua CNH venceu. Envie a CNH nova pelo Atendimento para voltar a ficar online.');
@@ -1108,6 +1109,13 @@ export class FrocService {
     const path = await this.saveImage(user.uid, 'referencia', img);
     const patch: Doc = { faceRefPath: path, faceEnrolledAt: this.iso(), faceCnhMatch: cnhMatch, lastFaceCheckAt: this.iso(), faceFails: 0, faceConsentAt: this.iso() };
     if (!user.photoPath) Object.assign(patch, { photoPath: path, photoAt: this.iso() });
+    // Motorista que já estava aprovado (antes do reconhecimento existir): rosto diferente da CNH
+    // → não fica online até a equipe conferir as fotos.
+    if (user.driverStatus === 'approved' && cnhMatch === 'nao_confere') {
+      Object.assign(patch, { faceBlocked: true, driverOnline: false });
+      const id = randomUUID();
+      await this.store.set('faceChecks', id, { id, uid: user.uid, name: user.name, at: this.iso(), result: 'cadastro_nao_confere', selfiePath: path, refPath: (user.driverDocs as Record<string, string>).cnh, status: 'pending' });
+    }
     await this.store.update('users', user.uid, patch);
     return { ok: true, cnhMatch };
   }
