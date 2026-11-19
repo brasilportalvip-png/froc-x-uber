@@ -12,8 +12,12 @@ export function urbanFloor(distanceKm: number) {
   return r2(Math.max(8.5, km * 1.65 + minutes * 0.2));
 }
 
-/** Na estrada (acima de 50 km): R$ 1,00 por km, sem travar viagem longa. */
-export const HIGHWAY_FLOOR_PER_KM = 1;
+/**
+ * Na estrada (acima de 50 km): mínimo de R$ 2,00 por km (decisão do dono, 19/11/2026).
+ * Cobre manutenção, pedágio, trânsito, clima, comida e descanso do motorista e ainda sobra
+ * ganho. O valor final é combinado entre passageiro e motorista, sempre acima deste mínimo.
+ */
+export const HIGHWAY_FLOOR_PER_KM = 2;
 /** Lugares de um carro comum para dividir a viagem compartilhada. */
 export const SHARED_CAR_SEATS = 4;
 
@@ -25,7 +29,7 @@ export function privateTripFloor(distanceKm: number, shareMode: ShareMode | stri
   return shareMode === 'compartilhada' ? r2(Math.max(8.5, (full * Math.min(SHARED_CAR_SEATS, Math.max(1, seats))) / SHARED_CAR_SEATS)) : full;
 }
 
-/** Valor sugerido para começar a conversa (o passageiro muda como quiser, acima do piso). */
+/** Valor sugerido para começar a conversa: 25% acima do mínimo (o combinado fica entre as partes). */
 export function suggestedOffer(distanceKm: number, shareMode: ShareMode | string, seats: number) {
   return Math.ceil(privateTripFloor(distanceKm, shareMode, seats) * 1.25);
 }

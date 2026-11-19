@@ -86,7 +86,7 @@ const pedido = (o: GeoPoint, d: GeoPoint, time: string, extra: Record<string, un
   destinationId: d.id,
   date: DIA,
   time,
-  passengerOffer: 600,
+  passengerOffer: 1100,
   ...extra,
 });
 
@@ -101,7 +101,7 @@ beforeEach(async () => {
     await svc.applyAsProvider(d, 'driver', { ...LEGAL, phone: '16999990000', vehicle: 'Corolla', plate: 'ABC1D23' });
     await svc.reviewApplication(admin, d.uid, 'driver', 'approved', '');
   }
-  for (const u of [ana, bia, cris]) await recarga(u, 1000);
+  for (const u of [ana, bia, cris]) await recarga(u, 3000);
 });
 
 describe('pedido agendado', () => {
@@ -115,14 +115,17 @@ describe('pedido agendado', () => {
     assert.equal(r.pickupSpot, 'Desembarque, portão 3');
   });
 
-  test('compartilhada tem piso menor que individual (divide o carro)', async () => {
-    await erro(svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 200 })), 'below_floor');
-    await svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 200, shareMode: 'compartilhada', seats: 1 }));
+  test('mínimo da estrada: R$ 2 por km (individual); compartilhada divide pelo carro', async () => {
+    // Campinas → Rio ~511 km: individual a partir de ~R$ 1.022; 1 pessoa compartilhando, ~R$ 256.
+    await erro(svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 1000 })), 'below_floor');
+    await svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 1030 }));
+    await erro(svc.createInDrive(bia, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 250, shareMode: 'compartilhada', seats: 1 })), 'below_floor');
+    await svc.createInDrive(bia, pedido(VIRACOPOS, RIO, '12:15', { passengerOffer: 260, shareMode: 'compartilhada', seats: 1 }));
   });
 
   test('motorista de Araraquara vê pedidos do Brasil inteiro, em ordem de horário', async () => {
     await svc.updateProfile(caio, { lat: ARARAQUARA.lat, lng: ARARAQUARA.lng });
-    await svc.createInDrive(bia, pedido(COPACABANA, RIO_OSTRAS, '18:00', { passengerOffer: 300 }));
+    await svc.createInDrive(bia, pedido(COPACABANA, RIO_OSTRAS, '18:00', { passengerOffer: 360 }));
     await svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15'));
     const vitrine = (await svc.bootstrap(caio)).indriveRequests.filter((r) => r.status === 'open');
     assert.deepEqual(vitrine.map((r) => r.destination.city), ['Rio de Janeiro', 'Rio das Ostras']);
@@ -131,13 +134,13 @@ describe('pedido agendado', () => {
 
 describe('agenda do motorista (baldeação)', () => {
   test('emenda Campinas 12h15 → Rio e Copacabana 18h → Rio das Ostras', async () => {
-    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 650);
+    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1150);
     // 12h15 + ~6h de viagem + 1h de folga passa das 18h: o app avisa o passageiro na hora de aceitar.
-    const longe = await svc.createInDrive(bia, pedido(COPACABANA, RIO_OSTRAS, '18:00', { passengerOffer: 300 }));
-    const p1 = await svc.sendInDriveOffer(caio, longe.id, { offeredPrice: 320 });
+    const longe = await svc.createInDrive(bia, pedido(COPACABANA, RIO_OSTRAS, '18:00', { passengerOffer: 360 }));
+    const p1 = await svc.sendInDriveOffer(caio, longe.id, { offeredPrice: 370 });
     await erro(svc.acceptInDriveOffer(bia, longe.id, p1.offers[0].id), 'driver_busy');
-    const tarde = await svc.createInDrive(cris, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 300 }));
-    const p2 = await svc.sendInDriveOffer(caio, tarde.id, { offeredPrice: 320 });
+    const tarde = await svc.createInDrive(cris, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 360 }));
+    const p2 = await svc.sendInDriveOffer(caio, tarde.id, { offeredPrice: 370 });
     await svc.acceptInDriveOffer(cris, tarde.id, p2.offers[0].id);
     const agenda = (await svc.bootstrap(caio)).indriveRequests.filter((r) => r.mine === 'provider' && r.status === 'matched');
     assert.equal(agenda.length, 2);
@@ -145,66 +148,66 @@ describe('agenda do motorista (baldeação)', () => {
   });
 
   test('individual ocupa o carro; compartilhadas no mesmo horário se juntam até 4 pessoas', async () => {
-    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15', { shareMode: 'compartilhada', seats: 2, passengerOffer: 300 }), 300);
-    await combinar(bia, caio, pedido(VIRACOPOS, RIO, '12:30', { shareMode: 'compartilhada', seats: 2, passengerOffer: 300 }), 300);
-    const cheio = await svc.createInDrive(cris, pedido(VIRACOPOS, RIO, '12:20', { shareMode: 'compartilhada', seats: 1, passengerOffer: 200 }));
-    const p = await svc.sendInDriveOffer(caio, cheio.id, { offeredPrice: 200 });
+    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15', { shareMode: 'compartilhada', seats: 2, passengerOffer: 520 }), 520);
+    await combinar(bia, caio, pedido(VIRACOPOS, RIO, '12:30', { shareMode: 'compartilhada', seats: 2, passengerOffer: 520 }), 520);
+    const cheio = await svc.createInDrive(cris, pedido(VIRACOPOS, RIO, '12:20', { shareMode: 'compartilhada', seats: 1, passengerOffer: 260 }));
+    const p = await svc.sendInDriveOffer(caio, cheio.id, { offeredPrice: 260 });
     await erro(svc.acceptInDriveOffer(cris, cheio.id, p.offers[0].id), 'driver_busy');
     // Outro motorista pega a Cris.
-    const p2 = await svc.sendInDriveOffer(davi, cheio.id, { offeredPrice: 210 });
+    const p2 = await svc.sendInDriveOffer(davi, cheio.id, { offeredPrice: 270 });
     await svc.acceptInDriveOffer(cris, cheio.id, p2.offers.find((o) => o.driverName === 'Davi')!.id);
   });
 
   test('individual não se junta com nada no mesmo horário', async () => {
-    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 650);
-    const r = await svc.createInDrive(bia, pedido(VIRACOPOS, RIO, '12:30', { shareMode: 'compartilhada', passengerOffer: 300 }));
-    const p = await svc.sendInDriveOffer(caio, r.id, { offeredPrice: 300 });
+    await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1150);
+    const r = await svc.createInDrive(bia, pedido(VIRACOPOS, RIO, '12:30', { shareMode: 'compartilhada', passengerOffer: 260 }));
+    const p = await svc.sendInDriveOffer(caio, r.id, { offeredPrice: 260 });
     await erro(svc.acceptInDriveOffer(bia, r.id, p.offers[0].id), 'driver_busy');
   });
 });
 
 describe('dinheiro: retido, caução, PIN e 30% da Froc', () => {
   test('viagem realizada com PIN: motorista recebe 70%, caução volta; passageiro não vê o ganho do motorista', async () => {
-    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
-    assert.equal(await saldo(ana), 400);
-    assert.equal(await saldo(caio), -120, 'caução de 20% (nas 3 primeiras pode ficar negativo)');
+    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
+    assert.equal(await saldo(ana), 1900);
+    assert.equal(await saldo(caio), -220, 'caução de 20% (nas 3 primeiras pode ficar negativo)');
     const daAna = await ver(ana, r.id);
     assert.equal(daAna.driverEarning, undefined);
     assert.match(daAna.boardingPin!, /^\d{4}$/);
     assert.equal((await ver(caio, r.id)).boardingPin, undefined, 'motorista não vê o PIN');
-    assert.equal((await ver(caio, r.id)).driverEarning, 420);
+    assert.equal((await ver(caio, r.id)).driverEarning, 770);
     await erro(svc.completeInDrive(caio, r.id), 'not_departed');
     clock = at('12:20');
     await svc.boardInDrive(caio, r.id, daAna.boardingPin);
     await svc.completeInDrive(caio, r.id);
-    assert.equal(await saldo(caio), 420);
+    assert.equal(await saldo(caio), 770);
     dinheiroFecha('realizada');
   });
 
   test('sem PIN e sem prova de falta: valor volta ao passageiro', async () => {
-    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
     clock = at('12:20');
     await svc.completeInDrive(caio, r.id);
-    assert.equal(await saldo(ana), 1000);
+    assert.equal(await saldo(ana), 3000);
     assert.equal(await saldo(caio), 0);
     dinheiroFecha('sem prova');
   });
 
   test('passageiro não apareceu: 15 min e GPS no ponto; motorista recebe 70%', async () => {
-    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
     clock = at('12:20');
     await erro(svc.noShowInDrive(caio, r.id, VIRACOPOS.lat, VIRACOPOS.lng), 'too_early');
     clock = at('12:31');
     await erro(svc.noShowInDrive(caio, r.id, RIO.lat, RIO.lng), 'not_at_pickup');
     await svc.noShowInDrive(caio, r.id, VIRACOPOS.lat + 0.003, VIRACOPOS.lng);
     await svc.completeInDrive(caio, r.id);
-    assert.equal(await saldo(caio), 420);
-    assert.equal(await saldo(ana), 400);
+    assert.equal(await saldo(caio), 770);
+    assert.equal(await saldo(ana), 1900);
     dinheiroFecha('no-show');
   });
 
   test('PIN errado trava depois de 5 tentativas', async () => {
-    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
     const certo = (await ver(ana, r.id)).boardingPin!;
     const errado = certo === '1111' ? '2222' : '1111';
     for (let i = 0; i < 5; i++) await erro(svc.boardInDrive(caio, r.id, errado), 'wrong_pin');
@@ -214,59 +217,59 @@ describe('dinheiro: retido, caução, PIN e 30% da Froc', () => {
   test('depois de 3 viagens o motorista precisa ter a caução', async () => {
     await store.update('users', caio.uid, { carpoolsDone: 3 });
     const req = await svc.createInDrive(ana, pedido(VIRACOPOS, RIO, '12:15'));
-    const p = await svc.sendInDriveOffer(caio, req.id, { offeredPrice: 600 });
+    const p = await svc.sendInDriveOffer(caio, req.id, { offeredPrice: 1100 });
     await erro(svc.acceptInDriveOffer(ana, req.id, p.offers[0].id), 'driver_no_deposit');
-    assert.equal(await saldo(ana), 1000, 'nada cobrado do passageiro');
+    assert.equal(await saldo(ana), 3000, 'nada cobrado do passageiro');
   });
 });
 
 describe('cancelamento (mesmas regras das caronas)', () => {
   test('passageiro: +24h 100%; entre 24h e 2h 50%; menos de 2h 0%', async () => {
-    const a = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '08:00'), 600);
+    const a = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '08:00'), 1100);
     clock = at('08:00') - 30 * H;
-    assert.equal((await ver(ana, a.id)).cancelPreview!.refund, 600);
+    assert.equal((await ver(ana, a.id)).cancelPreview!.refund, 1100);
     await svc.cancelInDrive(ana, a.id);
-    assert.equal(await saldo(ana), 1000);
+    assert.equal(await saldo(ana), 3000);
 
-    const b = await combinar(bia, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+    const b = await combinar(bia, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
     clock = at('12:15') - 10 * H;
     await svc.cancelInDrive(bia, b.id);
-    assert.equal(await saldo(bia), 700);
+    assert.equal(await saldo(bia), 2450);
 
-    const c = await combinar(cris, caio, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 300 }), 300);
+    const c = await combinar(cris, caio, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 360 }), 360);
     clock = at('21:00') - 1 * H;
     await svc.cancelInDrive(cris, c.id);
-    assert.equal(await saldo(cris), 700);
-    assert.equal(await saldo(caio), 210 + 210, 'recebe 70% do que os passageiros perderam; cauções voltam');
+    assert.equal(await saldo(cris), 2640);
+    assert.equal(await saldo(caio), 385 + 252,  'recebe 70% do que os passageiros perderam; cauções voltam');
     dinheiroFecha('cancelamentos');
   });
 
   test('motorista desiste: passageiro 100% + multa da caução e o pedido volta para a vitrine', async () => {
     await recarga(caio, 200);
-    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+    const r = await combinar(ana, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
     clock = at('12:15') - 1 * H;
     const prev = (await ver(caio, r.id)).cancelPreview!;
-    assert.deepEqual([prev.penaltyPct, prev.penalty], [20, 120]);
+    assert.deepEqual([prev.penaltyPct, prev.penalty], [20, 220]);
     await svc.driverCancelInDrive(caio, r.id);
-    assert.equal(await saldo(ana), 1120, '100% + 20% de compensação');
-    assert.equal(await saldo(caio), 80);
+    assert.equal(await saldo(ana), 3220, '100% + 20% de compensação');
+    assert.equal(await saldo(caio), -20, 'caução de R$ 220 virou a multa (saldo era R$ 200)');
     const deNovo = await ver(ana, r.id);
     assert.equal(deNovo.status, 'open', 'outro motorista pode pegar');
     assert.equal(deNovo.offers.length, 0);
-    const p = await svc.sendInDriveOffer(davi, r.id, { offeredPrice: 610 });
+    const p = await svc.sendInDriveOffer(davi, r.id, { offeredPrice: 1110 });
     await svc.acceptInDriveOffer(ana, r.id, p.offers[0].id);
     dinheiroFecha('motorista desistiu e outro pegou');
   });
 
   test('3 desistências com multa em 30 dias: 7 dias sem pegar viagens agendadas', async () => {
     for (const p of [ana, bia, cris]) {
-      const r = await combinar(p, caio, pedido(VIRACOPOS, RIO, '12:15'), 600);
+      const r = await combinar(p, caio, pedido(VIRACOPOS, RIO, '12:15'), 1100);
       clock = at('12:15') - 1 * H;
       await svc.driverCancelInDrive(caio, r.id);
       clock = at('08:00') - 3 * 864e5;
     }
-    const novo = await svc.createInDrive(ana, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 300 }));
-    await erro(svc.sendInDriveOffer(caio, novo.id, { offeredPrice: 300 }), 'carpool_suspended');
+    const novo = await svc.createInDrive(ana, pedido(COPACABANA, RIO_OSTRAS, '21:00', { passengerOffer: 360 }));
+    await erro(svc.sendInDriveOffer(caio, novo.id, { offeredPrice: 370 }), 'carpool_suspended');
   });
 });
 
