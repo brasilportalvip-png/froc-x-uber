@@ -55,6 +55,35 @@ export function vozMasculinaDoAparelho(voices: SpeechSynthesisVoice[]) {
 let fila: Promise<void> = Promise.resolve();
 let tocando: HTMLAudioElement | null = null;
 
+/**
+ * iPhone/Safari só deixa tocar som que começou num toque. O app usa UM player só e "destrava"
+ * esse player no primeiro toque da pessoa na tela; depois as falas tocam sozinhas.
+ */
+const SILENCIO = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+let player: HTMLAudioElement | null = null;
+function playerUnico() {
+  if (!player && typeof Audio !== 'undefined') player = new Audio();
+  return player;
+}
+if (typeof window !== 'undefined') {
+  const destravar = () => {
+    const p = playerUnico();
+    if (p) {
+      p.src = SILENCIO;
+      p.play().then(() => p.pause(), () => undefined);
+    }
+    try {
+      window.speechSynthesis?.getVoices(); // carrega as vozes do aparelho
+    } catch {
+      /* sem voz no aparelho */
+    }
+    window.removeEventListener('pointerdown', destravar);
+    window.removeEventListener('keydown', destravar);
+  };
+  window.addEventListener('pointerdown', destravar, { once: true });
+  window.addEventListener('keydown', destravar, { once: true });
+}
+
 export function pararVoz() {
   try {
     tocando?.pause();
@@ -64,20 +93,27 @@ export function pararVoz() {
   }
 }
 
+/** Toca o áudio; devolve false se o aparelho bloqueou (aí a fala sai na voz do aparelho). */
 function tocarAudio(url: string) {
-  return new Promise<void>((resolve) => {
-    const a = new Audio(url);
+  return new Promise<boolean>((resolve) => {
+    const a = playerUnico() ?? new Audio();
+    a.src = url;
     tocando = a;
-    const fim = () => {
+    let feito = false;
+    const fim = (ok = true) => {
+      if (feito) return;
+      feito = true;
       clearTimeout(limite);
+      a.onended = null;
+      a.onerror = null;
       URL.revokeObjectURL(url);
       if (tocando === a) tocando = null;
-      resolve();
+      resolve(ok);
     };
-    const limite = setTimeout(fim, 25_000);
-    a.onended = fim;
-    a.onerror = fim;
-    a.play().catch(fim);
+    const limite = setTimeout(() => fim(true), 25_000);
+    a.onended = () => fim(true);
+    a.onerror = () => fim(false);
+    a.play().catch(() => fim(false));
   });
 }
 
@@ -102,7 +138,7 @@ async function tocar(situacao: SituacaoFroc, escolha: EscolhaFala, dados: DadosF
   try {
     const { nome: _nome, ...semNome } = dados; // o servidor usa o nome do cadastro
     const url = await apiAudio('/api/voz', { situacao, ...escolha, dados: semNome });
-    await tocarAudio(url);
+    if (!(await tocarAudio(url))) await falarNoAparelho(montarFala(situacao, escolha, dados));
   } catch {
     await falarNoAparelho(montarFala(situacao, escolha, dados));
   }

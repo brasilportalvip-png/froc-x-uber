@@ -1,4 +1,4 @@
-import type { Doc, Filter, Store, Tx } from './store.ts';
+import type { Doc, Filter, Order, Store, Tx } from './store.ts';
 
 /**
  * Implementação da Store no Firestore (produção). Recebe a instância do Firestore do
@@ -40,9 +40,32 @@ export class FirestoreStore implements Store {
     await this.col(collection).doc(id).delete();
   }
 
-  async query<T extends Doc>(collection: string, filters: Filter[], limit = 200): Promise<T[]> {
+  private warned = new Set<string>();
+
+  async query<T extends Doc>(collection: string, filters: Filter[], limit = 200, order?: Order): Promise<T[]> {
     let q = this.col(collection);
     for (const [field, op, value] of filters) q = q.where(field, op, value);
+    if (order) {
+      try {
+        const snap = await q.orderBy(order.field, order.dir).limit(limit).get();
+        return snap.docs.map((d: { data(): Doc }) => d.data() as T);
+      } catch (e) {
+        // Índice ainda não publicado (FAILED_PRECONDITION): ordena aqui mesmo, sem derrubar a tela.
+        const code = (e as { code?: unknown })?.code;
+        if (code !== 9 && code !== 'failed-precondition' && !/index/i.test(String((e as Error)?.message))) throw e;
+        const key = `${collection}:${filters.map((f) => f[0]).join(',')}:${order.field}`;
+        if (!this.warned.has(key)) {
+          this.warned.add(key);
+          console.warn(`Índice do Firestore faltando para ${key} (rode PUBLICAR-FIREBASE.cmd). Ordenando no servidor.`);
+        }
+        const snap = await q.limit(Math.max(limit, 500)).get();
+        const sign = order.dir === 'desc' ? -1 : 1;
+        return (snap.docs.map((d: { data(): Doc }) => d.data()) as T[])
+          .filter((d) => d[order.field] !== undefined && d[order.field] !== null)
+          .sort((a, b) => sign * String(a[order.field]).localeCompare(String(b[order.field])))
+          .slice(0, limit);
+      }
+    }
     const snap = await q.limit(limit).get();
     return snap.docs.map((d: { data(): Doc }) => d.data() as T);
   }

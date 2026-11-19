@@ -8,6 +8,8 @@
 
 export type Doc = Record<string, unknown>;
 export type Filter = [field: string, op: '==', value: unknown];
+/** Ordem do resultado (ex.: mais novos primeiro: { field: 'createdAt', dir: 'desc' }). */
+export type Order = { field: string; dir: 'asc' | 'desc' };
 
 export interface Tx {
   get<T extends Doc>(collection: string, id: string): Promise<T | null>;
@@ -21,8 +23,11 @@ export interface Store {
   update(collection: string, id: string, data: Doc): Promise<void>;
   /** Apaga um documento (usado só para posts do blog). */
   remove(collection: string, id: string): Promise<void>;
-  /** Consulta só por igualdade (sem índices compostos); a ordenação é feita em memória. */
-  query<T extends Doc>(collection: string, filters: Filter[], limit?: number): Promise<T[]>;
+  /**
+   * Consulta por igualdade. Com `order`, o banco devolve já ordenado ANTES do limite (ex.: os 60
+   * lançamentos mais novos, e não 60 quaisquer).
+   */
+  query<T extends Doc>(collection: string, filters: Filter[], limit?: number, order?: Order): Promise<T[]>;
   count(collection: string, filters: Filter[]): Promise<number>;
   /** Leituras e escritas atômicas: ou tudo acontece, ou nada (dinheiro nunca fica pela metade). */
   transaction<R>(fn: (tx: Tx) => Promise<R>): Promise<R>;
@@ -60,13 +65,18 @@ export class MemoryStore implements Store {
     this.col(collection).delete(id);
   }
 
-  async query<T extends Doc>(collection: string, filters: Filter[], limit = 200): Promise<T[]> {
+  async query<T extends Doc>(collection: string, filters: Filter[], limit = 200, order?: Order): Promise<T[]> {
     const out: T[] = [];
     for (const doc of this.col(collection).values()) {
       if (filters.every(([field, , value]) => doc[field] === value)) out.push(clone(doc) as T);
-      if (out.length >= limit) break;
+      if (!order && out.length >= limit) break;
     }
-    return out;
+    if (!order) return out;
+    const sign = order.dir === 'desc' ? -1 : 1;
+    return out
+      .filter((d) => d[order.field] !== undefined && d[order.field] !== null)
+      .sort((a, b) => sign * String(a[order.field]).localeCompare(String(b[order.field])))
+      .slice(0, limit);
   }
 
   async count(collection: string, filters: Filter[]) {

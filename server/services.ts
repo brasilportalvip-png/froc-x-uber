@@ -108,6 +108,8 @@ export const cityKey = (city: unknown) =>
 export const minuteKey = (ms: number) => new Date(ms).toISOString().slice(0, 16);
 /** Até quantos minutos para trás a varredura recupera prazos (servidor parado, deploy). */
 const DEADLINE_BACKLOG_MIN = 180;
+/** Na varredura feita dentro do pedido de alguém: só os últimos minutos (não trava a tela). */
+const DEADLINE_BACKLOG_QUICK_MIN = 5;
 
 const firstName = (name: unknown) => String(name || '').trim().split(/\s+/)[0] || '';
 
@@ -527,7 +529,7 @@ export class FrocService {
 
   async auditLog(auth: AuthUser, limit = 100) {
     this.requireAdmin(auth);
-    return byNewest(await this.store.query<Doc>('audit', [], 1000)).slice(0, Math.min(500, limit));
+    return byNewest(await this.store.query<Doc>('audit', [], Math.min(500, limit), { field: 'createdAt', dir: 'desc' }));
   }
 
   // ---------------------------------------------------------------- usuários
@@ -777,7 +779,7 @@ export class FrocService {
   }
 
   async transactions(uid: string): Promise<WalletTransaction[]> {
-    const items = byNewest(await this.store.query<Doc>('transactions', [['uid', '==', uid]], 300)).slice(0, 60);
+    const items = byNewest(await this.recentFor('transactions', 'uid', uid, 60));
     return items.map((t) => ({
       id: String(t.id),
       // Lançamentos antigos traziam "(taxa Froc R$ x)": some do extrato (sigilo).
@@ -884,7 +886,7 @@ export class FrocService {
 
   /** Pedidos de Pix da própria pessoa, com a situação de cada um (para ela acompanhar no app). */
   async myWithdrawals(uid: string): Promise<MyWithdrawalView[]> {
-    const items = byNewest(await this.store.query<Doc>('withdrawals', [['uid', '==', uid]], 100)).slice(0, 10);
+    const items = byNewest(await this.recentFor('withdrawals', 'uid', uid, 10));
     return items.map((w) => ({
       id: String(w.id),
       amount: toReais(Number(w.amountCents)),
@@ -1211,27 +1213,26 @@ export class FrocService {
   }
 
   private async sharesTrip(a: string, b: string) {
+    // Viagem entre os dois (busca direta pelo par: não depende do tamanho do histórico).
     const pairs: [string, string, string][] = [
       ['rides', 'passengerId', 'driverId'],
       ['indrive', 'passengerId', 'driverId'],
       ['carpoolBookings', 'passengerId', 'driverId'],
     ];
     for (const [col, p, d] of pairs) {
-      for (const [mine, other] of [[p, d], [d, p]] as const) {
-        const docs = await this.store.query<Doc>(col, [[mine, '==', a]], 200);
-        if (docs.some((x) => x[other] === b)) return true;
+      for (const [x, y] of [[a, b], [b, a]]) {
+        if ((await this.store.query<Doc>(col, [[p, '==', x], [d, '==', y]], 1)).length) return true;
       }
     }
     // Chamada de corrida: motorista online vê a foto de quem está pedindo agora.
-    const calling = await this.store.query<Doc>('rides', [['passengerId', '==', b]], 50);
-    if (calling.some((r) => r.status === 'searching')) {
+    if ((await this.inStatus('rides', 'passengerId', b, ['searching'], 1)).length) {
       const me = await this.store.get<UserDoc>('users', a);
       if (me?.driverOnline) return true;
     }
     // Pedido de viagem agendada: o passageiro vê a foto de quem mandou proposta; o motorista, de quem pediu.
-    const myRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', a]], 100);
+    const myRequests = await this.inStatus('indrive', 'passengerId', a, ['open', 'matched'], 50);
     if (myRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === b))) return true;
-    const theirRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', b]], 100);
+    const theirRequests = await this.inStatus('indrive', 'passengerId', b, ['open', 'matched'], 50);
     if (theirRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === a))) return true;
     // Pedido aberto: só motorista aprovado (quem pode mandar proposta) vê a foto de quem pediu.
     if (!theirRequests.some((r) => r.status === 'open')) return false;
@@ -1692,7 +1693,7 @@ export class FrocService {
     const surge = pricing.multiplier;
     const price = pricing.total;
     const priceCents = toCents(price);
-    const active = await this.store.query<Doc>('rides', [['passengerId', '==', auth.uid]], 200);
+    const active = await this.inStatus('rides', 'passengerId', auth.uid, ACTIVE_RIDE);
     if (active.some((r) => !r.delivery && ACTIVE_RIDE.includes(String(r.status))))
       fail(409, 'ride_in_progress', 'Você já tem uma corrida em andamento.');
     const id = randomUUID();
@@ -1756,7 +1757,7 @@ export class FrocService {
     let queueInfo: { position: number; aheadMin: number } | null = null;
     if (action === 'driver_accept') {
       await this.approvedUser(auth, 'driver');
-      const driving = (await this.store.query<Doc>('rides', [['driverId', '==', auth.uid]], 200)).filter((r) => DRIVING_RIDE.includes(String(r.status)));
+      const driving = await this.inStatus('rides', 'driverId', auth.uid, DRIVING_RIDE);
       if (driving.length >= MAX_DRIVER_QUEUE)
         fail(409, 'queue_full', `Você já tem ${MAX_DRIVER_QUEUE} corridas (a atual e ${MAX_DRIVER_QUEUE - 1} na fila). Termine uma para aceitar outra.`);
       if (driving.length) {
@@ -1968,7 +1969,7 @@ export class FrocService {
 
   /** Fila do motorista: se não há corrida atual, a mais antiga da fila vira a atual; as outras sobem. */
   private async promoteDriverQueue(driverId: string) {
-    const active = (await this.store.query<Doc>('rides', [['driverId', '==', driverId]], 200)).filter((r) => DRIVING_RIDE.includes(String(r.status)));
+    const active = await this.inStatus('rides', 'driverId', driverId, DRIVING_RIDE);
     const queued = active.filter((r) => r.queued).sort((a, b) => Number(a.queuePosition || 0) - Number(b.queuePosition || 0) || String(a.acceptedAt).localeCompare(String(b.acceptedAt)));
     const hasCurrent = active.some((r) => !r.queued);
     let position = 0;
@@ -2053,7 +2054,7 @@ export class FrocService {
     const user = await this.ensureUser(auth);
     if (method === 'froc_pay' && user.balanceCents < toCents(offer))
       fail(402, 'insufficient_balance', `Saldo insuficiente: sua carteira tem ${brl(user.balanceCents / 100)}. Recarregue por Pix ou cartão.`);
-    const mine = await this.store.query<Doc>('indrive', [['passengerId', '==', auth.uid]], 200);
+    const mine = await this.inStatus('indrive', 'passengerId', auth.uid, ['open', 'matched']);
     if (mine.filter((r) => r.status === 'open' || r.status === 'matched').length >= 5)
       fail(409, 'too_many_requests', 'Você já tem 5 viagens agendadas ou aguardando proposta.');
     const id = randomUUID();
@@ -2146,7 +2147,7 @@ export class FrocService {
       return [d, d + (Number(x.durationMin || 60) + 60) * 60000] as const;
     };
     const [a0, a1] = window(r);
-    const agenda = (await this.store.query<Doc>('indrive', [['driverId', '==', driverId]], 200)).filter((x) => x.status === 'matched' && x.id !== r.id && this.privateDeparture(x) !== null);
+    const agenda = (await this.inStatus('indrive', 'driverId', driverId, ['matched'], 200)).filter((x) => x.status === 'matched' && x.id !== r.id && this.privateDeparture(x) !== null);
     const overlapping = agenda.filter((x) => {
       const [b0, b1] = window(x);
       return a0 < b1 && b0 < a1;
@@ -2541,7 +2542,7 @@ export class FrocService {
       });
       return t;
     });
-    const mine = await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid]], 300);
+    const mine = await this.inStatus('carpoolBookings', 'passengerId', auth.uid, CARPOOL_ACTIVE, 100);
     return this.carpoolView(trip, auth.uid, mine);
   }
 
@@ -2552,9 +2553,7 @@ export class FrocService {
 
   /** Passageiro cancela: 100% (+24h ou arrependimento de 1h), 50% (24h–2h) ou 0% (menos de 2h). */
   async cancelCarpoolBooking(auth: AuthUser, tripId: string) {
-    const mine = (await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid]], 300)).filter(
-      (b) => b.tripId === tripId && b.status === 'paid',
-    );
+    const mine = (await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid], ['tripId', '==', tripId]], 20)).filter((b) => b.status === 'paid');
     if (!mine.length) fail(404, 'not_found', 'Você não tem reserva nesta carona.');
     await this.settings();
     const trip = await this.store.transaction(async (tx) => {
@@ -2593,7 +2592,7 @@ export class FrocService {
       tx.update('carpools', tripId, { availableSeats: t.availableSeats });
       return t;
     });
-    const after = await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid]], 300);
+    const after = await this.inStatus('carpoolBookings', 'passengerId', auth.uid, CARPOOL_ACTIVE, 100);
     return this.carpoolView(trip, auth.uid, after);
   }
 
@@ -3010,7 +3009,7 @@ export class FrocService {
 
   /** Depois de uma ação de alguém: avisa quem participa do que mudou (e a zona, se procura motorista). */
   notifyFrom(actorUid: string | undefined, result: unknown) {
-    const ids = new Set<unknown>([actorUid]);
+    const ids = new Set<unknown>();
     const PARTY = ['passengerId', 'driverId', 'clientId', 'acceptedTruckerId', 'truckerId', 'reservedById', 'merchantId'];
     const visit = (o: unknown, depth: number) => {
       if (!o || typeof o !== 'object' || depth > 3) return;
@@ -3021,7 +3020,20 @@ export class FrocService {
       for (const v of Object.values(d)) if (v && typeof v === 'object') visit(v, depth + 1);
     };
     visit(result, 0);
+    // Quem fez a ação já atualiza a própria tela: o aviso vai só para as outras pessoas.
+    ids.delete(actorUid);
     this.signal(ids);
+  }
+
+  /** Os mais novos de uma pessoa: o banco ordena ANTES do limite (histórico grande não esconde nada). */
+  private recentFor(col: string, field: string, value: string, limit: number) {
+    return this.store.query<Doc>(col, [[field, '==', value]], limit, { field: 'createdAt', dir: 'desc' });
+  }
+
+  /** Só os que estão nestas situações (ex.: corrida em andamento), sem depender do tamanho do histórico. */
+  private async inStatus(col: string, field: string, value: string, statuses: readonly string[], limit = 50): Promise<Doc[]> {
+    const lists = await Promise.all(statuses.map((st) => this.store.query<Doc>(col, [[field, '==', value], ['status', '==', st]], limit)));
+    return lists.flat();
   }
 
   /** Chaves de busca de uma oferta/pedido intermunicipal: região de saída e cidades de origem e destino. */
@@ -3198,8 +3210,8 @@ export class FrocService {
     await this.store.update('users', user.uid, { driverLat: lat, driverLng: lng, driverCell: cell, driverZone: this.geo.zoneOf(cell), locationAt: at, ...(heading !== null ? { driverHeading: heading } : {}) });
     const location = { lat: round6(lat), lng: round6(lng), at, ...(heading !== null ? { heading } : {}) };
     const [rides, deals] = await Promise.all([
-      this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
-      this.store.query<Doc>('indrive', [['driverId', '==', user.uid]], 100),
+      this.inStatus('rides', 'driverId', user.uid, DRIVING_RIDE),
+      this.inStatus('indrive', 'driverId', user.uid, ['matched']),
     ]);
     // Passageiro vê o carro andando: aviso em tempo real para quem está em viagem com ele.
     this.signal([
@@ -3230,7 +3242,7 @@ export class FrocService {
     let rides = 0;
     let deals = 0;
     // Prazos vencidos: busca só os que vencem em cada minuto que já passou (não lê o Brasil inteiro).
-    const minutes = this.dueMinutes(now);
+    const minutes = this.dueMinutes(now, force ? DEADLINE_BACKLOG_MIN : DEADLINE_BACKLOG_QUICK_MIN);
     const expireRide = async (r: Doc) => {
       const limitMin = r.delivery ? Math.max(cfg.rideSearchTimeoutMin, DELIVERY_SEARCH_MIN) : cfg.rideSearchTimeoutMin;
       const due = r.searchDeadline ? String(r.searchDeadline) < minuteKey(now) : now - Date.parse(String(r.createdAt)) >= limitMin * 60_000;
@@ -3326,24 +3338,29 @@ export class FrocService {
    * Minutos já vencidos desde a última varredura deste servidor (no máximo DEADLINE_BACKLOG_MIN para trás).
    * O minuto atual só entra quando termina.
    */
-  private dueMinutes(now: number): string[] {
+  private dueMinutes(now: number, backlogMin: number): string[] {
     const last = Math.floor(now / 60_000) * 60_000 - 60_000;
-    const first = Math.max(this.deadlineCursor ?? -Infinity, last - DEADLINE_BACKLOG_MIN * 60_000);
+    // O agendador (backlog longo) revê as últimas horas inteiras: cobre o que outro servidor perdeu.
+    const full = backlogMin >= DEADLINE_BACKLOG_MIN;
+    const first = full ? last - backlogMin * 60_000 : Math.max(this.deadlineCursor ?? -Infinity, last - backlogMin * 60_000);
     const out: string[] = [];
     for (let t = first; t <= last; t += 60_000) out.push(minuteKey(t));
-    if (last >= first) this.deadlineCursor = last + 60_000;
+    if (last >= first) this.deadlineCursor = Math.max(this.deadlineCursor ?? -Infinity, last + 60_000);
     return out;
   }
 
   /** Processa os documentos com o prazo vencido em cada minuto (em lotes de 500). */
   private async forEachDue(col: string, status: string, field: string, minutes: string[], fn: (d: Doc) => Promise<boolean>) {
-    for (const m of minutes) {
-      for (let round = 0; round < 50; round++) {
-        const batch = await this.store.query<Doc>(col, [['status', '==', status], [field, '==', m]], 500);
-        let changed = 0;
-        for (const d of batch) if (await fn(d).catch((e) => (console.warn('Prazo não processado:', col, d.id, e?.message), false))) changed++;
-        if (batch.length < 500 || changed === 0) break;
-      }
+    // Até 10 minutos consultados ao mesmo tempo (servidor recém-ligado não fica esperando consulta por consulta).
+    for (let i = 0; i < minutes.length; i += 10) await Promise.all(minutes.slice(i, i + 10).map((m) => this.dueInMinute(col, status, field, m, fn)));
+  }
+
+  private async dueInMinute(col: string, status: string, field: string, m: string, fn: (d: Doc) => Promise<boolean>) {
+    for (let round = 0; round < 50; round++) {
+      const batch = await this.store.query<Doc>(col, [['status', '==', status], [field, '==', m]], 500);
+      let changed = 0;
+      for (const d of batch) if (await fn(d).catch((e) => (console.warn('Prazo não processado:', col, d.id, e?.message), false))) changed++;
+      if (batch.length < 500 || changed === 0) break;
     }
   }
 
@@ -3424,7 +3441,7 @@ export class FrocService {
       ? ([await this.store.get<UserDoc>('users', String(byCpf.uid))].filter(Boolean) as UserDoc[])
       : q.includes('@')
         ? await this.store.query<UserDoc>('users', [['email', '==', q]], 5)
-        : byNewest(await this.store.query<UserDoc>('users', [], 300)).slice(0, 100);
+        : byNewest(await this.store.query<UserDoc>('users', [], 100, { field: 'createdAt', dir: 'desc' }));
     return users
       .filter((u) => !q || byCpf || q.includes('@') || u.name.toLowerCase().includes(q) || String(u.phone).includes(q))
       .map((u) => ({
@@ -3501,10 +3518,10 @@ export class FrocService {
     const user = (await this.store.get<UserDoc>('users', String(uid))) ?? fail(404, 'not_found', 'Usuário não encontrado.');
     const [tx, ridesP, ridesD, sos, withdrawals] = await Promise.all([
       this.transactions(user.uid),
-      this.store.query<Doc>('rides', [['passengerId', '==', user.uid]], 100),
-      this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
-      this.store.query<Doc>('sos', [['uid', '==', user.uid]], 50),
-      this.store.query<Doc>('withdrawals', [['uid', '==', user.uid]], 50),
+      this.recentFor('rides', 'passengerId', user.uid, 20),
+      this.recentFor('rides', 'driverId', user.uid, 20),
+      this.recentFor('sos', 'uid', user.uid, 10),
+      this.recentFor('withdrawals', 'uid', user.uid, 10),
     ]);
     const { driverDocs: _d, truckerDocs: _t, ...safe } = user;
     return {
@@ -3726,7 +3743,7 @@ export class FrocService {
     const orderRef = text(body.orderRef, 60);
     // Mesmo pedido enviado duas vezes (rede instável, sistema repetindo) não gera duas entregas.
     if (orderRef) {
-      const mine = await this.store.query<Doc>('rides', [['merchantId', '==', uid]], 500);
+      const mine = await this.recentFor('rides', 'merchantId', uid, 500);
       const dup = mine.find((r) => (r.delivery as Doc | undefined)?.orderRef === orderRef && r.status !== 'cancelled');
       if (dup) return this.deliveryView(dup);
     }
@@ -3834,7 +3851,7 @@ export class FrocService {
 
   async listDeliveries(uid: string, status?: unknown) {
     await this.approvedMerchant(uid);
-    const all = byNewest(await this.store.query<Doc>('rides', [['merchantId', '==', uid]], 500)).map((r) => this.deliveryView(r));
+    const all = byNewest(await this.recentFor('rides', 'merchantId', uid, 300)).map((r) => this.deliveryView(r));
     return { deliveries: (status ? all.filter((d) => d.status === status) : all).slice(0, 100) };
   }
 
@@ -3937,7 +3954,7 @@ export class FrocService {
     );
     const uid = auth.uid;
     if (col === 'carpools') {
-      const mine = await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', uid]], 300);
+      const mine = await this.inStatus('carpoolBookings', 'passengerId', uid, CARPOOL_ACTIVE, 100);
       return { items: found.filter((t) => t.driverId !== uid).map((t) => this.carpoolView(t, uid, mine)) };
     }
     if (col === 'emptyTrucks') return { items: found.filter((t) => t.truckerId !== uid).map((t) => this.truckView(t, uid)) };
@@ -3948,6 +3965,8 @@ export class FrocService {
 
   /** Ofertas antigas (antes da busca por região): ganham as chaves de busca. Só no agendador. */
   private async backfillListingKeys() {
+    // Já terminou uma vez: não relê as ofertas a cada rodada do agendador.
+    if ((await this.store.get<Doc>('settings', 'listing_keys'))?.done) return 0;
     let n = 0;
     for (const [col, status] of [['carpools', 'open'], ['emptyTrucks', 'available'], ['freights', 'open_bids'], ['indrive', 'open']]) {
       for (const d of await this.store.query<Doc>(col, [['status', '==', status]], 300)) {
@@ -3956,6 +3975,7 @@ export class FrocService {
         n++;
       }
     }
+    if (n === 0) await this.store.set('settings', 'listing_keys', { done: true, at: this.iso() });
     return n;
   }
 
@@ -3969,6 +3989,7 @@ export class FrocService {
     const isMerchant = user.merchantStatus === 'approved';
     const q = (col: string, field: string, value: unknown, limit = 100) => this.store.query<Doc>(col, [[field, '==', value]], limit);
     const regions = this.regionsFor(user, near);
+    const both = async (...parts: Promise<Doc[]>[]) => uniqueById((await Promise.all(parts)).flat());
 
     const [
       myRides,
@@ -3990,25 +4011,26 @@ export class FrocService {
       merchantDeliveries,
       withdrawals,
     ] = await Promise.all([
-      q('rides', 'passengerId', uid),
-      isDriver ? q('rides', 'driverId', uid) : [],
+      // Histórico recente + o que está em andamento (busca direta pela situação: nunca some da tela).
+      both(this.recentFor('rides', 'passengerId', uid, 40), this.inStatus('rides', 'passengerId', uid, ACTIVE_RIDE)),
+      isDriver ? both(this.recentFor('rides', 'driverId', uid, 40), this.inStatus('rides', 'driverId', uid, DRIVING_RIDE)) : [],
       // Pedidos da região do motorista (zonas em volta dele), não do Brasil inteiro.
       isDriver && user.driverOnline ? this.dispatchFeed(user) : [],
-      q('indrive', 'passengerId', uid),
-      isDriver ? q('indrive', 'driverId', uid) : [],
+      both(this.recentFor('indrive', 'passengerId', uid, 40), this.inStatus('indrive', 'passengerId', uid, ['open', 'matched'])),
+      isDriver ? both(this.recentFor('indrive', 'driverId', uid, 40), this.inStatus('indrive', 'driverId', uid, ['matched'], 200)) : [],
       // Vitrine perto da pessoa (busca por região); outras cidades pela busca (searchListings).
       isDriver ? this.nearListings('indrive', 'open', regions, regions ? 60 : 300) : [],
       this.nearListings('carpools', 'open', regions, regions ? 30 : 60),
-      isDriver ? q('carpools', 'driverId', uid) : [],
-      q('carpoolBookings', 'passengerId', uid, 300),
+      isDriver ? both(this.recentFor('carpools', 'driverId', uid, 40), this.inStatus('carpools', 'driverId', uid, ['open'])) : [],
+      both(this.recentFor('carpoolBookings', 'passengerId', uid, 60), this.inStatus('carpoolBookings', 'passengerId', uid, CARPOOL_ACTIVE)),
       this.nearListings('emptyTrucks', 'available', regions, regions ? 30 : 60),
-      isTrucker ? q('emptyTrucks', 'truckerId', uid) : [],
-      q('emptyTrucks', 'reservedById', uid),
-      q('freights', 'clientId', uid),
-      isTrucker ? q('freights', 'acceptedTruckerId', uid) : [],
+      isTrucker ? both(this.recentFor('emptyTrucks', 'truckerId', uid, 40), this.inStatus('emptyTrucks', 'truckerId', uid, ['available', 'reserved'])) : [],
+      both(this.recentFor('emptyTrucks', 'reservedById', uid, 40), this.inStatus('emptyTrucks', 'reservedById', uid, ['reserved'])),
+      both(this.recentFor('freights', 'clientId', uid, 40), this.inStatus('freights', 'clientId', uid, ['open_bids', 'booked', 'in_transit'])),
+      isTrucker ? both(this.recentFor('freights', 'acceptedTruckerId', uid, 40), this.inStatus('freights', 'acceptedTruckerId', uid, ['booked', 'in_transit'])) : [],
       isTrucker ? this.nearListings('freights', 'open_bids', regions, regions ? 30 : 40) : [],
       this.transactions(uid),
-      isMerchant ? q('rides', 'merchantId', uid, 200) : [],
+      isMerchant ? both(this.recentFor('rides', 'merchantId', uid, 100), this.inStatus('rides', 'merchantId', uid, ACTIVE_RIDE, 200)) : [],
       this.myWithdrawals(uid),
     ]);
 

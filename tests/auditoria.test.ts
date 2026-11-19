@@ -9,6 +9,7 @@
  *  6. Escala Brasil inteiro: buscas por região (zonas) e prazos por minuto, nunca o país inteiro com limite.
  *  7. Vitrine (caronas, retorno vazio, fretes, viagens agendadas): perto da pessoa + busca por cidade.
  *  8. Tempo real: avisos no Firebase (só um número), regras fechadas e índices das buscas.
+ *  9. Histórico grande não esconde a corrida atual nem o extrato novo; servidor novo não trava.
  * Rodar: npm test
  */
 import { test, describe, beforeEach } from 'node:test';
@@ -330,5 +331,81 @@ describe('8. tempo real (avisos), regras e índices do Firebase', () => {
     for (const need of ['froc_rides|status,originZone', 'froc_rides|status,searchDeadline', 'froc_rides|status,startDeadline', 'froc_users|driverOnline,driverZone', 'froc_indrive|status,expireDeadline']) assert.ok(have.has(need), need);
     for (const col of ['froc_indrive', 'froc_carpools', 'froc_emptyTrucks', 'froc_freights'])
       for (const f of ['originRegion', 'originCityKey', 'destCityKey']) assert.ok(have.has(`${col}|status,${f}`), `${col} ${f}`);
+  });
+});
+
+describe('9. histórico grande não esconde nada (pente fino 2)', () => {
+  const PAULISTA = { lat: -23.5614, lng: -46.6559 };
+  const velho = (i: number) => new Date(Date.parse('2026-01-01T00:00:00Z') + i * 60_000).toISOString();
+
+  test('motorista com 250 corridas no histórico continua vendo a corrida em andamento', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    for (let i = 0; i < 250; i++)
+      await store.set('rides', `h${i}`, { id: `h${i}`, driverId: caio.uid, passengerId: `x${i}`, status: 'completed', createdAt: velho(i), origin: { lat: 0, lng: 0, name: 'a' }, destination: { lat: 0, lng: 0, name: 'b' }, messages: [] });
+    await svc.updateProfile(caio, { driverOnline: true });
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    await svc.rideAction(caio, r.id, { action: 'driver_accept' });
+    const view = await svc.bootstrap(caio);
+    assert.ok(view.rides.some((x) => x.id === r.id && x.status === 'accepted'), 'a corrida atual aparece');
+  });
+
+  test('fila do motorista conta só as corridas em andamento, mesmo com histórico grande', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    for (let i = 0; i < 250; i++) await store.set('rides', `h${i}`, { id: `h${i}`, driverId: caio.uid, status: 'completed', createdAt: velho(i) });
+    await svc.updateProfile(caio, { driverOnline: true });
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    await svc.rideAction(caio, r.id, { action: 'driver_accept' });
+    const ativas = await store.query('rides', [['driverId', '==', caio.uid], ['status', '==', 'accepted']]);
+    assert.equal(ativas.length, 1);
+    // o carro andando chega à passageira mesmo com o histórico grande
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    assert.ok((await store.get('rides', r.id))!.driverLocation);
+  });
+
+  test('extrato mostra os lançamentos mais novos, não 60 quaisquer', async () => {
+    for (let i = 0; i < 400; i++) await store.set('transactions', `t${i}`, { id: `t${i}`, uid: ana.uid, title: `antigo ${i}`, category: 'corrida', amountCents: 100, type: 'debit', createdAt: velho(i) });
+    await store.set('transactions', 'novo', { id: 'novo', uid: ana.uid, title: 'lançamento de hoje', category: 'recarga_pix', amountCents: 5000, type: 'credit', createdAt: new Date(clock).toISOString() });
+    const extrato = await svc.transactions(ana.uid);
+    assert.equal(extrato[0].title, 'lançamento de hoje');
+    assert.equal(extrato.length, 60);
+  });
+
+  test('foto do motorista atual aparece mesmo com 300 corridas antigas com outros motoristas', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    for (let i = 0; i < 300; i++) await store.set('rides', `p${i}`, { id: `p${i}`, passengerId: ana.uid, driverId: `outro${i}`, status: 'completed', createdAt: velho(i) });
+    await svc.updateProfile(caio, { driverOnline: true });
+    await store.update('users', caio.uid, { photoPath: 'rostos/d1.jpg' });
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    await svc.rideAction(caio, r.id, { action: 'driver_accept' });
+    assert.equal((await svc.profilePhoto(ana, caio.uid)).contentType, 'image/jpeg');
+  });
+
+  test('servidor recém-ligado: a varredura dentro do pedido da pessoa é rápida (poucas consultas)', async () => {
+    let n = 0;
+    const orig = store.query.bind(store);
+    store.query = (async (...a: Parameters<typeof store.query>) => (n++, orig(...a))) as typeof store.query;
+    const fresh = new FrocService(store, { now: () => new Date(clock), geo: createGridGeo() });
+    await fresh.sweep(false);
+    store.query = orig;
+    assert.ok(n <= 40, `fez ${n} consultas`);
+  });
+
+  test('tempo real: quem fez a ação não recebe aviso de si mesmo (só a outra pessoa)', async () => {
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    await tick();
+    await store.remove('signals', caio.uid); // aviso da aprovação do cadastro, feito na preparação
+    await store.remove('signals', ana.uid);
+    svc.notifyFrom(caio.uid, { ok: true });
+    svc.notifyFrom(caio.uid, { ride: { passengerId: ana.uid, driverId: caio.uid } });
+    await tick();
+    assert.equal(await store.get('signals', caio.uid), null);
+    assert.ok(await store.get('signals', ana.uid));
+  });
+
+  test('índices de ordenação publicados no arquivo do Firebase', async () => {
+    const { readFileSync } = await import('node:fs');
+    const idx = JSON.parse(readFileSync(new URL('../firestore.indexes.json', import.meta.url), 'utf8')).indexes as { collectionGroup: string; fields: { fieldPath: string; order: string }[] }[];
+    const has = (c: string, f: string) => idx.some((i) => i.collectionGroup === c && i.fields[0].fieldPath === f && i.fields[1]?.fieldPath === 'createdAt' && i.fields[1]?.order === 'DESCENDING');
+    for (const [c, f] of [['froc_rides', 'passengerId'], ['froc_rides', 'driverId'], ['froc_rides', 'merchantId'], ['froc_transactions', 'uid'], ['froc_withdrawals', 'uid'], ['froc_indrive', 'passengerId'], ['froc_carpoolBookings', 'passengerId']]) assert.ok(has(c, f), `${c} ${f}`);
   });
 });
