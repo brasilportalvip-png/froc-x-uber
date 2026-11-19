@@ -26,7 +26,7 @@ import { FlashPopup, RideCallPopup } from './components/RideFlowUI.tsx';
 import { currentDriving, drivingRides, liveTarget, nextCall, shouldAutoArrive } from './lib/rideFlow.ts';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
-import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
+import { api, loadPublicConfig, logout, prepareUpload, watchSignals, watchUser } from './lib/session.ts';
 import type { AppBootstrapState, AppModule, GeoPoint, NearbyDriver, UserProfile, UserRole } from './types/mobility.ts';
 import { initialRole, loadRole, modeOf, roleForMode, saveRole } from './lib/appMode.ts';
 
@@ -246,30 +246,73 @@ export default function App() {
         (state.deliveries ?? []).some((d) => !['entregue', 'cancelada'].includes(d.status))),
   );
 
+  // Tempo real: o app escuta avisos no Firebase e só busca os dados quando algo muda.
+  // Sem os avisos (regras não publicadas, rede), volta a atualizar sozinho como antes.
+  const liveOk = useRef(false);
+  const lastLoadRef = useRef(0);
+  const pendingLoad = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveZonesKey = (state?.live?.zones || []).join(',');
+  const liveZonesRef = useRef('');
+  liveZonesRef.current = liveZonesKey;
+  const driverOnlineRef = useRef(false);
+  driverOnlineRef.current = Boolean(state?.profile.driverOnline);
+  useEffect(() => {
+    if (!user) return;
+    let stop: (() => void) | null = null;
+    let alive = true;
+    // Aviso pessoal: busca em até 1,5 s. Aviso da zona (pedido novo): no máximo a cada 6 s.
+    const onChange = (kind: 'me' | 'zone') => {
+      if (document.visibilityState !== 'visible') return;
+      const gap = kind === 'me' ? 1500 : 6000;
+      const wait = Math.max(0, lastLoadRef.current + gap - Date.now());
+      if (pendingLoad.current) return;
+      pendingLoad.current = setTimeout(() => {
+        pendingLoad.current = null;
+        lastLoadRef.current = Date.now();
+        void loadBootstrap();
+      }, wait);
+    };
+    void watchSignals(user.uid, liveZonesKey ? liveZonesKey.split(',') : [], onChange, (ok) => {
+      liveOk.current = ok;
+    }).then((s) => {
+      if (alive) stop = s;
+      else s();
+    });
+    return () => {
+      alive = false;
+      stop?.();
+      if (pendingLoad.current) clearTimeout(pendingLoad.current);
+      pendingLoad.current = null;
+    };
+  }, [user, liveZonesKey, loadBootstrap]);
+
   // 2) Dados da pessoa logada + atualização automática (motoristas, propostas, lances)
   useEffect(() => {
     if (!user) return;
     setLoading(true);
+    lastLoadRef.current = Date.now();
     void loadBootstrap();
-    // Economia de servidor: rápido (6 s) só com corrida/negociação ativa ou motorista online;
-    // parado, a cada 60 s; com o app escondido, nada. Ao voltar para o app, atualiza na hora.
-    let lastLoad = Date.now();
+    // Com tempo real ligado: só uma conferência a cada 60 s (os avisos trazem o resto na hora).
+    // Sem tempo real: rápido (6 s) com corrida/negociação ativa ou motorista online; parado, 60 s.
+    // Com o app escondido, nada. Ao voltar para o app, atualiza na hora.
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible' || !navigator.onLine) return;
-      const every = pollFast.current ? 6_000 : 60_000;
-      if (Date.now() - lastLoad < every - 500) return;
-      lastLoad = Date.now();
+      // Motorista online sem zona para escutar (GPS ainda não chegou) continua no modo rápido.
+      const needsFast = !liveOk.current || (driverOnlineRef.current && !liveZonesRef.current);
+      const every = needsFast && pollFast.current ? 6_000 : 60_000;
+      if (Date.now() - lastLoadRef.current < every - 500) return;
+      lastLoadRef.current = Date.now();
       void loadBootstrap();
     }, 2000);
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastLoad > 3000) {
-        lastLoad = Date.now();
+      if (document.visibilityState === 'visible' && Date.now() - lastLoadRef.current > 3000) {
+        lastLoadRef.current = Date.now();
         void loadBootstrap();
       }
     };
     document.addEventListener('visibilitychange', onVisible);
     const onGps = () => {
-      lastLoad = Date.now();
+      lastLoadRef.current = Date.now();
       void loadBootstrap();
     };
     window.addEventListener('froc:gps-ready', onGps);

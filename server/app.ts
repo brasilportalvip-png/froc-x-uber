@@ -88,6 +88,13 @@ export function createApp(options: AppOptions) {
       try {
         const result = await fn(req, res);
         if (!res.headersSent) res.json(result);
+        // Tempo real: depois de qualquer ação, avisa quem participa do que mudou.
+        if (req.method !== 'GET') {
+          const actor = req.auth?.uid ?? (req as Request & { merchantUid?: string }).merchantUid;
+          void service()
+            .then((svc) => (typeof svc.notifyFrom === 'function' ? svc.notifyFrom(actor, result) : undefined))
+            .catch(() => undefined);
+        }
       } catch (error) {
         if (error instanceof AppError) return res.status(error.status).json({ error: error.message, code: error.code });
         console.error('Erro no servidor:', error);

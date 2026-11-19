@@ -444,6 +444,8 @@ export class FrocService {
   private lastSweep = 0;
   /** Próximo minuto de prazos que esta instância ainda não varreu. */
   private deadlineCursor: number | undefined;
+  /** Último aviso de cada zona por esta instância (no máximo 1 a cada 3 s por zona). */
+  private zoneSignalAt = new Map<string, number>();
   /** Motoristas online por zona (uma leitura a cada 8 s serve todos os passageiros daquela zona). */
   private onlineCache = new Map<string, { at: number; users: UserDoc[] }>();
   private riskCache: { at: number; zones: RiskZoneLike[] } = { at: 0, zones: [] };
@@ -834,6 +836,7 @@ export class FrocService {
       if (user.earnedCents === undefined) tx.update('users', user.uid, { earnedCents: this.withdrawable(user) });
       this.credit(tx, user, Number(current.amountCents), 'Recarga via Mercado Pago (Pix/cartão)', 'recarga_pix');
     });
+    this.signal([topup.uid]);
     return { status: 'approved' as const };
   }
 
@@ -1525,6 +1528,7 @@ export class FrocService {
       // Aprovar motorista/transportador = a equipe conferiu o CPF na CNH.
       ...(decision === 'approved' && kind !== 'merchant' && user.cpfStatus === 'basic' ? { cpfStatus: 'verified', cpfSource: 'documentos', cpfVerifiedAt: this.iso() } : {}),
     });
+    this.signal([user.uid]);
     await this.audit(auth, decision === 'approved' ? 'cadastro_aprovado' : 'cadastro_recusado', user.uid, { kind, reason: why, email: user.email });
     return { ok: true };
   }
@@ -1566,6 +1570,7 @@ export class FrocService {
         tx.update('users', user.uid, { earnedCents: (user.earnedCents ?? 0) + Number(w.amountCents) });
       }
     });
+    this.signal([w0.uid]);
     await this.audit(auth, d === 'paid' ? 'saque_pago' : d === 'approved' ? 'saque_liberado' : 'saque_recusado', String(id), payout ? { gateway: payout } : {});
     return { ok: true, status: d };
   }
@@ -1967,6 +1972,7 @@ export class FrocService {
     const queued = active.filter((r) => r.queued).sort((a, b) => Number(a.queuePosition || 0) - Number(b.queuePosition || 0) || String(a.acceptedAt).localeCompare(String(b.acceptedAt)));
     const hasCurrent = active.some((r) => !r.queued);
     let position = 0;
+    if (queued.length) this.signal([driverId, ...queued.map((r) => r.passengerId)]);
     for (const r of queued) {
       if (!hasCurrent && position === 0) {
         const category = RIDE_CATEGORIES.find((c) => c.id === r.categoryId);
@@ -2642,6 +2648,7 @@ export class FrocService {
   private async tripForDriver(uid: string, tripId: string) {
     const t = (await this.store.get<Doc>('carpools', tripId)) ?? fail(404, 'not_found', 'Carona não encontrada.');
     const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
+    this.signal(tripBookings.map((b) => b.passengerId));
     return this.carpoolView(t, uid, [], tripBookings);
   }
 
@@ -2730,6 +2737,7 @@ export class FrocService {
       }
       return t;
     });
+    this.signal(tripBookings.map((b) => b.passengerId));
     return this.carpoolView(trip, auth.uid, [], tripBookings);
   }
 
@@ -2976,6 +2984,46 @@ export class FrocService {
   // ------------------------------------------- H3: preço dinâmico e localização
 
   /** Multiplicador do preço na região: mais pedidos que motoristas por perto = preço sobe. */
+  // ------------------------------------------------- tempo real (avisos)
+  //
+  // O app escuta no Firebase só um número por pessoa (froc_signals/{uid}) e um por zona
+  // (froc_zone_signals/{zona}, para motorista online). Quando o número muda, o app busca os dados
+  // no servidor. Nenhum dado do app fica nesses avisos.
+
+  /** Avisa estas pessoas que algo mudou para elas. */
+  signal(uids: Iterable<unknown>) {
+    const at = Date.now();
+    const list = new Set([...uids].map((u) => String(u ?? '')).filter((u) => u && u !== 'null' && u !== 'undefined' && !u.startsWith('ia:') && /^[A-Za-z0-9_-]{1,128}$/.test(u)));
+    for (const u of list) void this.store.set('signals', u, { v: at }).catch(() => undefined);
+  }
+
+  /** Avisa os motoristas online de uma zona (pedido novo ou que voltou a procurar motorista). */
+  signalZone(zone: unknown) {
+    const z = String(zone ?? '');
+    if (!z || !/^[A-Za-z0-9:_-]{1,40}$/.test(z)) return;
+    const at = Date.now();
+    if (at - (this.zoneSignalAt.get(z) ?? 0) < 3000) return;
+    this.zoneSignalAt.set(z, at);
+    if (this.zoneSignalAt.size > 20000) this.zoneSignalAt.clear();
+    void this.store.set('zone_signals', z, { v: at }).catch(() => undefined);
+  }
+
+  /** Depois de uma ação de alguém: avisa quem participa do que mudou (e a zona, se procura motorista). */
+  notifyFrom(actorUid: string | undefined, result: unknown) {
+    const ids = new Set<unknown>([actorUid]);
+    const PARTY = ['passengerId', 'driverId', 'clientId', 'acceptedTruckerId', 'truckerId', 'reservedById', 'merchantId'];
+    const visit = (o: unknown, depth: number) => {
+      if (!o || typeof o !== 'object' || depth > 3) return;
+      if (Array.isArray(o)) return o.slice(0, 50).forEach((x) => visit(x, depth + 1));
+      const d = o as Doc;
+      for (const k of PARTY) if (typeof d[k] === 'string') ids.add(d[k]);
+      if (d.status === 'searching' && typeof d.originZone === 'string') this.signalZone(d.originZone);
+      for (const v of Object.values(d)) if (v && typeof v === 'object') visit(v, depth + 1);
+    };
+    visit(result, 0);
+    this.signal(ids);
+  }
+
   /** Chaves de busca de uma oferta/pedido intermunicipal: região de saída e cidades de origem e destino. */
   private listingKeys(origin: GeoPoint, destination: GeoPoint) {
     return { originRegion: this.geo.regionOf(origin.lat, origin.lng), originCityKey: cityKey(origin.city), destCityKey: cityKey(destination.city) };
@@ -3153,6 +3201,11 @@ export class FrocService {
       this.store.query<Doc>('rides', [['driverId', '==', user.uid]], 100),
       this.store.query<Doc>('indrive', [['driverId', '==', user.uid]], 100),
     ]);
+    // Passageiro vê o carro andando: aviso em tempo real para quem está em viagem com ele.
+    this.signal([
+      ...rides.filter((r) => ['accepted', 'arriving', 'in_progress'].includes(String(r.status))).map((r) => r.passengerId),
+      ...deals.filter((r) => r.status === 'matched').map((r) => r.passengerId),
+    ]);
     await Promise.all([
       ...rides
         .filter((r) => ['accepted', 'arriving', 'in_progress'].includes(String(r.status)))
@@ -3193,6 +3246,7 @@ export class FrocService {
       });
       if (done) {
         rides++;
+        this.signal([r.passengerId]);
         if (r.delivery) await this.deliveryEvent({ ...r, status: 'cancelled', cancelledBy: 'timeout' });
       }
       return done;
@@ -3254,6 +3308,7 @@ export class FrocService {
       });
       if (!done) return false;
       out.corridasCanceladas++;
+      this.signal([done.passengerId, done.driverId]);
       if (done.delivery) await this.deliveryEvent(done);
       if (done.driverId) await this.promoteDriverQueue(String(done.driverId)).catch(() => undefined);
       await this.audit(null, 'corrida_cancelada_sem_inicio', String(done.id), { minutos: STALE_ACCEPTED_MIN, estorno: true });
@@ -3972,7 +4027,13 @@ export class FrocService {
       byNewest(uniqueById(items)).filter(keep).slice(0, 40);
     const notOld = (i: Doc) => !['completed', 'cancelled', 'delivered'].includes(String(i.status)) || String(i.createdAt) > new Date(this.now().getTime() - 30 * 864e5).toISOString();
 
+    // Tempo real: zonas que o motorista online escuta (pedido novo perto dele).
+    const liveZones =
+      isDriver && user.driverOnline && user.driverCell && this.now().getTime() - Date.parse(String(user.locationAt || 0)) < LOCATION_FRESH_MS
+        ? zonesAround(this.geo, user.driverCell, DISPATCH_RING)
+        : [];
     return {
+      live: { zones: liveZones },
       profile: this.profileView(user, auth),
       // Entregas da loja ficam no painel da loja (não aparecem como "minha corrida").
       rides: recent(

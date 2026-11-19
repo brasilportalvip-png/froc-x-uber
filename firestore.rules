@@ -1,8 +1,21 @@
 rules_version = '2';
 // Todo acesso aos dados passa pelo servidor do Froc X Uber (que confere login e permissões).
 // O navegador não lê nem grava o banco diretamente.
+//
+// Única exceção (tempo real): o app LÊ dois tipos de aviso, que guardam só um número (a hora da
+// última mudança). Nenhum dado de corrida, pessoa ou dinheiro fica neles.
+//  - froc_signals/{uid}: cada pessoa lê só o PRÓPRIO aviso;
+//  - froc_zone_signals/{zona}: aviso de "pedido novo na região" para motorista online (logado).
+// Ninguém grava pelo navegador: só o servidor escreve.
+// (O prefixo "froc_" é o padrão de FIRESTORE_COLLECTION_PREFIX.)
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /froc_signals/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+    }
+    match /froc_zone_signals/{zone} {
+      allow read: if request.auth != null;
+    }
     match /{document=**} {
       allow read, write: if false;
     }

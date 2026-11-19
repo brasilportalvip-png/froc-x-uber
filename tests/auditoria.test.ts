@@ -8,6 +8,7 @@
  *  5. Token com "kid" inventado fazia o servidor buscar as chaves do Google a cada requisição.
  *  6. Escala Brasil inteiro: buscas por região (zonas) e prazos por minuto, nunca o país inteiro com limite.
  *  7. Vitrine (caronas, retorno vazio, fretes, viagens agendadas): perto da pessoa + busca por cidade.
+ *  8. Tempo real: avisos no Firebase (só um número), regras fechadas e índices das buscas.
  * Rodar: npm test
  */
 import { test, describe, beforeEach } from 'node:test';
@@ -261,5 +262,73 @@ describe('7. vitrine (caronas, retorno vazio, fretes, viagens agendadas) no Bras
     await store.update('carpools', t.id, { originRegion: null, originCityKey: null, destCityKey: null });
     await svc.sweep(true);
     assert.equal((await store.get('carpools', t.id))!.originCityKey, 'sao paulo');
+  });
+});
+
+describe('8. tempo real (avisos), regras e índices do Firebase', () => {
+  const PAULISTA = { lat: -23.5614, lng: -46.6559 };
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+
+  test('pedido novo avisa a zona; ação avisa quem participa (passageiro e motorista)', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    await svc.updateProfile(caio, { driverOnline: true });
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    svc.notifyFrom(ana.uid, r);
+    await tick();
+    const zone = String((await store.get('rides', r.id))!.originZone);
+    assert.ok(await store.get('zone_signals', zone), 'a zona do pedido foi avisada');
+    const accepted = await svc.rideAction(caio, r.id, { action: 'driver_accept' });
+    await store.remove('signals', ana.uid);
+    svc.notifyFrom(caio.uid, { ride: accepted });
+    await tick();
+    assert.ok(await store.get('signals', ana.uid), 'a passageira foi avisada que o motorista aceitou');
+    const doc = (await store.get('signals', ana.uid))!;
+    assert.deepEqual(Object.keys(doc), ['v'], 'o aviso guarda só um número, nenhum dado');
+  });
+
+  test('motorista andando avisa a passageira (carro se mexendo no mapa)', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    await svc.updateProfile(caio, { driverOnline: true });
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    await svc.rideAction(caio, r.id, { action: 'driver_accept' });
+    await store.remove('signals', ana.uid);
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    await tick();
+    assert.ok(await store.get('signals', ana.uid));
+  });
+
+  test('motorista online com GPS recebe as zonas para escutar; offline, nenhuma', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    assert.deepEqual((await svc.bootstrap(caio)).live?.zones, []);
+    await svc.updateProfile(caio, { driverOnline: true });
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    const zones = (await svc.bootstrap(caio)).live!.zones;
+    assert.ok(zones.length >= 1 && zones.length <= 20);
+    assert.deepEqual((await svc.bootstrap(ana)).live?.zones, []);
+  });
+
+  test('regras: só lê o próprio aviso e o aviso das zonas; o resto do banco continua fechado', async () => {
+    const { readFileSync } = await import('node:fs');
+    const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
+    assert.match(rules, /match \/froc_signals\/\{uid\}\s*\{\s*allow read: if request\.auth != null && request\.auth\.uid == uid;\s*\}/);
+    assert.match(rules, /match \/froc_zone_signals\/\{zone\}\s*\{\s*allow read: if request\.auth != null;\s*\}/);
+    assert.match(rules, /match \/\{document=\*\*\}\s*\{\s*allow read, write: if false;\s*\}/);
+    assert.equal((rules.match(/allow /g) || []).length, 3, 'nenhuma outra permissão');
+    assert.ok(!/allow[^;]*write: if (?!false)/.test(rules), 'o navegador nunca grava');
+  });
+
+  test('índices: toda busca com dois campos do servidor tem índice', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../server/services.ts', import.meta.url), 'utf8');
+    const idx = JSON.parse(readFileSync(new URL('../firestore.indexes.json', import.meta.url), 'utf8')).indexes as { collectionGroup: string; fields: { fieldPath: string }[] }[];
+    const have = new Set(idx.map((i) => `${i.collectionGroup}|${i.fields.map((f) => f.fieldPath).join(',')}`));
+    const re = /query<\w+>\((?:'(\w+)'|col),\s*\[\['(\w+)', '==', [^\]]+\],\s*\[(?:'(\w+)'|field), '=='/g;
+    const found: string[] = [];
+    for (const m of src.matchAll(re)) found.push(m[0]);
+    assert.ok(found.length >= 5, 'achou as buscas com dois campos');
+    for (const need of ['froc_rides|status,originZone', 'froc_rides|status,searchDeadline', 'froc_rides|status,startDeadline', 'froc_users|driverOnline,driverZone', 'froc_indrive|status,expireDeadline']) assert.ok(have.has(need), need);
+    for (const col of ['froc_indrive', 'froc_carpools', 'froc_emptyTrucks', 'froc_freights'])
+      for (const f of ['originRegion', 'originCityKey', 'destCityKey']) assert.ok(have.has(`${col}|status,${f}`), `${col} ${f}`);
   });
 });

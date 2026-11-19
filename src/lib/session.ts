@@ -22,16 +22,60 @@ export interface PublicConfig {
   firebase: Record<string, string> | null;
   mapsApiKey: string;
   paymentsEnabled: boolean;
+  /** Onde ficam os avisos de tempo real (prefixo das coleções e banco). */
+  firestore?: { prefix: string; databaseId: string };
 }
 
 let auth: Auth | null = null;
+let firebaseApp: ReturnType<typeof initializeApp> | null = null;
+let firestoreCfg: { prefix: string; databaseId: string } = { prefix: 'froc_', databaseId: '' };
 
 export async function loadPublicConfig(): Promise<PublicConfig> {
   const res = await fetch('/api/public-config');
   if (!res.ok) throw new Error('Não foi possível carregar a configuração do app.');
   const cfg = (await res.json()) as PublicConfig;
-  if (cfg.firebase && !auth) auth = getAuth(initializeApp(cfg.firebase));
+  if (cfg.firebase && !auth) {
+    firebaseApp = initializeApp(cfg.firebase);
+    auth = getAuth(firebaseApp);
+  }
+  if (cfg.firestore) firestoreCfg = { prefix: String(cfg.firestore.prefix ?? 'froc_'), databaseId: String(cfg.firestore.databaseId || '') };
   return cfg;
+}
+
+/**
+ * Tempo real: escuta os avisos da pessoa (e das zonas, para motorista online) no Firebase.
+ * Cada aviso é só um número; quando muda, onChange é chamado e o app busca os dados no servidor.
+ * onStatus(false) = não deu para escutar (regras não publicadas, rede): o app volta a atualizar sozinho.
+ */
+export async function watchSignals(uid: string, zones: string[], onChange: (kind: 'me' | 'zone') => void, onStatus: (ok: boolean) => void): Promise<() => void> {
+  if (!firebaseApp) {
+    onStatus(false);
+    return () => undefined;
+  }
+  try {
+    const { getFirestore, doc, onSnapshot } = await import('firebase/firestore');
+    const db = firestoreCfg.databaseId ? getFirestore(firebaseApp, firestoreCfg.databaseId) : getFirestore(firebaseApp);
+    const paths: [string, 'me' | 'zone'][] = [[`${firestoreCfg.prefix}signals/${uid}`, 'me'], ...zones.slice(0, 20).map((z): [string, 'zone'] => [`${firestoreCfg.prefix}zone_signals/${z}`, 'zone'])];
+    const stops = paths.map(([path, kind]) => {
+      let first = true;
+      return onSnapshot(
+        doc(db, path),
+        () => {
+          onStatus(true);
+          if (first) {
+            first = false; // a primeira leitura é o estado atual, não uma mudança
+            return;
+          }
+          onChange(kind);
+        },
+        () => onStatus(false),
+      );
+    });
+    return () => stops.forEach((stop) => stop());
+  } catch {
+    onStatus(false);
+    return () => undefined;
+  }
 }
 
 function requireAuth(): Auth {
