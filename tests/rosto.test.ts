@@ -243,6 +243,29 @@ describe('verificação a cada 2h com o motorista trabalhando', () => {
   });
 });
 
+describe('motorista que já era aprovado antes do reconhecimento facial', () => {
+  async function antigo(cnhDe = 'caio') {
+    await enviarDocs(caio, cnhDe);
+    await store.update('users', caio.uid, { driverStatus: 'approved', driverVehicle: 'Onix', driverPlate: 'ABC1D23' });
+  }
+  test('faz o reconhecimento na Conta e já pode ficar online', async () => {
+    await antigo();
+    await erro(svc.updateProfile(caio, { driverOnline: true }), 'face_enroll_required');
+    await svc.enrollFace(caio, 'image/jpeg', foto('caio').dataBase64, true);
+    await svc.updateProfile(caio, { driverOnline: true });
+    assert.equal((await perfil(caio)).driverOnline, true);
+  });
+  test('rosto diferente da CNH: fica bloqueado até a equipe conferir', async () => {
+    await antigo('outro-homem');
+    await svc.enrollFace(caio, 'image/jpeg', foto('caio').dataBase64, true);
+    await erro(svc.updateProfile(caio, { driverOnline: true }), 'face_blocked');
+    const fila = await svc.listFaceReviews(admin);
+    assert.equal(fila[0].result, 'cadastro_nao_confere');
+    await svc.resolveFaceReview(admin, fila[0].id, 'liberar');
+    await svc.updateProfile(caio, { driverOnline: true });
+  });
+});
+
 describe('quem pode ver a foto de perfil', () => {
   test('a própria pessoa, a equipe e quem tem viagem com ela', async () => {
     await motoristaPronto();

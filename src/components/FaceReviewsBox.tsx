@@ -16,6 +16,7 @@ const RESULT: Record<string, string> = {
   bloqueado: 'Rosto não confere — motorista ficou offline',
   revisao: '3 selfies sem confirmar — motorista ficou offline',
   sem_ia: 'IA fora do ar — liberado, confira a selfie',
+  cadastro_nao_confere: 'Motorista antigo: reconhecimento facial não confere com a CNH (à esquerda, a CNH)',
 };
 
 function Img({ path, alt }: { path: string; alt: string }) {
