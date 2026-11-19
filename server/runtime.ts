@@ -22,6 +22,7 @@ import { createGoogleGeocoder } from './geocode.ts';
 import { createSerproVerifier } from './identity.ts';
 import { createCnpjLookup } from './merchants.ts';
 import { createOpenMeteoRain } from './weather.ts';
+import { createGeminiFaces } from './faceCheck.ts';
 
 /** Endereço público do site (links de volta do Mercado Pago). Na Vercel, usa o domínio de produção. */
 export function publicSiteUrl() {
@@ -95,6 +96,8 @@ export function getService() {
         identity: { required: process.env.CPF_OBRIGATORIO !== 'nao', verify: createSerproVerifier(process.env) },
         cnpjLookup: createCnpjLookup(),
         rain: createOpenMeteoRain(),
+        // Foto obrigatória e reconhecimento facial do motorista. FOTO_OBRIGATORIA=nao desliga (só emergência).
+        faces: { required: process.env.FOTO_OBRIGATORIA !== 'nao', checker: createGeminiFaces(getLlm()) },
         files: fb.files,
         adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
         payments: createMercadoPago({ accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN, publicUrl }),

@@ -245,6 +245,12 @@ export class IdentityReviewer {
     } catch (e) {
       return wait(`A IA não conseguiu ler agora (${String((e as Error)?.message || e).slice(0, 120)}).`);
     }
+    // Reconhecimento facial × foto da CNH: rosto de outra pessoa nunca é aprovado sozinho;
+    // dúvida ou IA fora do ar na hora da selfie → a equipe confere as fotos.
+    if (kind === 'driver' && user.faceRefPath) {
+      if (user.faceCnhMatch === 'nao_confere') reasons.push('O rosto do reconhecimento facial não confere com a foto da CNH. Refaça o reconhecimento facial você mesmo, de frente e num lugar iluminado.');
+      else if (user.faceCnhMatch !== 'confere' && reasons.length === 0) return wait('Rosto × CNH em dúvida: a equipe confere as fotos antes de aprovar.');
+    }
     result.ok = reasons.length === 0;
     result.decision = result.ok ? 'aprovar' : 'recusar';
     await this.store.update('users', uid, { aiProviderCheck: JSON.parse(JSON.stringify(result)) });

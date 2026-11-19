@@ -159,6 +159,22 @@ describe('IA confere o CPF pelo documento', () => {
     });
   }
 
+  test('rosto do reconhecimento facial diferente da CNH: a IA nunca aprova sozinha', async () => {
+    await caioPending();
+    await store.update('users', caio.uid, { faceRefPath: 'rosto.jpg', faceCnhMatch: 'nao_confere' });
+    const r = await reviewer.reviewProvider(caio.uid, 'driver');
+    assert.equal(r.decision, 'recusar');
+    assert.match((await svc.bootstrap(caio)).profile.rejectionReason || '', /rosto/);
+  });
+
+  test('rosto × CNH em dúvida: a equipe confere antes (não aprova sozinho)', async () => {
+    await caioPending();
+    await store.update('users', caio.uid, { faceRefPath: 'rosto.jpg', faceCnhMatch: 'duvida' });
+    const r = await reviewer.reviewProvider(caio.uid, 'driver');
+    assert.equal(r.decision, 'aguardar');
+    assert.equal((await svc.bootstrap(caio)).profile.driverStatus, 'pending');
+  });
+
   test('autonomia desligada: a decisão fica preparada para o dono', async () => {
     await svc.updateSettings(admin, { agentAutonomy: false });
     await caioPending();

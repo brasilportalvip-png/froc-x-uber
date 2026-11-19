@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { formatBRL } from '../data/locations.ts';
 import { api } from '../lib/session.ts';
+import { FaceReviewsBox } from './FaceReviewsBox.tsx';
 import { AiTeamPanel, AuditPanel, BlogAdminPanel, ProposalsBox, SupportAdminPanel } from './AdminAiPanels.tsx';
 import type { AdminOverview, AdminReport, AdminUserRow, PlatformSettingsView } from '../types/mobility.ts';
 
@@ -133,6 +134,7 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
 
       {tab === 'pendencias' && (
         <>
+          <FaceReviewsBox onToast={onToast} />
           <div className="text-slate-500">Usuários cadastrados: {data.totals.users}</div>
           <h4 className="text-sm font-bold text-slate-900 dark:text-white">Cadastros aguardando análise</h4>
           {data.applications.length === 0 && <div className="text-slate-500">Nenhum cadastro pendente.</div>}
@@ -180,6 +182,12 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
                       </div>
                     )}
                     {app.cnhExpiry && <div>CNH válida até {app.cnhExpiry.split('-').reverse().join('/')} · confira a observação EAR na foto da CNH</div>}
+                    {app.faceCnhMatch && (
+                      <div className={app.faceCnhMatch === 'confere' ? 'text-emerald-600' : 'text-amber-600'}>
+                        Rosto × CNH:{' '}
+                        {({ confere: 'confere', nao_confere: 'NÃO confere — confira antes de aprovar', duvida: 'em dúvida — confira as fotos', nao_conferido: 'não conferido (IA fora do ar)', sem_reconhecimento: 'sem reconhecimento facial' } as Record<string, string>)[app.faceCnhMatch] || app.faceCnhMatch}
+                      </div>
+                    )}
                     {app.aiDocCheck && (
                       <div className={app.aiDocCheck.ok ? 'text-emerald-600' : 'text-amber-600'}>
                         🤖 IA leu a CNH:{' '}

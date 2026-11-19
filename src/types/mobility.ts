@@ -349,6 +349,15 @@ export interface MyWithdrawalView {
 }
 
 export interface UserProfile {
+  /** Foto de perfil obrigatória (identificação) e reconhecimento facial do motorista. */
+  photoRequired?: boolean;
+  hasPhoto?: boolean;
+  photoAt?: string;
+  faceEnrolled?: boolean;
+  /** Motorista: hora da selfie de segurança (a cada 2h online). */
+  faceCheckDue?: boolean;
+  faceCheckDueAt?: string;
+  faceBlocked?: boolean;
   uid: string;
   email: string;
   emailVerified: boolean;
@@ -439,6 +448,8 @@ export interface DriverApplicationView {
   cpf?: string;
   /** O que a IA leu na CNH: resultado, EAR e validade. */
   aiDocCheck?: { ok: boolean; status: string; reasons: string[]; ear?: boolean | null; validade?: string; checkedAt: string } | null;
+  /** Motorista: reconhecimento facial × foto da CNH. */
+  faceCnhMatch?: string;
   legalName?: string;
   cpfStatus?: string;
   plate: string;

@@ -76,6 +76,8 @@ export function createApp(options: AppOptions) {
     next();
   });
   app.use('/api/driver/documents', express.json({ limit: '5mb' }));
+  // Fotos de perfil e selfies (já reduzidas no celular; até 3 MB).
+  for (const path of ['/api/me/photo', '/api/me/face-enroll', '/api/me/face-check']) app.use(path, express.json({ limit: '5mb' }));
   app.use(express.json({ limit: '200kb' }));
 
   const service = async () => (typeof options.service === 'function' ? options.service() : options.service);
@@ -423,6 +425,27 @@ export function createApp(options: AppOptions) {
     guard('docs', 40, 864e5, 'Muitos envios de documentos hoje. Tente amanhã.'),
     wrap(async (req) => (await service()).uploadDocument(a(req), req.body?.kind, req.body?.docType, req.body?.contentType, req.body?.dataBase64)),
   );
+  // Fotos e reconhecimento facial.
+  api.post('/me/photo', rateLimit(10, 60_000), guard('photo', 30, 864e5, 'Muitas fotos enviadas hoje. Tente amanhã.'), wrap(async (req) => (await service()).uploadProfilePhoto(a(req), req.body?.contentType, req.body?.dataBase64)));
+  api.post('/me/face-enroll', rateLimit(10, 60_000), guard('face', 30, 864e5, 'Muitas tentativas hoje. Tente amanhã.'), wrap(async (req) => (await service()).enrollFace(a(req), req.body?.contentType, req.body?.dataBase64, req.body?.consent)));
+  api.post('/me/face-check', rateLimit(10, 60_000), guard('facecheck', 60, 864e5, 'Muitas tentativas hoje. Fale com o Atendimento.'), wrap(async (req) => (await service()).submitFaceCheck(a(req), req.body?.contentType, req.body?.dataBase64)));
+  api.get(
+    '/photos/:uid',
+    wrap(async (req, res) => {
+      const img = await (await service()).profilePhoto(a(req), String(req.params.uid));
+      res.set('Content-Type', img.contentType).set('Cache-Control', 'private, max-age=600').send(Buffer.from(img.bytes));
+    }),
+  );
+  api.get('/admin/face-reviews', wrap(async (req) => ({ reviews: await (await service()).listFaceReviews(a(req)) })));
+  api.get(
+    '/admin/face-reviews/:id/:which',
+    wrap(async (req, res) => {
+      const img = await (await service()).faceReviewImage(a(req), String(req.params.id), req.params.which === 'selfie' ? 'selfie' : 'referencia');
+      res.set('Content-Type', img.contentType).set('Cache-Control', 'private, no-store').send(Buffer.from(img.bytes));
+    }),
+  );
+  api.post('/admin/face-reviews/:id', wrap(async (req) => (await service()).resolveFaceReview(a(req), id(req), req.body?.decision)));
+
   api.post(
     '/driver/apply',
     limited,
