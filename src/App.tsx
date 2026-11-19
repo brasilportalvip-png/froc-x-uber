@@ -22,6 +22,8 @@ import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
 import { IdentityDocUpload, IdentityGate } from './components/IdentityGate.tsx';
 import { FaceCheckModal, FaceEnrollModal, PhotoGate } from './components/FaceGates.tsx';
 import { alertUser, askNotificationPermission } from './lib/alerts.ts';
+import { FlashPopup, RideCallPopup } from './components/RideFlowUI.tsx';
+import { currentDriving, drivingRides, liveTarget, nextCall, shouldAutoArrive } from './lib/rideFlow.ts';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
@@ -226,15 +228,42 @@ export default function App() {
     void api('/api/device', { body: {} }).catch(() => undefined);
   }, [user]);
 
+  // Atualização rápida só quando algo está acontecendo (economiza CPU do servidor).
+  const pollFast = useRef(false);
+  pollFast.current = Boolean(
+    state &&
+      (state.profile.driverOnline ||
+        state.rides.some((r) => Boolean(r.mine) && ['searching', 'accepted', 'arriving', 'in_progress'].includes(r.status)) ||
+        state.indriveRequests.some((r) => Boolean(r.mine) && (r.status === 'matched' || r.status === 'open')) ||
+        (state.deliveries ?? []).some((d) => !['entregue', 'cancelada'].includes(d.status))),
+  );
+
   // 2) Dados da pessoa logada + atualização automática (motoristas, propostas, lances)
   useEffect(() => {
     if (!user) return;
     setLoading(true);
     void loadBootstrap();
+    // Economia de servidor: rápido (6 s) só com corrida/negociação ativa ou motorista online;
+    // parado, a cada 60 s; com o app escondido, nada. Ao voltar para o app, atualiza na hora.
+    let lastLoad = Date.now();
     const timer = setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine) void loadBootstrap();
-    }, 6000);
-    return () => clearInterval(timer);
+      if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+      const every = pollFast.current ? 6_000 : 60_000;
+      if (Date.now() - lastLoad < every - 500) return;
+      lastLoad = Date.now();
+      void loadBootstrap();
+    }, 2000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastLoad > 3000) {
+        lastLoad = Date.now();
+        void loadBootstrap();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [user, loadBootstrap]);
 
   // 3) Volta do Mercado Pago (?recarga=ID): confere e credita assim que aprovado
@@ -275,12 +304,19 @@ export default function App() {
       state?.indriveRequests.some((r) => r.mine === 'provider' && r.status === 'matched'),
   );
   const locationEveryMs = useRef(10_000);
+  // Posição do próprio motorista na tela (mapa, distância até o passageiro, "cheguei" automático).
+  const [myPos, setMyPos] = useState<{ lat: number; lng: number; heading?: number } | null>(null);
+  const lastShown = useRef(0);
   locationEveryMs.current = providerOnTrip ? 4_000 : 10_000;
   useEffect(() => {
     if (!isOnlineProvider || !navigator.geolocation) return;
     let last = 0;
     const id = navigator.geolocation.watchPosition(
       (pos) => {
+        if (Date.now() - lastShown.current > 3000) {
+          lastShown.current = Date.now();
+          setMyPos({ lat: pos.coords.latitude, lng: pos.coords.longitude, heading: pos.coords.heading ?? undefined });
+        }
         if (Date.now() - last < locationEveryMs.current) return;
         last = Date.now();
         void api('/api/driver/location', { body: { lat: pos.coords.latitude, lng: pos.coords.longitude } }).catch(() => undefined);
@@ -288,7 +324,10 @@ export default function App() {
       () => showToast('Ative a localização do celular para receber corridas perto de você.'),
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
     );
-    return () => navigator.geolocation.clearWatch(id);
+    return () => {
+      navigator.geolocation.clearWatch(id);
+      setMyPos(null);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnlineProvider]);
 
@@ -433,16 +472,84 @@ export default function App() {
         ? profile.truckerStatus === 'approved'
         : true;
 
-  const activeRide = state?.rides.find((r) => r.mine && r.status !== 'completed' && r.status !== 'cancelled');
+  const activeRide =
+    state?.rides.find((r) => r.mine && !r.queued && r.status !== 'completed' && r.status !== 'cancelled') ??
+    state?.rides.find((r) => r.mine && r.status !== 'completed' && r.status !== 'cancelled');
   const matchedDeal = state?.indriveRequests.find((r) => r.mine === 'owner' && r.status === 'matched');
   useEffect(() => {
     busyRef.current = Boolean(activeRide || matchedDeal);
   }, [activeRide, matchedDeal]);
   // Passageiro vê o carro do motorista andando (posição enviada pelo celular do motorista).
   const liveDriverPoint =
-    (activeRide?.mine === 'owner' && activeRide.driverLocation) || matchedDeal?.driverLocation || null;
+    (activeRide?.mine === 'owner' && !activeRide.queued && activeRide.driverLocation) ||
+    (activeRide?.mine === 'provider' && !activeRide.queued && myPos) ||
+    matchedDeal?.driverLocation ||
+    null;
+  // Rota ao vivo: do carro até o passageiro (antes de iniciar) ou até o destino (em viagem). Os dois veem.
+  const liveTo = activeRide && activeRide.status !== 'searching' ? liveTarget(activeRide) : null;
+  const liveRoute = liveTo && liveDriverPoint ? { from: { lat: liveDriverPoint.lat, lng: liveDriverPoint.lng }, to: liveTo, follow: activeRide?.mine === 'provider' } : null;
+  const [liveEta, setLiveEta] = useState<{ km: number; min: number } | null>(null);
+  useEffect(() => {
+    if (!liveRoute) setLiveEta(null);
+  }, [Boolean(liveRoute)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mapOrigin = activeRide && activeRide.status !== 'searching' ? activeRide.origin : origin;
+  const mapDestination = activeRide && activeRide.status !== 'searching' ? activeRide.destination : destination;
+
+  // Janelas rápidas (somem em 3 s, com X).
+  const [flash, setFlash] = useState<{ title: string; body?: string; tone?: 'ok' | 'info' | 'warn' } | null>(null);
+  const closeFlash = useCallback(() => setFlash(null), []);
+
+  // Chamada tocando para o motorista online (até 3 corridas: a atual + 2 na fila).
+  const seenCalls = useRef<Set<string>>(new Set());
+  const [, setCallTick] = useState(0);
+  const isDriverOnline = Boolean(state?.profile.driverOnline && state.profile.driverStatus === 'approved' && role === 'driver');
+  const call = isDriverOnline && state ? nextCall(state.rides, seenCalls.current) : null;
+  const dismissCall = (id: string) => {
+    seenCalls.current.add(id);
+    setCallTick((n) => n + 1);
+  };
+  const acceptCall = async (ride: NonNullable<typeof call>) => {
+    dismissCall(ride.id);
+    const busy = state ? drivingRides(state.rides).length : 0;
+    try {
+      await api(`/api/rides/${ride.id}`, { method: 'PATCH', body: { action: 'driver_accept' } });
+      setFlash(
+        busy
+          ? { title: 'Corrida na sua fila', body: 'Ela começa sozinha quando você terminar a atual.', tone: 'ok' }
+          : { title: 'Corrida aceita!', body: 'Vá até o passageiro. Use o botão Navegar para ir com voz.', tone: 'ok' },
+      );
+    } catch (err) {
+      setFlash({ title: 'Não deu para aceitar', body: err instanceof Error ? err.message : undefined, tone: 'warn' });
+    } finally {
+      await loadBootstrap();
+    }
+  };
+
+  // "Cheguei" automático quando o motorista entra no raio do embarque.
+  const arriveSent = useRef<Set<string>>(new Set());
+  const myCurrent = state ? currentDriving(state.rides) : null;
+  useEffect(() => {
+    if (!myPos || !shouldAutoArrive(myCurrent, myPos, arriveSent.current)) return;
+    const ride = myCurrent!;
+    arriveSent.current.add(ride.id);
+    void (async () => {
+      try {
+        // Manda a posição antes: o servidor confere a distância com o GPS mais recente.
+        await api('/api/driver/location', { body: { lat: myPos.lat, lng: myPos.lng } });
+        await api(`/api/rides/${ride.id}`, { method: 'PATCH', body: { action: 'arriving' } });
+        alertUser('Você chegou ao embarque', 'Peça o PIN ao passageiro.', { beeps: 2 });
+        setFlash({ title: 'Você chegou! Passageiro avisado.', body: 'Peça o PIN de 4 números para iniciar.', tone: 'ok' });
+      } catch {
+        arriveSent.current.delete(ride.id); // tenta de novo no próximo movimento
+      } finally {
+        await loadBootstrap();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myPos, myCurrent?.id, myCurrent?.status]);
+
   // Avisos com som/vibração: nova corrida para o motorista, motorista aceitou, nova mensagem.
-  const lastSeen = useRef<{ queue: Set<string>; status: Record<string, string>; msgs: Record<string, number> } | null>(null);
+  const lastSeen = useRef<{ queue: Set<string>; status: Record<string, string>; msgs: Record<string, number>; queued: Set<string> } | null>(null);
   useEffect(() => {
     if (!state) return;
     const queue = new Set(
@@ -454,13 +561,26 @@ export default function App() {
       status[r.id] = r.status;
       msgs[r.id] = r.messages.filter((m) => m.sender !== (r.mine === 'owner' ? 'passenger' : 'driver')).length;
     }
+    const queued = new Set(state.rides.filter((x) => x.mine === 'provider' && x.queued).map((x) => x.id));
     const prev = lastSeen.current;
-    lastSeen.current = { queue, status, msgs };
+    lastSeen.current = { queue, status, msgs, queued };
     if (!prev) return;
-    if (state.profile.driverOnline && [...queue].some((id) => !prev.queue.has(id))) alertUser('Nova corrida perto de você', 'Abra a Froc para aceitar.', { beeps: 3 });
+    const fresh = [...queue].filter((id) => !prev.queue.has(id));
+    const freshDeal = fresh.some((id) => state.indriveRequests.some((r) => r.id === id));
+    if (state.profile.driverOnline && fresh.length && (freshDeal || document.visibilityState !== 'visible'))
+      alertUser('Nova corrida perto de você', 'Abra a Froc para aceitar.', { beeps: 3 });
+    // Corrida da fila virou a atual: avisa o motorista.
+    for (const r of state.rides.filter((x) => x.mine === 'provider' && !x.queued && x.status === 'accepted')) {
+      if (prev.queued.has(r.id)) setFlash({ title: 'Próxima corrida começou', body: `Vá buscar ${r.passengerName}.`, tone: 'ok' });
+    }
     for (const r of state.rides.filter((x) => x.mine === 'owner')) {
       if (prev.status[r.id] === 'searching' && r.status === 'accepted') alertUser('Motorista a caminho!', `${r.driverName || 'Seu motorista'} aceitou a corrida.`);
-      if (prev.status[r.id] && prev.status[r.id] !== 'arriving' && r.status === 'arriving') alertUser('Seu motorista chegou', 'O 1º minuto de espera é grátis.', { vibrate: [500, 150, 500, 150, 500], beeps: 3 });
+      if (prev.status[r.id] && prev.status[r.id] !== 'arriving' && r.status === 'arriving') {
+        alertUser('Seu motorista chegou', 'O 1º minuto de espera é grátis.', { vibrate: [500, 150, 500, 150, 500], beeps: 3 });
+        setFlash({ title: 'Seu motorista chegou!', body: `Informe o PIN ${r.pinCode} ao motorista.`, tone: 'ok' });
+      }
+      if (prev.status[r.id] === 'searching' && r.status === 'accepted')
+        setFlash({ title: 'Motorista a caminho!', body: `${r.driverName || 'Seu motorista'} · ${r.vehicleModel || ''} ${r.vehiclePlate || ''}`.trim(), tone: 'ok' });
     }
     for (const id of Object.keys(msgs)) if (prev.msgs[id] !== undefined && msgs[id] > prev.msgs[id]) alertUser('Nova mensagem na corrida', 'Abra a Froc para ler.', { beeps: 1, vibrate: [150] });
   }, [state]);
@@ -469,10 +589,12 @@ export default function App() {
     activeRide?.categoryId === 'froc_moto' || (activeRide?.categoryId === 'froc_delivery' && activeRide.delivery?.vehicle === 'moto') ? 'moto' : 'carro';
   const activeStatusLabel = activeRide
     ? activeRide.status === 'in_progress'
-      ? 'Em viagem'
+      ? `Em viagem${liveEta ? ` · chega ao destino em ${liveEta.min} min` : ''}`
       : activeRide.status === 'searching'
         ? 'Procurando motorista'
-        : `Chega em ${activeRide.etaMin ?? 3} min`
+        : activeRide.queued
+          ? `Motorista termina outra corrida · ~${activeRide.etaMin ?? 5} min`
+          : `Chega em ${liveEta?.min ?? activeRide.etaMin ?? 3} min`
     : undefined;
 
   const useGoogleMaps = Boolean(mapsApiKey) && isOnline;
@@ -496,7 +618,7 @@ export default function App() {
         .catch(() => undefined);
     };
     load();
-    const timer = setInterval(load, 6000);
+    const timer = setInterval(load, 15000);
     return () => {
       alive = false;
       clearInterval(timer);
@@ -505,6 +627,18 @@ export default function App() {
 
   const appShell = (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-transparent text-slate-900 dark:text-slate-100">
+      {flash && <FlashPopup key={flash.title} title={flash.title} body={flash.body} tone={flash.tone} onClose={closeFlash} />}
+      {call && state && (
+        <RideCallPopup
+          key={call.id}
+          ride={call}
+          seconds={state.profile.rideCallSeconds ?? 3}
+          myPos={myPos}
+          queuedNote={drivingRides(state.rides).length ? `Entra na sua fila (${drivingRides(state.rides).length + 1}ª corrida): começa quando terminar a atual.` : undefined}
+          onAccept={() => void acceptCall(call)}
+          onIgnore={() => dismissCall(call.id)}
+        />
+      )}
       {/* Strict 3-Zone Top Bar Contract */}
       <header className="sticky top-0 z-30 h-14 lg:h-16 px-4 lg:px-6 bg-white/95 dark:bg-[#050505]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 lg:gap-8">
         <a
@@ -586,8 +720,10 @@ export default function App() {
           {useGoogleMaps ? (
             <GoogleMapsView
               activeModule={activeModule}
-              origin={origin}
-              destination={destination}
+              origin={mapOrigin}
+              destination={mapDestination}
+              liveRoute={liveRoute}
+              onLiveEta={(km, min) => setLiveEta({ km, min })}
               isDark={isDark}
               activeTripStatus={activeStatusLabel}
               driverPoint={liveDriverPoint}
@@ -603,8 +739,8 @@ export default function App() {
           ) : (
             <InteractiveMap
               activeModule={activeModule}
-              origin={origin}
-              destination={destination}
+              origin={mapOrigin}
+              destination={mapDestination}
               isDark={isDark}
               activeTripStatus={activeStatusLabel}
               driverPoint={liveDriverPoint}
@@ -769,6 +905,9 @@ export default function App() {
                     }}
                     onCreateRide={handleCreateRide}
                     onRideAction={handleRideAction}
+                    myPos={myPos}
+                    liveEta={liveEta}
+                    onFlash={setFlash}
                     onSetOnline={handleSetOnline}
                     onNeedTopUp={() => {
                       setActiveModule('wallet');

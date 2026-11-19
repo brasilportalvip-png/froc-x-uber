@@ -276,6 +276,11 @@ describe('quem pode ver a foto de perfil', () => {
     await store.update('users', ana.uid, { balanceCents: 10000 });
     await svc.updateProfile(caio, { driverOnline: true });
     const ride = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    // Chamada tocando: o motorista online vê a foto de quem está pedindo; offline, não.
+    assert.equal(Buffer.from((await svc.profilePhoto(caio, ana.uid)).bytes).toString(), 'ana', 'motorista online vê quem chama');
+    await store.update('users', caio.uid, { driverOnline: false });
+    await erro(svc.profilePhoto(caio, ana.uid), 'forbidden');
+    await store.update('users', caio.uid, { driverOnline: true });
     await svc.rideAction(caio, ride.id, { action: 'driver_accept' });
     assert.equal(Buffer.from((await svc.profilePhoto(ana, caio.uid)).bytes).toString(), 'caio', 'passageira vê a foto do motorista');
     assert.equal(Buffer.from((await svc.profilePhoto(caio, ana.uid)).bytes).toString(), 'ana');

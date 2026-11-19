@@ -4,6 +4,7 @@ import { AdvancedMarker, Map as GoogleMap, Pin, useMap, useMapsLibrary } from '@
 import { LocateFixed, Navigation } from 'lucide-react';
 import type { AppModule, GeoPoint, NearbyDriver } from '../types/mobility.ts';
 import { AnimatedVehicleMarker } from './VehicleMarker.tsx';
+import { needsReroute } from '../lib/rideFlow.ts';
 
 interface GoogleMapsViewProps {
   activeModule: AppModule;
@@ -19,7 +20,79 @@ interface GoogleMapsViewProps {
   driverKind?: 'carro' | 'moto';
   /** Motoristas online por perto (antes de pedir), como no Uber. */
   nearbyDrivers?: NearbyDriver[];
+  /** Rota ao vivo do carro até o passageiro ou o destino; `follow` = o mapa acompanha o carro (motorista). */
+  liveRoute?: { from: { lat: number; lng: number }; to: { lat: number; lng: number }; follow?: boolean } | null;
+  onLiveEta?: (km: number, min: number) => void;
 }
+
+type Pt = { lat: number; lng: number };
+type RouteApi = {
+  computeRoutes: (req: object) => Promise<{
+    routes?: Array<{ distanceMeters?: number; durationMillis?: number; createPolylines: () => google.maps.Polyline[] }>;
+  }>;
+};
+
+/**
+ * Rota ao vivo (azul, por cima da rota da viagem): recalcula só quando o carro anda ~150 m,
+ * para não gastar chamadas. Devolve km e minutos restantes (ETA real).
+ */
+const LiveRouteLayer: React.FC<{ from: Pt; to: Pt; follow?: boolean; onEta?: (km: number, min: number) => void }> = ({ from, to, follow, onEta }) => {
+  const map = useMap();
+  const routesLib = useMapsLibrary('routes');
+  const lines = useRef<google.maps.Polyline[]>([]);
+  const last = useRef<{ from: Pt; to: Pt; at: number } | null>(null);
+  const framed = useRef(false);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    if (!map) return;
+    if (follow) {
+      map.panTo(from);
+      if (!framed.current) {
+        framed.current = true;
+        map.setZoom(16);
+      }
+    } else if (!framed.current) {
+      framed.current = true;
+      const b = new google.maps.LatLngBounds();
+      b.extend(from);
+      b.extend(to);
+      map.fitBounds(b, 80);
+    }
+    if (!routesLib || !needsReroute(last.current, from, to, Date.now())) return;
+    last.current = { from, to, at: Date.now() };
+    const Route = (routesLib as unknown as { Route?: RouteApi }).Route;
+    if (!Route?.computeRoutes) return;
+    Route.computeRoutes({ origin: from, destination: to, travelMode: 'DRIVING', fields: ['path', 'distanceMeters', 'durationMillis'] })
+      .then(({ routes }) => {
+        if (!alive.current || !routes?.length) return;
+        lines.current.forEach((p) => p.setMap(null));
+        const made = routes[0].createPolylines();
+        made.forEach((p) => {
+          p.setOptions({ strokeColor: '#2563EB', strokeWeight: 7, strokeOpacity: 0.95, zIndex: 50 });
+          p.setMap(map);
+        });
+        lines.current = made;
+        const r = routes[0];
+        if (r.distanceMeters !== undefined && r.durationMillis !== undefined)
+          onEta?.(Math.round((r.distanceMeters / 1000) * 10) / 10, Math.max(1, Math.round(r.durationMillis / 60000)));
+      })
+      .catch(() => {
+        last.current = null; // tenta de novo no próximo movimento
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, routesLib, from.lat, from.lng, to.lat, to.lng, follow]);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      lines.current.forEach((p) => p.setMap(null));
+      lines.current = [];
+    };
+  }, []);
+  return null;
+};
 
 const RouteLayer: React.FC<{
   origin: GeoPoint;
@@ -27,7 +100,9 @@ const RouteLayer: React.FC<{
   activeModule: AppModule;
   onRouteTelemetry?: (distanceKm: number, durationMin: number) => void;
   onRouteError?: (msg: string | null) => void;
-}> = ({ origin, destination, activeModule, onRouteTelemetry, onRouteError }) => {
+  /** Com rota ao vivo, quem enquadra o mapa é ela. */
+  keepView?: boolean;
+}> = ({ origin, destination, activeModule, onRouteTelemetry, onRouteError, keepView }) => {
   const map = useMap();
   const routesLib = useMapsLibrary('routes');
   const polylinesRef = useRef<google.maps.Polyline[]>([]);
@@ -96,7 +171,7 @@ const RouteLayer: React.FC<{
         });
         polylinesRef.current = created;
 
-        if (primaryRoute.viewport) {
+        if (primaryRoute.viewport && !keepView) {
           map.fitBounds(primaryRoute.viewport, 64);
         }
 
@@ -133,6 +208,8 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
   driverPoint,
   driverKind = 'carro',
   nearbyDrivers = [] as NearbyDriver[],
+  liveRoute,
+  onLiveEta,
 }) => {
   const map = useMap();
   const [pickTarget, setPickTarget] = useState<'origin' | 'destination' | null>(null);
@@ -198,6 +275,7 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
           activeModule={activeModule}
           onRouteTelemetry={onRouteTelemetry}
           onRouteError={setRouteError}
+          keepView={Boolean(liveRoute)}
         />
 
         {!isOriginPending(origin) && (
@@ -223,6 +301,8 @@ export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
               title={d.kind === 'moto' ? 'Moto disponível por perto' : d.kind === 'carga' ? 'Veículo de carga por perto' : 'Motorista disponível por perto'}
             />
           ))}
+
+        {liveRoute && <LiveRouteLayer key={`${liveRoute.to.lat},${liveRoute.to.lng}`} from={liveRoute.from} to={liveRoute.to} follow={liveRoute.follow} onEta={onLiveEta} />}
 
         {driverPoint && (
           <AnimatedVehicleMarker

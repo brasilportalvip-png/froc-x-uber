@@ -97,6 +97,7 @@ export const RidePolicyModal: React.FC<{ onAccept: () => void; onClose: () => vo
 /** Quanto custa cancelar AGORA e até quando vale o valor atual (mesma conta do servidor). */
 export function cancelQuote(ride: RideOrder, now: number) {
   if (!ride.driverName || ride.status === 'searching') return { percent: 0, fee: 0, untilSec: null as number | null, reason: 'Nenhum motorista aceitou ainda: cancelar é grátis.' };
+  if (ride.queued) return { percent: 0, fee: 0, untilSec: null as number | null, reason: 'Seu motorista termina outra corrida antes: cancelar é grátis enquanto espera.' };
   if (ride.status === 'arriving') return { percent: 100, fee: ride.price, untilSec: null, reason: 'O motorista já está no embarque: ele recebe 100%.' };
   const elapsed = since(ride.acceptedAt, now);
   if (elapsed > ((ride.etaMin || 5) + LATE_GRACE_MIN) * 60) return { percent: 0, fee: 0, untilSec: null, reason: 'O motorista está muito atrasado: cancelar é grátis.' };

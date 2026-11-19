@@ -57,3 +57,59 @@ export function alertUser(title: string, body: string, options: { vibrate?: numb
     /* notificação indisponível */
   }
 }
+
+/**
+ * Toque de chamada (corrida nova): repete um "trim-trim" alto e vibra até stopRing().
+ * Para sozinho depois de maxMs (a janela da chamada), mesmo se ninguém chamar stopRing.
+ */
+let ringTimer: ReturnType<typeof setInterval> | null = null;
+let ringStop: ReturnType<typeof setTimeout> | null = null;
+
+function ringOnce() {
+  try {
+    const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext | undefined;
+    if (Ctx) {
+      audio ??= new Ctx();
+      if (audio.state === 'suspended') void audio.resume();
+      for (let i = 0; i < 6; i++) {
+        const start = audio.currentTime + i * 0.12;
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        osc.type = 'square';
+        osc.frequency.value = i % 2 ? 1320 : 990;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.5, start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.1);
+        osc.connect(gain).connect(audio.destination);
+        osc.start(start);
+        osc.stop(start + 0.11);
+      }
+    }
+  } catch {
+    /* sem som */
+  }
+  try {
+    navigator.vibrate?.([500, 150, 500]);
+  } catch {
+    /* sem vibração */
+  }
+}
+
+export function startRing(maxMs = 30_000) {
+  stopRing();
+  ringOnce();
+  ringTimer = setInterval(ringOnce, 1000);
+  ringStop = setTimeout(stopRing, maxMs);
+}
+
+export function stopRing() {
+  if (ringTimer) clearInterval(ringTimer);
+  if (ringStop) clearTimeout(ringStop);
+  ringTimer = null;
+  ringStop = null;
+  try {
+    navigator.vibrate?.(0);
+  } catch {
+    /* sem vibração */
+  }
+}

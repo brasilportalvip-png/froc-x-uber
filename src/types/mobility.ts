@@ -27,6 +27,9 @@ export interface RideOrder {
   id: string;
   passengerId?: string;
   driverId?: string;
+  /** Na fila do motorista (ele termina outra corrida antes). Posição 1 ou 2. */
+  queued?: boolean;
+  queuePosition?: number;
   mine?: Involvement;
   ratedByPassenger?: boolean;
   ratedByDriver?: boolean;
@@ -358,6 +361,8 @@ export interface UserProfile {
   faceCheckDue?: boolean;
   faceCheckDueAt?: string;
   faceBlocked?: boolean;
+  /** Segundos da janela de chamada de corrida (motorista). */
+  rideCallSeconds?: number;
   uid: string;
   email: string;
   emailVerified: boolean;
@@ -504,6 +509,7 @@ export interface PlatformSettingsView {
   carpoolCommissionPercent: number;
   freightCommissionPercent: number;
   privateCommissionPercent: number;
+  rideCallSeconds: number;
 }
 
 export interface AdminOverview {

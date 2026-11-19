@@ -5,6 +5,9 @@ import { DriverArrivedAlert, DriverWaitPanel, PassengerCancelButton, RidePolicyM
 import { VerifiedBadge } from './IdentityGate.tsx';
 import { openReceipt } from '../lib/receipt.ts';
 import { api } from '../lib/session.ts';
+import { canAcceptMore, currentDriving, liveTarget, queuedDriving, MAX_DRIVER_QUEUE } from '../lib/rideFlow.ts';
+import { NavButtons, PinGlow, SlideToConfirm } from './RideFlowUI.tsx';
+import { ProfilePhoto } from './ProfilePhoto.tsx';
 import {
   Bike,
   Car,
@@ -52,6 +55,12 @@ interface Uber99PanelProps {
   onSetOnline: (online: boolean) => Promise<void>;
   /** Leva para a carteira (recarga) quando falta saldo. */
   onNeedTopUp?: () => void;
+  /** GPS do próprio motorista (para a distância ao embarque). */
+  myPos?: { lat: number; lng: number } | null;
+  /** Tempo e km restantes pela rota ao vivo do mapa. */
+  liveEta?: { km: number; min: number } | null;
+  /** Janela rápida (some em 3 s). */
+  onFlash?: (f: { title: string; body?: string; tone?: 'ok' | 'info' | 'warn' }) => void;
 }
 
 /** Cotação oficial do servidor: preço por categoria, faixa de horário, área de risco e divisão do valor. */
@@ -88,6 +97,8 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   onRideAction,
   onSetOnline,
   onNeedTopUp,
+  liveEta,
+  onFlash,
 }) => {
   const [selectedCat, setSelectedCat] = useState<RideCategoryId>('froc_x');
   const paymentMethod: PaymentMethod = 'froc_pay';
@@ -140,7 +151,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   const isActive = (r: RideOrder) => r.status !== 'completed' && r.status !== 'cancelled';
   const activeRide = rides.find((r) => r.mine === 'owner' && isActive(r));
   const toRate = rides.find((r) => r.mine === 'owner' && r.status === 'completed' && !r.ratedByPassenger);
-  const myDriving = rides.find((r) => r.mine === 'provider' && isActive(r));
+  const myDriving = currentDriving(rides);
+  const myQueue = queuedDriving(rides);
+  const canMore = canAcceptMore(rides);
+  const driveTo = liveTarget(myDriving);
   const driverToRate = rides.find((r) => r.mine === 'provider' && r.status === 'completed' && !r.ratedByDriver);
   const openQueueRides = rides.filter((r) => r.mine === null && r.status === 'searching');
 
@@ -238,6 +252,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <div className="text-xs text-slate-500">
                   {myDriving.origin.name} → {myDriving.destination.name}
                 </div>
+                {liveEta && driveTo && (
+                  <div className="text-sm font-bold text-sky-600 dark:text-sky-400">
+                    {myDriving.status === 'in_progress' ? 'Até o destino' : 'Até o passageiro'}: {liveEta.min} min · {liveEta.km.toString().replace('.', ',')} km
+                  </div>
+                )}
                 <div className="text-xs text-slate-500">
                   {myDriving.paymentMethod === 'cash'
                     ? 'Corrida antiga em dinheiro: receba do passageiro.'
@@ -267,6 +286,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               </div>
               <div className="text-right shrink-0 text-base font-bold text-emerald-600 font-mono-num">{formatBRL(myDriving.price)}</div>
             </div>
+            {driveTo && <NavButtons to={driveTo} label={myDriving.status === 'in_progress' ? 'Navegar ao destino' : 'Navegar ao passageiro'} />}
             <div className="max-h-28 overflow-y-auto froc-scroll space-y-1.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 p-2.5">
               {myDriving.messages.length === 0 && <div className="text-xs text-slate-400">Sem mensagens.</div>}
               {myDriving.messages.map((m, idx) => (
@@ -322,13 +342,18 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 <DriverWaitPanel ride={myDriving} onNoShow={() => void onRideAction(myDriving.id, 'no_show')} />
               )}
               {myDriving.status === 'accepted' && (
-                <button
-                  type="button"
-                  onClick={() => onRideAction(myDriving.id, 'arriving')}
-                  className="flex-1 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-semibold cursor-pointer"
-                >
-                  Cheguei ao embarque
-                </button>
+                <div className="w-full space-y-1">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-300">
+                    Ao chegar perto do embarque, o app avisa o passageiro sozinho e pede o PIN. Se o GPS falhar, toque abaixo.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onRideAction(myDriving.id, 'arriving')}
+                    className="w-full min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Cheguei ao embarque
+                  </button>
+                </div>
               )}
               {myDriving.delivery && (myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
                 <button
@@ -360,33 +385,46 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 </div>
               )}
               {!myDriving.delivery && (myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
-                <div className="flex w-full gap-2">
-                  <input
-                    inputMode="numeric"
-                    maxLength={4}
-                    value={pinInputs[myDriving.id] || ''}
-                    onChange={(e) => setPinInputs((p) => ({ ...p, [myDriving.id]: e.target.value.replace(/\D/g, '') }))}
-                    placeholder="PIN do passageiro"
-                    className="w-36 min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 text-sm font-mono-num tracking-widest text-slate-900 dark:text-white"
-                  />
-                  <button
-                    type="button"
+                <div className="w-full space-y-2">
+                  {myDriving.status === 'arriving' ? (
+                    <PinGlow value={pinInputs[myDriving.id] || ''} onChange={(v) => setPinInputs((p) => ({ ...p, [myDriving.id]: v }))} />
+                  ) : (
+                    <input
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={pinInputs[myDriving.id] || ''}
+                      onChange={(e) => setPinInputs((p) => ({ ...p, [myDriving.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                      placeholder="PIN do passageiro"
+                      aria-label="PIN do passageiro"
+                      className="w-full min-h-[48px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 text-center text-lg font-mono-num tracking-[0.4em] text-slate-900 dark:text-white"
+                    />
+                  )}
+                  <SlideToConfirm
+                    label={(pinInputs[myDriving.id] || '').length === 4 ? 'Deslize para iniciar a viagem' : 'Digite o PIN para liberar'}
                     disabled={(pinInputs[myDriving.id] || '').length !== 4}
-                    onClick={() => onRideAction(myDriving.id, 'start', { pin: pinInputs[myDriving.id] || '' })}
-                    className="flex-1 min-h-[44px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                  >
-                    Confirmar PIN e iniciar
-                  </button>
+                    onConfirm={() => {
+                      void onRideAction(myDriving.id, 'start', { pin: pinInputs[myDriving.id] || '' }).then(() =>
+                        onFlash?.({ title: 'Viagem iniciada', body: 'Siga a rota azul no mapa ou toque em Navegar.', tone: 'ok' }),
+                      );
+                    }}
+                  />
                 </div>
               )}
               {!myDriving.delivery && myDriving.status === 'in_progress' && (
-                <button
-                  type="button"
-                  onClick={() => onRideAction(myDriving.id, 'complete')}
-                  className="flex-1 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
-                >
-                  Finalizar corrida
-                </button>
+                <div className="w-full">
+                  <SlideToConfirm
+                    label="Deslize para finalizar a corrida"
+                    onConfirm={() => {
+                      void onRideAction(myDriving.id, 'complete').then(() =>
+                        onFlash?.({
+                          title: 'Corrida finalizada!',
+                          body: myQueue.length ? 'A próxima corrida da sua fila já começou.' : 'O valor caiu no seu saldo.',
+                          tone: 'ok',
+                        }),
+                      );
+                    }}
+                  />
+                </div>
               )}
               {(myDriving.status === 'accepted' || myDriving.status === 'arriving') && (
                 <button
@@ -398,6 +436,33 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {myQueue.length > 0 && (
+          <div className="rounded-2xl border-2 border-dashed border-emerald-400 p-3 space-y-2">
+            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Sua fila ({myQueue.length})</h4>
+            <p className="text-[11px] text-slate-500 dark:text-slate-300">A próxima começa sozinha quando você finalizar a corrida atual.</p>
+            {myQueue.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-2 rounded-xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                    {r.queuePosition}º · {r.passengerName}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-300 truncate">
+                    {r.origin.name.split('·')[0]} → {r.destination.name.split('·')[0]}
+                  </div>
+                </div>
+                <div className="text-sm font-bold text-emerald-600 font-mono-num shrink-0">{formatBRL(r.price)}</div>
+                <button
+                  type="button"
+                  onClick={() => onRideAction(r.id, 'cancel')}
+                  className="px-2.5 min-h-[36px] rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                >
+                  Soltar
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -448,11 +513,11 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 </div>
                 <button
                   type="button"
-                  disabled={Boolean(myDriving)}
+                  disabled={!canMore}
                   onClick={() => onRideAction(ride.id, 'driver_accept')}
                   className="w-full min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition disabled:opacity-50 cursor-pointer"
                 >
-                  {myDriving ? 'Finalize a corrida atual primeiro' : 'Aceitar corrida'}
+                  {!canMore ? `Fila cheia (${MAX_DRIVER_QUEUE} corridas)` : myDriving ? 'Aceitar para a fila' : 'Aceitar corrida'}
                 </button>
               </div>
             ))
@@ -480,9 +545,12 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
             <div>
               <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 {activeRide.status === 'searching' && 'Procurando motorista... (aguarde, a tela atualiza sozinha)'}
-                {activeRide.status === 'accepted' && `Motorista a caminho · ${activeRide.etaMin || 3} min`}
+                {activeRide.status === 'accepted' &&
+                  (activeRide.queued
+                    ? `Seu motorista termina outra corrida antes · chega em ~${activeRide.etaMin || 5} min`
+                    : `Motorista a caminho · ${liveEta?.min ?? activeRide.etaMin ?? 3} min${liveEta ? ` · ${liveEta.km.toString().replace('.', ',')} km` : ''}`)}
                 {activeRide.status === 'arriving' && 'Motorista chegou ao embarque'}
-                {activeRide.status === 'in_progress' && `Em viagem · ${activeRide.durationMin} min restantes`}
+                {activeRide.status === 'in_progress' && `Em viagem · ${liveEta?.min ?? activeRide.durationMin} min restantes`}
               </span>
               <h3 className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
                 {activeRide.categoryLabel} · {formatBRL(activeRide.price)}
@@ -499,7 +567,7 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
           {activeRide.driverName && (
             <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 p-3 border border-slate-200/70 dark:border-slate-800">
               <div className="flex items-center gap-3 min-w-0">
-                <div aria-hidden className="w-11 h-11 rounded-full  shrink-0 bg-slate-200 flex items-center justify-center font-bold text-white bg-emerald-600">{String(activeRide.driverName || "?").trim().charAt(0).toUpperCase()}</div>
+                <ProfilePhoto uid={activeRide.driverId} size={60} alt={`Foto de ${activeRide.driverName}`} />
                 <div className="min-w-0">
                   <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
                     {activeRide.driverName}
@@ -514,9 +582,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <span className="inline-block rounded-lg bg-slate-900 dark:bg-slate-800 text-white px-2.5 py-1 text-xs font-mono-num font-semibold">
+                <span className="inline-block rounded-lg bg-slate-900 dark:bg-slate-800 text-white px-3 py-1.5 text-lg font-mono-num font-black tracking-wider">
                   {activeRide.vehiclePlate}
                 </span>
+                <div className="text-sm font-bold text-emerald-600 font-mono-num mt-1">{formatBRL(activeRide.price)}</div>
               </div>
             </div>
           )}
