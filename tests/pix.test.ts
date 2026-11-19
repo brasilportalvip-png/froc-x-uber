@@ -14,7 +14,8 @@ const LEGAL = { cnhExpiry: '2035-01-01', city: 'Campinas', state: 'SP', vehicleY
 const passageira: AuthUser = { uid: 'p1', email: 'esposa@exemplo.com', emailVerified: true, name: 'Esposa' };
 const tio: AuthUser = { uid: 'd1', email: 'tio@exemplo.com', emailVerified: true, name: 'Tio' };
 const admin: AuthUser = { uid: 'a1', email: 'dono@froc.com', emailVerified: true, name: 'Dono' };
-const SP = { originId: 'sp-paulista', destinationId: 'sp-pinheiros' };
+// Paulista → Guarulhos: ganho passa do Pix mínimo de R$ 20.
+const SP = { originId: 'sp-paulista', destinationId: 'sp-gru' };
 
 let svc: FrocService;
 let store: MemoryStore;

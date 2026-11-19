@@ -24,6 +24,11 @@ export interface PlatformSettings {
   platformFeeMaxPct: number;
   /** Equipe IA executa sozinha (pagar, aprovar, bloquear, configurar) — o dono não precisa clicar. */
   agentAutonomy: boolean;
+  /** Chuva no local da partida encarece o km (leilão). */
+  rainSurgeEnabled: boolean;
+  /** % do valor total que fica com a Froc nas caronas e nos fretes/retorno vazio. */
+  carpoolCommissionPercent: number;
+  freightCommissionPercent: number;
   /** Valor máximo de UM saque que a Equipe IA libera sozinha (R$). Acima disso o Financeiro analisa antes. */
   autoPayoutLimit: number;
 }
@@ -43,6 +48,9 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   platformFeeMaxPct: 30,
   agentAutonomy: true,
   autoPayoutLimit: 1000,
+  rainSurgeEnabled: true,
+  carpoolCommissionPercent: 30,
+  freightCommissionPercent: 30,
 };
 
 export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 'boolean'> = {
@@ -60,6 +68,9 @@ export const SETTINGS_LIMITS: Record<keyof PlatformSettings, [number, number] | 
   platformFeeMaxPct: [5, 50],
   agentAutonomy: 'boolean',
   autoPayoutLimit: [0, 20000],
+  rainSurgeEnabled: 'boolean',
+  carpoolCommissionPercent: [0, 50],
+  freightCommissionPercent: [0, 50],
 };
 
 export const REDEEM_VALUE_CENTS = 500;

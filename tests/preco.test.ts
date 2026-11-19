@@ -73,14 +73,14 @@ beforeEach(async () => {
 
 describe('faixas de horário (Brasília)', () => {
   for (const [iso, id, pct] of [
-    ['2026-11-18T05:00:00Z', 'madrugada', 20], // 2h
-    ['2026-11-18T10:00:00Z', 'pico_manha', 15], // 7h
-    ['2026-11-18T15:30:00Z', 'almoco', 10], // 12h30
+    ['2026-11-18T05:00:00Z', 'madrugada', 35], // 2h
+    ['2026-11-18T10:00:00Z', 'pico_manha', 25], // 7h
+    ['2026-11-18T15:30:00Z', 'almoco', 15], // 12h30
     ['2026-11-18T18:00:00Z', 'normal', 0], // 15h
-    ['2026-11-18T21:00:00Z', 'pico_noite', 20], // 18h
-    ['2026-11-19T00:30:00Z', 'noite', 10], // 21h30 quarta
-    ['2026-11-21T02:00:00Z', 'balada', 25], // sexta 23h
-    ['2026-11-22T05:00:00Z', 'balada', 25], // domingo 2h (saída de sábado)
+    ['2026-11-18T21:00:00Z', 'pico_noite', 30], // 18h
+    ['2026-11-19T00:30:00Z', 'noite', 15], // 21h30 quarta
+    ['2026-11-21T02:00:00Z', 'balada', 40], // sexta 23h
+    ['2026-11-22T05:00:00Z', 'balada', 40], // domingo 2h (saída de sábado)
   ] as const) {
     test(`${iso} → ${id} (+${pct}%)`, () => {
       const b = timeBandAt(at(iso));
@@ -111,22 +111,23 @@ describe('ganho da Froc: R$ 2 a R$ 8, nunca mais de 30%', () => {
   });
 });
 
-describe('preço da corrida', () => {
-  test('dinâmico de horário × demanda limitado ao teto; motorista recebe total − taxa', () => {
-    const p = priceRide({ base: 20, minimum: 7.5, date: at('2026-11-18T21:00:00Z'), demand: 1.8, maxSurge: 2, timeSurgeEnabled: true, risk: null, distanceKm: 6 });
-    assert.equal(p.multiplier, 2, '1,2 × 1,8 = 2,16 → teto 2');
-    assert.equal(p.total, 40);
-    assert.equal(Math.round((p.total - p.platformFee) * 100) / 100, p.driverEarning);
+describe('preço da corrida (leilão automático)', () => {
+  test('motorista recebe o km limpo; a Froc soma R$ 2–8 por cima', () => {
+    const p = priceRide({ categoryId: 'froc_x', distanceKm: 10, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: null });
+    assert.equal(p.perKm, 2.2);
+    assert.equal(p.driverEarning, 22);
+    assert.ok(p.platformFee >= 2 && p.platformFee <= 8);
+    assert.equal(p.total, Math.round((p.driverEarning + p.platformFee) * 100) / 100);
   });
   test('área de risco: acréscimo vai todo para o motorista', () => {
     const zone = { id: 'z', name: 'Morro X', lat: -23.56, lng: -46.65, radiusKm: 1, surchargePct: 20, when: 'sempre' as const, active: true };
     const found = riskZoneFor([{ lat: -23.561, lng: -46.651 }], [zone], at('2026-11-18T18:00:00Z'));
     assert.equal(found?.id, 'z');
-    const semRisco = priceRide({ base: 20, minimum: 7.5, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: null, distanceKm: 5 });
-    const comRisco = priceRide({ base: 20, minimum: 7.5, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: zone, distanceKm: 5 });
-    assert.equal(comRisco.total, 24);
+    const base = { categoryId: 'froc_x' as const, distanceKm: 10, date: at('2026-11-18T18:00:00Z'), demand: 1, maxSurge: 2, timeSurgeEnabled: true };
+    const semRisco = priceRide({ ...base, risk: null });
+    const comRisco = priceRide({ ...base, risk: zone });
+    assert.equal(Math.round((comRisco.driverEarning - semRisco.driverEarning) * 100) / 100, 4.4, '20% de R$ 22 vão para o motorista');
     assert.equal(comRisco.platformFee - semRisco.platformFee, 1, 'Froc ganha só R$ 1 a mais');
-    assert.equal(comRisco.driverEarning - semRisco.driverEarning, 3, 'motorista leva os R$ 4 de risco menos o R$ 1');
     assert.equal(riskZoneFor([{ lat: -23.561, lng: -46.651 }], [{ ...zone, when: 'noite' }], at('2026-11-18T18:00:00Z')), null, 'zona só de noite não vale às 15h');
   });
 });

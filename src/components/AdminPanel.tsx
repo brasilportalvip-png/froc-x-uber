@@ -454,8 +454,10 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
         >
           {(
             [
-              ['commissionPercent', 'Comissão da plataforma (%)', 0, 40, 1],
-              ['maxSurge', 'Preço dinâmico máximo (x)', 1, 3, 0.1],
+              ['commissionPercent', 'Comissão da plataforma em outros serviços (%)', 0, 40, 1],
+              ['carpoolCommissionPercent', 'Froc fica com (% do total) nas caronas', 0, 50, 1],
+              ['freightCommissionPercent', 'Froc fica com (% do total) nos fretes e retorno vazio', 0, 50, 1],
+              ['maxSurge', 'Leilão: km do motorista sobe no máximo (x; carro R$ 2–5, moto R$ 1,50–2,50)', 1, 3, 0.1],
               ['rideSearchTimeoutMin', 'Cancelar corrida sem motorista após (min)', 3, 60, 1],
               ['indriveOpenTimeoutMin', 'Expirar negociação sem resposta após (min)', 5, 240, 1],
               ['pointsPerReal', 'Pontos por R$ 1 gasto', 0, 10, 1],
@@ -485,8 +487,12 @@ export const AdminPanel: React.FC<{ onToast: (msg: string) => void }> = ({ onToa
             <input type="checkbox" checked={settings.surgeEnabled} onChange={(e) => setSettings({ ...settings, surgeEnabled: e.target.checked })} className="w-5 h-5" />
           </label>
           <label className="flex items-center justify-between gap-3">
-            <span>Dinâmico por horário (madrugada, picos, almoço, noite, fim de semana)</span>
+            <span>Leilão por horário (madrugada, picos, almoço, noite, fim de semana, feriados)</span>
             <input type="checkbox" checked={settings.timeSurgeEnabled} onChange={(e) => setSettings({ ...settings, timeSurgeEnabled: e.target.checked })} className="w-5 h-5" />
+          </label>
+          <label className="flex items-center justify-between gap-3">
+            <span>Leilão por chuva no local da partida (previsão em tempo real)</span>
+            <input type="checkbox" checked={settings.rainSurgeEnabled} onChange={(e) => setSettings({ ...settings, rainSurgeEnabled: e.target.checked })} className="w-5 h-5" />
           </label>
           <label className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 p-2">
             <span>

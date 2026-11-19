@@ -17,7 +17,9 @@ import {
   ShieldCheck,
   Star,
   } from 'lucide-react';
-import { calculateDistanceKm, estimateDurationMin, formatBRL, RIDE_CATEGORIES } from '../data/locations.ts';
+import { calculateDistanceKm, formatBRL, RIDE_CATEGORIES } from '../data/locations.ts';
+import { priceRide } from '../data/pricing.ts';
+import type { PriceFactor, RideCategoryKey } from '../data/pricing.ts';
 import type { GeoPoint, PaymentMethod, RideCategoryId, RideOrder, UserProfile, UserRole } from '../types/mobility.ts';
 import { LocationSelector } from './LocationSelector.tsx';
 import { isOriginPending, isUnsetDestination } from '../lib/currentLocation.ts';
@@ -57,6 +59,8 @@ interface Quote {
   surge: number;
   demand?: number;
   band?: { id: string; label: string; pct: number };
+  /** Motivos do preço estar mais alto agora (horário, fim de semana, feriado, chuva, procura). */
+  factors?: PriceFactor[];
   risk?: { name: string; pct: number; amount: number } | null;
   prices: { categoryId: string; price: number }[];
 }
@@ -127,8 +131,10 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
   // Preço da categoria escolhida (o mesmo mostrado na lista) para conferir o saldo antes de pedir.
   const selectedPrice = (() => {
     const cat = RIDE_CATEGORIES.find((c) => c.id === selectedCat)!;
-    const dur = estimateDurationMin(distanceKm, cat.id === 'froc_moto' ? 'moto' : 'urban');
-    return quote?.prices.find((p) => p.categoryId === cat.id)?.price ?? Math.max(7.5, cat.baseFare + distanceKm * cat.perKm + dur * cat.perMin);
+    return (
+      quote?.prices.find((p) => p.categoryId === cat.id)?.price ??
+      priceRide({ categoryId: cat.id as RideCategoryKey, distanceKm, date: new Date(), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: null }).total
+    );
   })();
   const lowBalance = !needsDestination && !locating && profile.walletBalance < selectedPrice;
 
@@ -659,23 +665,24 @@ export const Uber99Panel: React.FC<Uber99PanelProps> = ({
               <span className="font-semibold text-slate-900 dark:text-white">Escolha sua categoria</span>
               <span className="font-mono-num">{distanceKm} km estimados</span>
             </div>
-            {quote && (quote.surge > 1 || quote.risk) && (
-              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
-                {quote.band && quote.band.pct > 0 && (
-                  <div>
-                    {quote.band.label}: +{quote.band.pct}% no preço.
+            {quote && ((quote.factors?.length ?? 0) > 0 || quote.risk) && (
+              <div data-testid="motivos-preco" className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                <div className="font-bold">Por que o preço está assim agora:</div>
+                {(quote.factors ?? []).map((f: PriceFactor) => (
+                  <div key={f.id}>
+                    • {f.label}: +{f.pct}%
                   </div>
-                )}
-                {(quote.demand ?? 1) > 1 && <div>Muita procura na sua região agora ({(quote.demand ?? 1).toFixed(1)}x). O preço volta ao normal quando mais motoristas ficam livres.</div>}
-                {quote.risk && <div>Área com acréscimo de segurança: +{quote.risk.pct}%, que vai inteiro para o motorista.</div>}
+                ))}
+                {quote.risk && <div>• Área com acréscimo de segurança: +{quote.risk.pct}%, que vai inteiro para o motorista.</div>}
+                <div className="opacity-80">O preço volta ao normal quando esses fatores passam.</div>
               </div>
             )}
 
             <div className="space-y-2">
               {RIDE_CATEGORIES.map((cat) => {
-                const dur = estimateDurationMin(distanceKm, cat.id === 'froc_moto' ? 'moto' : 'urban');
-                const rawPrice = cat.baseFare + distanceKm * cat.perKm + dur * cat.perMin;
-                const finalPrice = quote?.prices.find((p) => p.categoryId === cat.id)?.price ?? Math.max(7.5, rawPrice);
+                // Enquanto o servidor não responde: estimativa com o mesmo leilão (sem procura e chuva).
+                const estimate = priceRide({ categoryId: cat.id as RideCategoryKey, distanceKm, date: new Date(), demand: 1, maxSurge: 2, timeSurgeEnabled: true, risk: null }).total;
+                const finalPrice = quote?.prices.find((p) => p.categoryId === cat.id)?.price ?? estimate;
                 const isSelected = selectedCat === cat.id;
 
                 return (

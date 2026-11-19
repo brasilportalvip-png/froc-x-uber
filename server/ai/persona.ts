@@ -10,7 +10,7 @@ import type { PlatformSettings } from '../settings.ts';
 import { REDEEM_VALUE_CENTS } from '../settings.ts';
 import { legalKnowledgeText } from '../../src/data/legal.ts';
 import { policyKnowledgeText } from '../../src/data/ridePolicy.ts';
-import { PRICING_TEXT } from '../../src/data/pricing.ts';
+import { KM_BASE, KM_RANGE, PRICING_TEXT } from '../../src/data/pricing.ts';
 
 export const FROC_VOICE = `
 [VOZ DA MARCA FROC — vale para todos os agentes]
@@ -38,7 +38,12 @@ export const FEE_SECRET_RULE =
 export function platformKnowledge(cfg: PlatformSettings, audience: 'interno' | 'publico' = 'interno'): string {
   const internal = audience === 'interno';
   const categories = RIDE_CATEGORIES.map(
-    (c) => `  - ${c.label} (${c.tag}): ${c.description}; bandeirada R$ ${c.baseFare.toFixed(2)}, R$ ${c.perKm.toFixed(2)}/km, R$ ${c.perMin.toFixed(2)}/min; ${c.capacity}.`,
+    (c) => {
+      const k = KM_BASE[c.id as keyof typeof KM_BASE];
+      const r = k ? KM_RANGE[k.kind] : KM_RANGE.carro;
+      const brl = (v: number) => v.toFixed(2).replace('.', ',');
+      return `  - ${c.label} (${c.tag}): ${c.description}; motorista recebe de R$ ${brl(r.min)} a R$ ${brl(r.max)} por km (leilão automático); ${c.capacity}.`;
+    },
   ).join('\n');
   const vehicles = CARGO_VEHICLES.map((v) => `  - ${v.type}: ~${v.m3} m³, ~${v.kg} kg (${v.group})`).join('\n');
   return `
@@ -72,7 +77,7 @@ CARTEIRA E PAGAMENTOS
 - Recarga pelo Mercado Pago (Pix ou cartão), de R$ 10 a R$ 5.000. Sem saldo suficiente, o app não deixa pedir e mostra o botão Recarregar.
 - Fluxo: o preço sai da carteira do cliente no pedido (ex.: tinha R$ 100, corrida de R$ 20, fica com R$ 80); a Froc guarda; ao finalizar, cai sozinho na carteira do motorista. Cancelou antes de terminar: volta inteiro para o cliente.
 - Todo valor pago com a carteira fica guardado (custódia) e só vai para o prestador quando o serviço termina; cancelamento devolve.
-${internal ? `- (CONFIDENCIAL) Corridas, negociação e entregas: ganho fixo da Froc (acima). Caronas e fretes: comissão de ${cfg.commissionPercent}% (o prestador recebe ${100 - cfg.commissionPercent}%).
+${internal ? `- (CONFIDENCIAL) Corridas, negociação e entregas: ganho fixo da Froc (acima). Caronas: a Froc fica com ${cfg.carpoolCommissionPercent}% do valor total. Fretes e retorno vazio: ${cfg.freightCommissionPercent}% do valor total.
 ` : ''}- Taxas de cancelamento e de "não apareceu" vão 100% para o motorista.
 - Equipe IA: autonomia total ${cfg.agentAutonomy ? 'LIGADA (a equipe paga, aprova, verifica, bloqueia e configura sozinha; tudo vai para a Auditoria)' : 'DESLIGADA (ações de dinheiro, bloqueio, aprovação e configurações esperam 1 clique do dono)'}. Saques liberados sozinhos até R$ ${cfg.autoPayoutLimit} quando a conta não está bloqueada, o CPF está verificado e não há alerta de multiconta; o resto o Financeiro analisa.
 - Saldo pode ser usado no próprio app (corridas, caronas, fretes, entregas) por qualquer pessoa, inclusive motoristas.

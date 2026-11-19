@@ -179,8 +179,9 @@ describe('avaliação dos dois lados, pontos e comissão configurável', () => {
   test('comissão mudada no admin vale para os próximos pagamentos e entra no relatório', async () => {
     await approve(tonhao, 'trucker');
     await topUp(ana, 2000);
-    await svc.updateSettings(admin, { commissionPercent: 10 });
-    await expectError(svc.updateSettings(admin, { commissionPercent: 80 }), 'invalid_commissionPercent');
+    // Fretes têm comissão própria (padrão 30% do total), mudável no Admin.
+    await svc.updateSettings(admin, { freightCommissionPercent: 10 });
+    await expectError(svc.updateSettings(admin, { freightCommissionPercent: 80 }), 'invalid_freightCommissionPercent');
     const f = await svc.createFreight(ana, { ...INTERCITY, estimatedWeightKg: 500, estimatedVolumeM3: 12, proposedBudget: 1000, scheduledDate: 'Sábado' });
     assert.equal(f.estimatedVolumeM3, 12);
     const b = await svc.bidFreight(tonhao, f.id, { price: 1000 });
