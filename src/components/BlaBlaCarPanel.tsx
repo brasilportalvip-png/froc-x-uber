@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Calendar, CheckCircle2, Music, PawPrint, Plus, ShieldCheck, Star, Users } from 'lucide-react';
-import { BRAZIL_LOCATIONS, formatBRL } from '../data/locations.ts';
+import { formatBRL } from '../data/locations.ts';
+import { choosePoint, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
 import type { CarpoolTrip, GeoPoint, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
 
@@ -33,21 +34,26 @@ interface BlaBlaCarPanelProps {
 export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   role,
   carpools,
+  origin,
   onSelectRouteOnMap,
   onBookCarpool,
   onPublishCarpool,
   onCarpoolAction,
   canPublish,
 }) => {
-  const cityOf = (id: string) => BRAZIL_LOCATIONS.find((l) => l.id === id) ?? BRAZIL_LOCATIONS[0];
   const [searchText, setSearchText] = useState('');
   const [seatsWanted, setSeatsWanted] = useState(1);
   const [showPublish, setShowPublish] = useState(role === 'driver' && canPublish);
 
   // Publish carpool form
-  // Qualquer cidade do Brasil (busca do Google). Começa com São Paulo → Rio só como exemplo.
-  const [pubOrigin, setPubOrigin] = useState<GeoPoint>(() => cityOf('sp-tiete'));
-  const [pubDest, setPubDest] = useState<GeoPoint>(() => cityOf('br-rio'));
+  // Qualquer cidade do Brasil. A saída começa onde a pessoa está; o destino ela escolhe (nada fixo).
+  const [pubOrigin, setPubOrigin] = useState<GeoPoint>(() => startPointFrom(origin, 'Toque para escolher a cidade de saída'));
+  const [pubDest, setPubDest] = useState<GeoPoint>(() => choosePoint('Toque para escolher a cidade de destino'));
+  const [pubError, setPubError] = useState('');
+  // O GPS respondeu depois de abrir o formulário: a saída vira a localização atual.
+  useEffect(() => {
+    if (!isPlaceMissing(origin)) setPubOrigin((p) => (isChoosePoint(p) ? origin : p));
+  }, [origin]);
   const [pubDate, setPubDate] = useState(() => new Date(Date.now() + 864e5).toISOString().slice(0, 10));
   const [pubTime, setPubTime] = useState('08:00');
   const [pubPrice, setPubPrice] = useState('95');
@@ -70,6 +76,11 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
 
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPlaceMissing(pubOrigin) || isPlaceMissing(pubDest)) {
+      setPubError('Escolha a cidade de saída e a cidade de destino.');
+      return;
+    }
+    setPubError('');
     setBusyId('publish');
     try {
       await onPublishCarpool({
@@ -120,6 +131,11 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
             <PlacePicker label="Cidade de saída" mode="cities" value={pubOrigin} onChange={setPubOrigin} />
             <PlacePicker label="Cidade de destino" mode="cities" value={pubDest} onChange={setPubDest} />
           </div>
+          {pubError && (
+            <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-2 text-xs font-semibold">
+              {pubError}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div>

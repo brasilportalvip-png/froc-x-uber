@@ -25,6 +25,7 @@ import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
 import { api, loadPublicConfig, logout, prepareUpload, watchUser } from './lib/session.ts';
 import type { AppBootstrapState, AppModule, GeoPoint, NearbyDriver, UserProfile, UserRole } from './types/mobility.ts';
+import { initialRole, loadRole, modeOf, roleForMode, saveRole } from './lib/appMode.ts';
 
 export default function App() {
   const [state, setState] = useState<AppBootstrapState | null>(null);
@@ -41,7 +42,14 @@ export default function App() {
   const isOnline = useOnlineStatus();
 
   const [activeModule, setActiveModule] = useState<AppModule>('rides');
-  const [role, setRole] = useState<UserRole>('passenger');
+  // Modo Passageiro/Motorista fica salvo no aparelho (o motorista não precisa trocar toda vez).
+  const [role, setRoleState] = useState<UserRole>(() => loadRole() ?? 'passenger');
+  const roleChosen = useRef(loadRole() !== null);
+  const setRole = useCallback((r: UserRole) => {
+    roleChosen.current = true;
+    saveRole(r);
+    setRoleState(r);
+  }, []);
   // Padrão: tema preto (identidade Froc). A escolha da pessoa fica salva no aparelho.
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
@@ -145,6 +153,14 @@ export default function App() {
     window.addEventListener('froc:use-my-location', onUse);
     return () => window.removeEventListener('froc:use-my-location', onUse);
   }, [locateMe]);
+
+  // Sem modo salvo no aparelho: motorista aprovado já abre no modo Motorista.
+  const approvedDriver = state?.profile.driverStatus;
+  const approvedTrucker = state?.profile.truckerStatus;
+  useEffect(() => {
+    if (roleChosen.current || (!approvedDriver && !approvedTrucker)) return;
+    setRoleState(initialRole(null, { driverStatus: approvedDriver, truckerStatus: approvedTrucker }));
+  }, [approvedDriver, approvedTrucker]);
 
   // Quem tocou em "Quero ser motorista" / "Cadastrar meu veículo de carga" na página inicial
   // já entra no app com o perfil certo aberto.
@@ -278,12 +294,7 @@ export default function App() {
   const handleSelectModule = (mod: AppModule) => {
     setActiveModule(mod);
     if (mod === 'carpool' || mod === 'freight') {
-      const sp = BRAZIL_LOCATIONS.find((l) => l.id === 'sp-tiete') || BRAZIL_LOCATIONS[3];
-      const rj = BRAZIL_LOCATIONS.find((l) => l.id === 'br-rio') || BRAZIL_LOCATIONS[14];
-      if (origin.zone === 'urban' && destination.zone === 'urban') {
-        setOrigin(sp);
-        setDestination(rj);
-      }
+      // O mapa continua onde a pessoa está (A = localização atual). Nunca um trajeto fixo de exemplo.
       if (mod === 'freight' && role === 'driver') setRole('trucker');
     } else if (mod === 'rides' || mod === 'indrive') {
       if (origin.zone === 'intercity' && destination.zone === 'intercity') {
@@ -457,7 +468,7 @@ export default function App() {
   const appShell = (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-transparent text-slate-900 dark:text-slate-100">
       {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-30 h-14 lg:h-16 px-4 lg:px-6 bg-white/95 dark:bg-[#050505]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-8">
+      <header className="sticky top-0 z-30 h-14 lg:h-16 px-4 lg:px-6 bg-white/95 dark:bg-[#050505]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 lg:gap-8">
         <a
           href="#top"
           onClick={(e) => {
@@ -495,7 +506,33 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          {user && (
+            <div role="group" aria-label="Modo do app" className="flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+              {(
+                [
+                  { id: 'passenger', label: 'Passageiro' },
+                  { id: 'driver', label: 'Motorista' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  aria-pressed={modeOf(role) === m.id}
+                  onClick={() => {
+                    const next = roleForMode(m.id, activeModule, role);
+                    setRole(next);
+                    if (next === 'trucker') setActiveModule('freight');
+                  }}
+                  className={`min-h-[32px] px-2.5 rounded-lg text-[11px] sm:text-xs font-bold whitespace-nowrap cursor-pointer transition ${
+                    modeOf(role) === m.id ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700 dark:text-white hover:bg-white/60 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
           <PWAInstallButton />
         </div>
       </header>
@@ -749,6 +786,7 @@ export default function App() {
                     profile={state.profile}
                     emptyTrucks={state.emptyTrucks}
                     freights={state.freights}
+                    origin={origin}
                     onSelectRouteOnMap={(o, d) => {
                       setOrigin(o);
                       setDestination(d);

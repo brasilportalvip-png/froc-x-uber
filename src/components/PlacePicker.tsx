@@ -21,7 +21,8 @@ interface PlacePickerProps {
 export const PlacePicker: React.FC<PlacePickerProps> = ({ label, value, onChange, mode, placeholder }) => {
   const placesLib = useMapsLibrary('places');
   const [editing, setEditing] = useState(false);
-  const shown = mode === 'cities' ? `${value.city}${value.state && value.state !== 'BR' ? ` · ${value.state}` : ''}` : value.name;
+  // Sem cidade (ponto ainda não escolhido): mostra o pedido "Toque para escolher...".
+  const shown = mode === 'cities' && value.city ? `${value.city}${value.state && value.state !== 'BR' ? ` · ${value.state}` : ''}` : value.name;
 
   if (!placesLib) {
     return (
