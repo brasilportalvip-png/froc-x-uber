@@ -17,6 +17,7 @@ import { normalizePixKey, resolvePixKeyType } from '../src/lib/pixKey.ts';
 import { createHash, randomBytes, randomUUID, randomInt } from 'node:crypto';
 import { minVehicleYear, vehicleAgeLimit } from '../src/data/legal.ts';
 import { holidayAt, platformFee, priceRide, riskZoneFor, timeBandAt } from '../src/data/pricing.ts';
+import { CARPOOL_POLICY, departureMs, depositCentsFor, driverPenaltyPct, hoursUntil, kmBetween, passengerRefundPct, strikesAfter } from '../src/data/carpoolPolicy.ts';
 import type { PriceBreakdown, RainLevel, RideCategoryKey, RiskZoneLike } from '../src/data/pricing.ts';
 import type { RainLookup } from './weather.ts';
 import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, cancelFeePercent, waitingFeePercent } from '../src/data/ridePolicy.ts';
@@ -206,6 +207,11 @@ interface UserDoc extends Doc {
   ratingCount: number;
   balanceCents: number;
   completedTrips: number;
+  /** Caronas realizadas (as 3 primeiras podem usar caução negativa). */
+  carpoolsDone?: number;
+  /** Cancelamentos de carona com multa (ISO) e suspensão de publicar caronas. */
+  carpoolStrikes?: string[];
+  carpoolSuspendedUntil?: string;
   driverOnline: boolean;
   driverVehicle: string;
   driverPlate: string;
@@ -346,6 +352,9 @@ function involvement(uid: string, ownerId: unknown, providerId: unknown): 'owner
   if (providerId === uid) return 'provider';
   return null;
 }
+
+/** Reservas de carona que ainda contam (pagas, embarcadas ou passageiro faltou com prova). */
+const CARPOOL_ACTIVE = ['paid', 'boarded', 'no_show'];
 
 const byNewest = <T extends Doc>(items: T[]) =>
   items.sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
@@ -1818,29 +1827,72 @@ export class FrocService {
 
   // ------------------------------------------------- 3) caronas BlaBlaCar
 
+  /** Horário de saída da carona (ms). Caronas antigas sem departureAt: lê data + hora. */
+  private carpoolDeparture(t: Doc): number | null {
+    const iso = Date.parse(String(t.departureAt || ''));
+    return Number.isFinite(iso) ? iso : departureMs(String(t.date || ''), String(t.departureTime || ''));
+  }
+
   private carpoolView(t: Doc, uid: string, myBookings: Doc[], tripBookings?: Doc[]): CarpoolTrip {
     const mine = t.driverId === uid ? 'provider' : null;
-    const booked = myBookings.filter((b) => b.tripId === t.id && b.status === 'paid').reduce((acc, b) => acc + Number(b.seats), 0);
-    const { driverPhone, ...rest } = t;
+    const myActive = myBookings.filter((b) => b.tripId === t.id && CARPOOL_ACTIVE.includes(String(b.status)));
+    const booked = myActive.reduce((acc, b) => acc + Number(b.seats), 0);
+    const { driverPhone, wrongPins: _w, ...rest } = t;
+    const now = this.now().getTime();
+    const dep = this.carpoolDeparture(t);
+    const hours = dep === null ? Infinity : hoursUntil(dep, now);
+    // Antes de cancelar, cada lado vê exatamente quanto custa (regra sincera).
+    const myPaid = myActive.filter((b) => b.status === 'paid');
+    const refundCents = myPaid.reduce(
+      (acc, b) => acc + Math.round((Number(b.amountCents) * passengerRefundPct(hours, (now - Date.parse(String(b.createdAt))) / 60000)) / 100),
+      0,
+    );
+    const driverActive = mine && tripBookings ? tripBookings.filter((b) => CARPOOL_ACTIVE.includes(String(b.status))) : [];
+    const penaltyPct = driverPenaltyPct(hours);
     return {
       ...(rest as unknown as CarpoolTrip),
       mine: mine ?? (booked > 0 ? 'owner' : null),
       bookedByUserSeats: booked,
       driverPhone: booked > 0 ? String(driverPhone || '') : undefined,
+      // PIN de embarque: só o passageiro vê (mostra ao motorista na hora de entrar no carro).
+      boardingPins: myActive.length ? myActive.map((b) => ({ pin: String(b.boardingPin || ''), seats: Number(b.seats), status: String(b.status) })) : undefined,
+      cancelPreview:
+        myPaid.length && !mine
+          ? { refund: toReais(refundCents), paid: toReais(myPaid.reduce((a, b) => a + Number(b.amountCents), 0)) }
+          : mine && driverActive.length
+            ? {
+                penaltyPct,
+                penalty: toReais(driverActive.reduce((a, b) => a + Math.round((Number(b.amountCents) * penaltyPct) / 100), 0)),
+                deposit: toReais(driverActive.reduce((a, b) => a + Number(b.depositCents || 0), 0)),
+              }
+            : undefined,
+      departed: dep !== null && now >= dep,
       passengers: mine && tripBookings
-        ? tripBookings
-            .filter((b) => b.status === 'paid')
-            .map((b) => ({ name: String(b.passengerName), seats: Number(b.seats), phone: String(b.passengerPhone || '') }))
+        ? driverActive.map((b) => ({
+            bookingId: String(b.id),
+            name: String(b.passengerName),
+            seats: Number(b.seats),
+            phone: String(b.passengerPhone || ''),
+            status: String(b.status) as 'paid' | 'boarded' | 'no_show',
+          }))
         : undefined,
     };
   }
 
   async publishCarpool(auth: AuthUser, body: Record<string, unknown>) {
     const driver = await this.approvedUser(auth, 'driver');
+    // Suspensão por cancelamentos em cima da hora (3 em 30 dias = 7 dias sem publicar).
+    if (driver.carpoolSuspendedUntil && Date.parse(String(driver.carpoolSuspendedUntil)) > this.now().getTime()) {
+      const ate = new Date(String(driver.carpoolSuspendedUntil)).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      fail(403, 'carpool_suspended', `Você cancelou ${CARPOOL_POLICY.strikesToSuspend} caronas com menos de 24h em ${CARPOOL_POLICY.strikeWindowDays} dias. Pode publicar de novo a partir de ${ate}.`);
+    }
     const origin = resolvePoint(body.originPoint, body.originId);
     const destination = resolvePoint(body.destinationPoint, body.destinationId);
     const distanceKm = calculateDistanceKm(origin, destination);
     const departureTime = /^\d{2}:\d{2}$/.test(String(body.departureTime)) ? String(body.departureTime) : fail(400, 'invalid_time', 'Horário inválido.');
+    const date = text(body.date, 40) || fail(400, 'invalid_date', 'Informe a data da viagem.');
+    const dep = departureMs(date, departureTime) ?? fail(400, 'invalid_date', 'Data inválida. Use dia/mês/ano, ex.: 27/11/2026.');
+    if (dep <= this.now().getTime()) fail(400, 'past_date', 'Esse horário já passou. Escolha uma data e hora futuras.');
     const [hh, mm] = departureTime.split(':').map(Number);
     const arr = (hh * 60 + mm + estimateDurationMin(distanceKm, 'highway')) % 1440;
     const seats = Math.round(num(body.totalSeats, 1, 6, 'vagas'));
@@ -1857,8 +1909,9 @@ export class FrocService {
       destination,
       pickupSpot: text(body.pickupSpot, 120) || `${origin.city} · ponto combinado`,
       dropoffSpot: text(body.dropoffSpot, 120) || `${destination.city} · ponto combinado`,
-      date: text(body.date, 40) || fail(400, 'invalid_date', 'Informe a data da viagem.'),
+      date,
       departureTime,
+      departureAt: new Date(dep).toISOString(),
       arrivalTime: `${String(Math.floor(arr / 60)).padStart(2, '0')}:${String(arr % 60).padStart(2, '0')}`,
       distanceKm,
       pricePerSeat: round2(num(body.pricePerSeat, 5, 2000, 'preço por vaga')),
@@ -1878,24 +1931,43 @@ export class FrocService {
     await this.identityGateFor(auth);
     const seats = Math.round(num(seatsWanted, 1, 6, 'vagas'));
     const bookingId = randomUUID();
+    const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
       if (t.driverId === auth.uid) fail(403, 'own_trip', 'Você é o motorista desta carona.');
       if (t.status !== 'open') fail(409, 'closed', 'Esta carona não aceita mais reservas.');
+      const dep = this.carpoolDeparture(t);
+      if (dep !== null && dep <= this.now().getTime()) fail(409, 'departed', 'Esta carona já saiu.');
       if (Number(t.availableSeats) < seats) fail(409, 'no_seats', 'Não há vagas suficientes.');
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
+      const driver = await this.mustGet<UserDoc>(tx, 'users', String(t.driverId), 'Motorista');
       const cents = toCents(Number(t.pricePerSeat)) * seats;
-      this.debit(tx, passenger, cents, `Carona ${(t.origin as GeoPoint).city} → ${(t.destination as GeoPoint).city} (${seats} vaga(s)) · retido`, 'carona');
+      const route = `${(t.origin as GeoPoint).city} → ${(t.destination as GeoPoint).city}`;
+      // Caução do motorista: 20% da reserva fica bloqueada no saldo dele até a viagem.
+      // Nas 3 primeiras caronas realizadas pode ficar negativo; depois precisa ter saldo.
+      const deposit = depositCentsFor(cents);
+      const canGoNegative = (driver.carpoolsDone ?? 0) < CARPOOL_POLICY.debtAllowedTrips;
+      if (driver.balanceCents < deposit && !canGoNegative)
+        fail(409, 'driver_no_deposit', 'O motorista desta carona ainda não tem a caução para novas reservas. Escolha outra carona ou tente mais tarde.');
+      this.debit(tx, passenger, cents, `Carona ${route} (${seats} vaga(s)) · retido`, 'carona');
+      this.debit(tx, driver, deposit, `Caução · reserva de ${passenger.name} na carona ${route} (volta quando a viagem acontecer)`, 'caucao', canGoNegative);
       t.availableSeats = Number(t.availableSeats) - seats;
       tx.update('carpools', tripId, { availableSeats: t.availableSeats });
+      // PIN de embarque único nesta carona.
+      const used = new Set(tripBookings.map((b) => String(b.boardingPin || '')));
+      let pin = String(randomInt(1000, 10000));
+      while (used.has(pin)) pin = String(randomInt(1000, 10000));
       tx.set('carpoolBookings', bookingId, {
         id: bookingId,
         tripId,
+        driverId: t.driverId,
         passengerId: passenger.uid,
         passengerName: passenger.name,
         passengerPhone: passenger.phone,
         seats,
         amountCents: cents,
+        depositCents: deposit,
+        boardingPin: pin,
         status: 'paid',
         createdAt: this.iso(),
       });
@@ -1905,31 +1977,115 @@ export class FrocService {
     return this.carpoolView(trip, auth.uid, mine);
   }
 
+  /** Devolve ao motorista a caução que sobrou (centavos) com um título claro. */
+  private returnDeposit(tx: Tx, driver: UserDoc, cents: number, title: string) {
+    if (cents > 0) this.credit(tx, driver, cents, title, 'caucao');
+  }
+
+  /** Passageiro cancela: 100% (+24h ou arrependimento de 1h), 50% (24h–2h) ou 0% (menos de 2h). */
   async cancelCarpoolBooking(auth: AuthUser, tripId: string) {
     const mine = (await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid]], 300)).filter(
       (b) => b.tripId === tripId && b.status === 'paid',
     );
     if (!mine.length) fail(404, 'not_found', 'Você não tem reserva nesta carona.');
+    await this.settings();
     const trip = await this.store.transaction(async (tx) => {
       const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
       if (t.status !== 'open') fail(409, 'invalid_state', 'Esta carona já foi concluída ou cancelada.');
       const passenger = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Passageiro');
-      const bookings = [];
-      for (const b of mine) bookings.push(await this.mustGet<Doc>(tx, 'carpoolBookings', String(b.id), 'Reserva'));
+      const driver = await this.mustGet<UserDoc>(tx, 'users', String(t.driverId), 'Motorista');
+      const now = this.now().getTime();
+      const dep = this.carpoolDeparture(t);
+      const hours = dep === null ? Infinity : hoursUntil(dep, now);
+      const route = `${(t.origin as GeoPoint).city} → ${(t.destination as GeoPoint).city}`;
+      const pct = this.cfg.carpoolCommissionPercent;
       let seats = 0;
-      for (const b of bookings) {
+      for (const ref of mine) {
+        const b = await this.mustGet<Doc>(tx, 'carpoolBookings', String(ref.id), 'Reserva');
         if (b.status !== 'paid') continue;
         seats += Number(b.seats);
-        tx.update('carpoolBookings', String(b.id), { status: 'refunded', cancelledAt: this.iso() });
-        this.credit(tx, passenger, Number(b.amountCents), 'Estorno · reserva de carona cancelada', 'estorno');
+        const amount = Number(b.amountCents);
+        const refundPct = passengerRefundPct(hours, (now - Date.parse(String(b.createdAt))) / 60000);
+        const refund = Math.round((amount * refundPct) / 100);
+        const kept = amount - refund;
+        tx.update('carpoolBookings', String(b.id), { status: 'refunded', cancelledAt: this.iso(), cancelledBy: 'passenger', refundPct });
+        if (refund > 0) this.credit(tx, passenger, refund, refundPct === 100 ? `Estorno · reserva da carona ${route} cancelada` : `Estorno ${refundPct}% · reserva da carona ${route} cancelada com menos de 24h`, 'estorno');
+        if (kept > 0) {
+          // A parte que o passageiro perdeu vai para o motorista (menos a comissão das caronas).
+          this.creditEarning(tx, driver, this.providerCut(kept, pct), `Ganho · cancelamento de ${passenger.name} na carona ${route} (${100 - refundPct}% da reserva)`);
+          this.platformRevenue(tx, 'cancelamento_carona', kept, kept - this.providerCut(kept, pct));
+        }
+        this.returnDeposit(tx, driver, Number(b.depositCents || 0), `Caução devolvida · ${passenger.name} cancelou a reserva`);
       }
       t.availableSeats = Number(t.availableSeats) + seats;
       tx.update('carpools', tripId, { availableSeats: t.availableSeats });
       return t;
     });
-    return this.carpoolView(trip, auth.uid, []);
+    const after = await this.store.query<Doc>('carpoolBookings', [['passengerId', '==', auth.uid]], 300);
+    return this.carpoolView(trip, auth.uid, after);
   }
 
+  /** Embarque: o passageiro mostra o PIN e o motorista digita. Sem PIN, o dinheiro não vai para o motorista. */
+  async boardCarpool(auth: AuthUser, tripId: string, pinValue: unknown) {
+    const pin = String(pinValue ?? '').replace(/\D/g, '');
+    const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
+    const result = await this.store.transaction(async (tx) => {
+      const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
+      if (t.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da carona confirma o embarque.');
+      if (t.status !== 'open') fail(409, 'invalid_state', 'Esta carona já foi encerrada.');
+      const wrong = Number(t.wrongPins || 0);
+      if (wrong >= CARPOOL_POLICY.maxWrongPins) fail(423, 'pin_locked', 'Muitos PINs errados. Fale com o Atendimento para liberar o embarque.');
+      const ref = tripBookings.find((b) => String(b.boardingPin) === pin && b.status === 'paid');
+      if (!ref || pin.length !== 4) {
+        tx.update('carpools', tripId, { wrongPins: wrong + 1 });
+        return { ok: false as const, left: CARPOOL_POLICY.maxWrongPins - wrong - 1 };
+      }
+      const b = await this.mustGet<Doc>(tx, 'carpoolBookings', String(ref.id), 'Reserva');
+      if (b.status !== 'paid') fail(409, 'invalid_state', 'Esta reserva já foi confirmada ou cancelada.');
+      tx.update('carpoolBookings', String(b.id), { status: 'boarded', boardedAt: this.iso() });
+      tx.update('carpools', tripId, { wrongPins: 0 });
+      return { ok: true as const, name: String(b.passengerName) };
+    });
+    if (!result.ok) fail(400, 'wrong_pin', `PIN errado. Peça o PIN de 4 números no app do passageiro (${Math.max(0, result.left)} tentativa(s) restante(s)).`);
+    return this.tripForDriver(auth.uid, tripId);
+  }
+
+  /** Passageiro não apareceu: só depois de 15 min do horário e com o motorista no ponto de encontro (GPS). */
+  async carpoolNoShow(auth: AuthUser, tripId: string, bookingId: string, latValue: unknown, lngValue: unknown) {
+    const lat = num(latValue, -90, 90, 'latitude');
+    const lng = num(lngValue, -180, 180, 'longitude');
+    await this.store.transaction(async (tx) => {
+      const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
+      if (t.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da carona pode fazer isso.');
+      if (t.status !== 'open') fail(409, 'invalid_state', 'Esta carona já foi encerrada.');
+      const b = await this.mustGet<Doc>(tx, 'carpoolBookings', bookingId, 'Reserva');
+      if (b.tripId !== tripId || b.status !== 'paid') fail(409, 'invalid_state', 'Esta reserva não está aguardando embarque.');
+      const dep = this.carpoolDeparture(t);
+      const waitUntil = (dep ?? Infinity) + CARPOOL_POLICY.noShowWaitMinutes * 60000;
+      if (this.now().getTime() < waitUntil)
+        fail(409, 'too_early', `Espere ${CARPOOL_POLICY.noShowWaitMinutes} minutos depois do horário de saída no ponto de encontro antes de marcar que o passageiro não apareceu.`);
+      const origin = t.origin as GeoPoint;
+      const far = kmBetween({ lat, lng }, origin);
+      if (far > CARPOOL_POLICY.noShowRadiusKm)
+        fail(409, 'not_at_pickup', `Pelo GPS você está a ${far.toFixed(1).replace('.', ',')} km do ponto de encontro. Vá até lá para marcar que o passageiro não apareceu.`);
+      tx.update('carpoolBookings', bookingId, { status: 'no_show', noShowAt: this.iso(), noShowLat: lat, noShowLng: lng, noShowKm: round2(far) });
+    });
+    return this.tripForDriver(auth.uid, tripId);
+  }
+
+  private async tripForDriver(uid: string, tripId: string) {
+    const t = (await this.store.get<Doc>('carpools', tripId)) ?? fail(404, 'not_found', 'Carona não encontrada.');
+    const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
+    return this.carpoolView(t, uid, [], tripBookings);
+  }
+
+  /**
+   * Motorista encerra a carona.
+   *  - Viagem realizada: recebe só quem embarcou (PIN) ou faltou com prova de GPS; quem não tem prova
+   *    recebe o dinheiro de volta. A caução volta inteira.
+   *  - Cancelada pelo motorista: todos recebem 100%; com menos de 24h, multa de 10%/20% sai da caução e
+   *    vai inteira para o passageiro (a Froc não fica com nada). 3 multas em 30 dias = 7 dias suspenso.
+   */
   async finishCarpool(auth: AuthUser, tripId: string, outcome: 'completed' | 'cancelled') {
     await this.settings();
     const tripBookings = await this.store.query<Doc>('carpoolBookings', [['tripId', '==', tripId]], 50);
@@ -1937,12 +2093,15 @@ export class FrocService {
       const t = await this.mustGet<Doc>(tx, 'carpools', tripId, 'Carona');
       if (t.driverId !== auth.uid) fail(403, 'forbidden', 'Só o motorista da carona pode fazer isso.');
       if (t.status !== 'open') fail(409, 'invalid_state', 'Esta carona já foi encerrada.');
+      const now = this.now().getTime();
+      const dep = this.carpoolDeparture(t);
+      if (outcome === 'completed' && dep !== null && now < dep) fail(409, 'not_departed', 'A viagem ainda não saiu. Confirme depois do horário de saída.');
       const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
       const bookings: Doc[] = [];
       for (const b of tripBookings) bookings.push(await this.mustGet<Doc>(tx, 'carpoolBookings', String(b.id), 'Reserva'));
-      const paid = bookings.filter((b) => b.status === 'paid');
+      const active = bookings.filter((b) => CARPOOL_ACTIVE.includes(String(b.status)));
       const passengers = new Map<string, UserDoc>();
-      for (const b of paid) {
+      for (const b of active) {
         const pid = String(b.passengerId);
         if (!passengers.has(pid)) {
           const p = await tx.get<UserDoc>('users', pid);
@@ -1952,23 +2111,55 @@ export class FrocService {
       tx.update('carpools', tripId, { status: outcome, finishedAt: this.iso() });
       t.status = outcome;
       const route = `${(t.origin as GeoPoint).city} → ${(t.destination as GeoPoint).city}`;
+      const depositTotal = active.reduce((a, b) => a + Number(b.depositCents || 0), 0);
       if (outcome === 'completed') {
-        const total = paid.reduce((acc, b) => acc + Number(b.amountCents), 0);
-        for (const b of paid) tx.update('carpoolBookings', String(b.id), { status: 'released' });
+        const pct = this.cfg.carpoolCommissionPercent;
+        // Reservas antigas (antes do PIN de embarque existir) seguem a regra antiga: pagam ao concluir.
+        const proven = active.filter((b) => b.status === 'boarded' || b.status === 'no_show' || !b.boardingPin);
+        const total = proven.reduce((acc, b) => acc + Number(b.amountCents), 0);
+        for (const b of proven) tx.update('carpoolBookings', String(b.id), { status: 'released' });
         if (total > 0) {
           // Caronas: a Froc fica com 30% do valor total (configurável no Admin).
-          const pct = this.cfg.carpoolCommissionPercent;
           this.creditEarning(tx, driver, this.providerCut(total, pct), `Ganho · carona ${route} (${100 - pct}% líquido)`);
           this.platformRevenue(tx, 'carona', total, total - this.providerCut(total, pct));
-          for (const b of paid) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
+          for (const b of proven.filter((x) => x.status === 'boarded')) this.awardPoints(tx, passengers.get(String(b.passengerId)) ?? null, Number(b.amountCents));
         }
-        driver.completedTrips += 1;
-        tx.update('users', driver.uid, { completedTrips: driver.completedTrips });
-      } else {
-        for (const b of paid) {
-          tx.update('carpoolBookings', String(b.id), { status: 'refunded' });
+        // Sem PIN e sem prova de falta: o dinheiro volta para o passageiro.
+        for (const b of active.filter((x) => x.status === 'paid' && x.boardingPin)) {
+          tx.update('carpoolBookings', String(b.id), { status: 'refunded', refundReason: 'sem_embarque_confirmado' });
           const p = passengers.get(String(b.passengerId));
-          if (p) this.credit(tx, p, Number(b.amountCents), `Estorno · carona ${route} cancelada pelo motorista`, 'estorno');
+          if (p) this.credit(tx, p, Number(b.amountCents), `Estorno · carona ${route} sem embarque confirmado`, 'estorno');
+        }
+        this.returnDeposit(tx, driver, depositTotal, `Caução devolvida · carona ${route} realizada`);
+        if (proven.length) {
+          driver.completedTrips += 1;
+          driver.carpoolsDone = (driver.carpoolsDone ?? 0) + 1;
+          tx.update('users', driver.uid, { completedTrips: driver.completedTrips, carpoolsDone: driver.carpoolsDone });
+        }
+      } else {
+        const hours = dep === null ? Infinity : hoursUntil(dep, now);
+        const penaltyPct = driverPenaltyPct(hours);
+        let penaltyTotal = 0;
+        for (const b of active) {
+          tx.update('carpoolBookings', String(b.id), { status: 'refunded', cancelledBy: 'driver', penaltyPct });
+          const p = passengers.get(String(b.passengerId));
+          const penalty = Math.min(Number(b.depositCents || 0), Math.round((Number(b.amountCents) * penaltyPct) / 100));
+          penaltyTotal += penalty;
+          if (p) {
+            this.credit(tx, p, Number(b.amountCents), `Estorno · carona ${route} cancelada pelo motorista`, 'estorno');
+            if (penalty > 0) this.credit(tx, p, penalty, `Compensação · motorista cancelou a carona ${route} com menos de 24h`, 'compensacao');
+          }
+        }
+        this.returnDeposit(tx, driver, depositTotal - penaltyTotal, penaltyTotal > 0 ? `Caução devolvida (menos multa de ${penaltyPct}%) · carona ${route} cancelada` : `Caução devolvida · carona ${route} cancelada com antecedência`);
+        if (penaltyTotal > 0) {
+          // A multa sai do que ele pode sacar (senão recarga viraria saque).
+          const earned = driver.earnedCents ?? this.withdrawable(driver);
+          const { strikes, suspendedUntil } = strikesAfter((driver.carpoolStrikes as string[] | undefined) ?? [], now);
+          tx.update('users', driver.uid, {
+            earnedCents: Math.max(0, earned - penaltyTotal),
+            carpoolStrikes: strikes,
+            ...(suspendedUntil ? { carpoolSuspendedUntil: suspendedUntil } : {}),
+          });
         }
       }
       return t;

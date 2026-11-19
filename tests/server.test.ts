@@ -61,11 +61,18 @@ async function approve(user: AuthUser, kind: 'driver' | 'trucker') {
 const SP = { originId: 'sp-paulista', destinationId: 'sp-pinheiros' };
 const INTERCITY = { originId: 'sp-tiete', destinationId: 'br-campinas' };
 
+/** Relógio dos testes: hora real + avanço (para "passar" do horário de saída das caronas). */
+let clockOffset = 0;
+/** Data da carona (dd/mm/aaaa, Brasília) daqui a N dias. */
+const daysAhead = (n: number) => new Date(Date.now() + n * 864e5).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
 beforeEach(async () => {
   store = new MemoryStore();
   approvedPayments = new Map();
   saved.clear();
+  clockOffset = 0;
   svc = new FrocService(store, {
+    now: () => new Date(Date.now() + clockOffset),
     payments,
     adminEmails: ['dono@froc.com'],
     files: {
@@ -348,26 +355,31 @@ describe('3) caronas estilo BlaBlaCar', () => {
     await approve(driver, 'driver');
     await topUp(passenger, 200);
     await topUp(other, 200);
-    const trip = await svc.publishCarpool(driver, { ...INTERCITY, date: 'Sábado 20/12', departureTime: '07:30', totalSeats: 3, pricePerSeat: 40 });
+    const trip = await svc.publishCarpool(driver, { ...INTERCITY, date: daysAhead(5), departureTime: '07:30', totalSeats: 3, pricePerSeat: 40 });
     await svc.bookCarpool(passenger, trip.id, 2);
     await expectError(svc.bookCarpool(other, trip.id, 2), 'no_seats');
     await svc.bookCarpool(other, trip.id, 1);
     await svc.cancelCarpoolBooking(other, trip.id);
-    assert.equal(await balance(other), 200);
+    assert.equal(await balance(other), 200, 'cancelou com mais de 24h: 100% de volta');
     const driverView = (await svc.bootstrap(driver)).carpools.find((c) => c.id === trip.id)!;
-    assert.deepEqual(driverView.passengers, [{ name: 'Ana', seats: 2, phone: '' }]);
+    assert.equal(driverView.passengers?.length, 1);
+    assert.equal(driverView.passengers![0].name, 'Ana');
+    assert.equal(driverView.passengers![0].status, 'paid');
     const seenByOther = (await svc.bootstrap(other)).carpools.find((c) => c.id === trip.id)!;
     assert.equal(seenByOther.driverPhone, undefined, 'telefone do motorista só para quem reservou');
     assert.equal(driverView.availableSeats, 1);
+    const pin = (await svc.bootstrap(passenger)).carpools.find((c) => c.id === trip.id)!.boardingPins![0].pin;
+    clockOffset = 6 * 864e5; // passou do horário
+    await svc.boardCarpool(driver, trip.id, pin);
     await svc.finishCarpool(driver, trip.id, 'completed');
-    assert.equal(await balance(driver), 56, 'carona: Froc fica com 30% do total (R$ 80 → R$ 56)');
+    assert.equal(await balance(driver), 56, 'carona: Froc fica com 30% do total (R$ 80 → R$ 56); caução volta');
     assert.equal(await balance(passenger), 120);
   });
 
   test('motorista cancela a carona e todos recebem de volta', async () => {
     await approve(driver, 'driver');
     await topUp(passenger, 100);
-    const trip = await svc.publishCarpool(driver, { ...INTERCITY, date: 'Domingo', departureTime: '10:00', totalSeats: 2, pricePerSeat: 35 });
+    const trip = await svc.publishCarpool(driver, { ...INTERCITY, date: daysAhead(5), departureTime: '10:00', totalSeats: 2, pricePerSeat: 35 });
     await svc.bookCarpool(passenger, trip.id, 1);
     await svc.finishCarpool(driver, trip.id, 'cancelled');
     assert.equal(await balance(passenger), 100);

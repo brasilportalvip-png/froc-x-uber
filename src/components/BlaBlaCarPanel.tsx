@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Calendar, CheckCircle2, Music, PawPrint, Plus, ShieldCheck, Star, Users } from 'lucide-react';
 import { formatBRL } from '../data/locations.ts';
-import { choosePoint, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
+import { choosePoint, getCurrentCoords, isChoosePoint, isPlaceMissing, startPointFrom } from '../lib/currentLocation.ts';
+import { CARPOOL_POLICY, CARPOOL_POLICY_TEXT } from '../data/carpoolPolicy.ts';
 import type { CarpoolTrip, GeoPoint, UserRole } from '../types/mobility.ts';
 import { PlacePicker } from './PlacePicker.tsx';
 
@@ -15,6 +16,10 @@ interface BlaBlaCarPanelProps {
   /** Ações: cancelar a própria reserva (passageiro) ou concluir/cancelar a carona (motorista). */
   onCarpoolAction: (tripId: string, action: 'cancel-booking' | 'complete' | 'cancel') => Promise<void>;
   canPublish: boolean;
+  /** Motorista confirma o embarque com o PIN do passageiro. */
+  onBoardCarpool?: (tripId: string, pin: string) => Promise<void>;
+  /** Motorista marca que o passageiro não apareceu (com o GPS dele no ponto de encontro). */
+  onCarpoolNoShow?: (tripId: string, bookingId: string, lat: number, lng: number) => Promise<void>;
   onPublishCarpool: (payload: {
     originId: string;
     destinationId: string;
@@ -39,8 +44,14 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
   onBookCarpool,
   onPublishCarpool,
   onCarpoolAction,
+  onBoardCarpool,
+  onCarpoolNoShow,
   canPublish,
 }) => {
+  // Cancelar pede confirmação mostrando antes quanto volta / quanto é a multa.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [pinInput, setPinInput] = useState<Record<string, string>>({});
+  const [gpsError, setGpsError] = useState('');
   const [searchText, setSearchText] = useState('');
   const [seatsWanted, setSeatsWanted] = useState(1);
   const [showPublish, setShowPublish] = useState(role === 'driver' && canPublish);
@@ -192,6 +203,15 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
             </label>
           </div>
 
+          <details className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+            <summary className="font-bold cursor-pointer">Regras: caução de {CARPOOL_POLICY.driverDepositPct}% por reserva, cancelamento e PIN de embarque</summary>
+            <ul className="mt-2 space-y-1 list-disc pl-4">
+              {CARPOOL_POLICY_TEXT.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ul>
+          </details>
+
           <button
             type="submit"
             disabled={busyId === 'publish'}
@@ -224,6 +244,9 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
             </div>
           </div>
 
+          <p className="text-[11px] text-slate-600 dark:text-slate-300" data-testid="regra-cancelamento">
+            Cancelamento: 100% de volta até 24h antes, 50% até 2h antes e, depois disso, sem reembolso (desistência em até 1h depois de reservar é grátis). Se o motorista cancelar em cima da hora, você recebe 100% + compensação.
+          </p>
           <div className="space-y-3">
             {filtered.length === 0 && (
               <div className="rounded-2xl border border-slate-200 dark:border-slate-800 p-6 text-center text-sm text-slate-500">
@@ -320,39 +343,135 @@ export const BlaBlaCarPanel: React.FC<BlaBlaCarPanelProps> = ({
                       Sua carona · {trip.totalSeats - trip.availableSeats} de {trip.totalSeats} vagas reservadas
                     </div>
                     {(trip.passengers || []).map((p, i) => (
-                      <div key={i} className="text-slate-600 dark:text-slate-300">
-                        {p.name} · {p.seats} vaga(s)
+                      <div key={p.bookingId ?? i} className="flex items-center justify-between gap-2 text-slate-700 dark:text-slate-200">
+                        <span>
+                          {p.name} · {p.seats} vaga(s) ·{' '}
+                          <strong>{p.status === 'boarded' ? 'Embarcou ✓' : p.status === 'no_show' ? 'Não apareceu' : 'Aguardando embarque'}</strong>
+                        </span>
+                        {p.status === 'paid' && trip.departed && p.bookingId && onCarpoolNoShow && (
+                          <button
+                            type="button"
+                            className="px-2 min-h-[32px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer"
+                            onClick={async () => {
+                              setGpsError('');
+                              try {
+                                const c = await getCurrentCoords();
+                                await onCarpoolNoShow(trip.id, p.bookingId!, c.lat, c.lng);
+                              } catch {
+                                setGpsError('Ligue a localização do celular: o app confere pelo GPS se você está no ponto de encontro.');
+                              }
+                            }}
+                          >
+                            Não apareceu
+                          </button>
+                        )}
                       </div>
                     ))}
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onCarpoolAction(trip.id, 'complete')}
-                        className="flex-1 min-h-[38px] rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer"
+                    {(trip.passengers || []).some((p) => p.status === 'paid') && onBoardCarpool && (
+                      <form
+                        className="flex gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const pin = (pinInput[trip.id] || '').trim();
+                          if (pin.length === 4) void onBoardCarpool(trip.id, pin).then(() => setPinInput((m: Record<string, string>) => ({ ...m, [trip.id]: '' })));
+                        }}
                       >
-                        Viagem realizada · receber
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onCarpoolAction(trip.id, 'cancel')}
-                        className="px-3 min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
-                      >
-                        Cancelar carona
-                      </button>
+                        <input
+                          inputMode="numeric"
+                          maxLength={4}
+                          aria-label="PIN de embarque do passageiro"
+                          placeholder="PIN do passageiro"
+                          value={pinInput[trip.id] || ''}
+                          onChange={(e) => setPinInput((m: Record<string, string>) => ({ ...m, [trip.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                          className="w-36 min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 font-mono-num tracking-widest"
+                        />
+                        <button type="submit" className="flex-1 min-h-[38px] rounded-lg bg-slate-900 dark:bg-white dark:text-slate-900 text-white font-semibold cursor-pointer">
+                          Confirmar embarque
+                        </button>
+                      </form>
+                    )}
+                    {gpsError && <div role="alert" className="text-amber-700 dark:text-amber-300 font-semibold">{gpsError}</div>}
+                    {confirming === trip.id + ':cancel' ? (
+                      <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 p-2 space-y-2 text-amber-900 dark:text-amber-100">
+                        <div>
+                          {trip.cancelPreview?.penalty
+                            ? `Cancelar agora custa uma multa de ${trip.cancelPreview.penaltyPct}% (${formatBRL(trip.cancelPreview.penalty)}), que sai da sua caução e vai para os passageiros. Os passageiros recebem 100% de volta.`
+                            : 'Cancelar agora não tem multa. Os passageiros recebem 100% de volta e sua caução volta.'}
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => { setConfirming(null); void onCarpoolAction(trip.id, 'cancel'); }} className="flex-1 min-h-[36px] rounded-lg bg-red-600 text-white font-semibold cursor-pointer">
+                            Sim, cancelar a carona
+                          </button>
+                          <button type="button" onClick={() => setConfirming(null)} className="px-3 min-h-[36px] rounded-lg border border-slate-300 font-semibold cursor-pointer">
+                            Voltar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={!trip.departed}
+                          title={trip.departed ? '' : 'Disponível depois do horário de saída'}
+                          onClick={() => onCarpoolAction(trip.id, 'complete')}
+                          className="flex-1 min-h-[38px] rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer disabled:opacity-50"
+                        >
+                          {trip.departed ? 'Viagem realizada · receber' : 'Receber (depois da saída)'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirming(trip.id + ':cancel')}
+                          className="px-3 min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                        >
+                          Cancelar carona
+                        </button>
+                      </div>
+                    )}
+                    <div className="text-[11px] text-slate-500">
+                      Recebe quem embarcou com PIN ou faltou (marcado no ponto de encontro). Sem PIN, o valor volta para o passageiro.
                     </div>
                   </div>
                 )}
-                {trip.bookedByUserSeats > 0 && trip.status === 'open' && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void onCarpoolAction(trip.id, 'cancel-booking');
-                    }}
-                    className="w-full min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
-                  >
-                    Cancelar minha reserva (valor volta para a carteira)
-                  </button>
+                {trip.mine === 'owner' && trip.status === 'open' && (trip.boardingPins || []).length > 0 && (
+                  <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 p-3 text-xs space-y-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="font-semibold text-slate-900 dark:text-white">PIN de embarque (mostre ao motorista ao entrar no carro):</div>
+                    {(trip.boardingPins || []).map((b: { pin: string; seats: number; status: string }) => (
+                      <div key={b.pin} className="flex items-center gap-2">
+                        <span className="text-2xl font-extrabold font-mono-num tracking-[0.3em] text-emerald-700 dark:text-emerald-300">{b.pin}</span>
+                        <span>{b.seats} vaga(s) · {b.status === 'boarded' ? 'embarque confirmado ✓' : 'aguardando embarque'}</span>
+                      </div>
+                    ))}
+                    <div className="text-[11px] text-slate-500">Não passe o PIN antes de entrar no carro: é ele que libera o pagamento ao motorista.</div>
+                  </div>
+                )}
+                {trip.bookedByUserSeats > 0 && trip.status === 'open' && trip.cancelPreview?.paid !== undefined && (
+                  confirming === trip.id + ':booking' ? (
+                    <div role="alert" onClick={(e) => e.stopPropagation()} className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 p-2 space-y-2 text-xs text-amber-900 dark:text-amber-100">
+                      <div>
+                        Se cancelar agora você recebe <strong>{formatBRL(trip.cancelPreview.refund ?? 0)}</strong> de {formatBRL(trip.cancelPreview.paid ?? 0)}.
+                        {(trip.cancelPreview.refund ?? 0) < (trip.cancelPreview.paid ?? 0) && ' A diferença vai para o motorista, que reservou o lugar para você.'}
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => { setConfirming(null); void onCarpoolAction(trip.id, 'cancel-booking'); }} className="flex-1 min-h-[36px] rounded-lg bg-red-600 text-white font-semibold cursor-pointer">
+                          Sim, cancelar
+                        </button>
+                        <button type="button" onClick={() => setConfirming(null)} className="px-3 min-h-[36px] rounded-lg border border-slate-300 font-semibold cursor-pointer">
+                          Voltar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirming(trip.id + ':booking');
+                      }}
+                      className="w-full min-h-[38px] rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                    >
+                      Cancelar minha reserva
+                    </button>
+                  )
                 )}
               </div>
             ))}

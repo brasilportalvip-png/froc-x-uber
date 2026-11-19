@@ -9,7 +9,7 @@
  * Em caso de dúvida, a regra da prefeitura prevalece e a Froc consulta advogado.
  */
 
-export const LEGAL_UPDATED = '2026-11-16';
+export const LEGAL_UPDATED = '2026-11-19';
 
 export interface LegalSection {
   id: string;
@@ -206,8 +206,9 @@ export const HOW_IT_WORKS: { title: string; steps: string[] }[] = [
     title: 'Caronas (como BlaBlaCar)',
     steps: [
       'Motoristas aprovados publicam viagens entre cidades com data, horário, vagas e preço por vaga.',
-      'Você reserva pagando pela carteira; o valor fica retido.',
-      'Viagem feita, o motorista recebe. Cancelou, o dinheiro volta.',
+      'Você reserva pagando pela carteira; o valor fica retido. O motorista deixa uma caução de 20% de cada reserva.',
+      'No embarque você mostra o PIN de 4 números; com ele o motorista recebe quando a viagem acontece.',
+      'Cancelou com mais de 24h: 100% de volta. Entre 24h e 2h: 50%. Depois disso, sem reembolso. Se o motorista cancelar em cima da hora, você recebe 100% + compensação da caução dele.',
     ],
   },
   {

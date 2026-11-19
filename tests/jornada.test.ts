@@ -105,7 +105,8 @@ function assertMoneyConserved(step: string) {
     sum(all('indrive').map((r) => Number(r.escrowCents || 0))) +
     sum(all('emptyTrucks').map((r) => Number(r.escrowCents || 0))) +
     sum(all('freights').map((r) => Number(r.escrowCents || 0))) +
-    sum(all('carpoolBookings').filter((b) => b.status === 'paid').map((b) => Number(b.amountCents || 0)));
+    // Caronas: valor da vaga (passageiro) + caução do motorista ficam retidos até a viagem.
+    sum(all('carpoolBookings').filter((b) => ['paid', 'boarded', 'no_show'].includes(String(b.status))).map((b) => Number(b.amountCents || 0) + Number(b.depositCents || 0)));
   const froc = sum(all('platformLedger').map((l) => Number(l.feeCents || 0)));
   const saques = sum(all('withdrawals').filter((w) => w.status !== 'rejected').map((w) => Number(w.amountCents)));
   assert.equal(saldos + retido + froc + saques, entrou, `dinheiro não fecha depois de: ${step} (saldos ${saldos} + retido ${retido} + Froc ${froc} + saques ${saques} ≠ entrou ${entrou})`);
@@ -234,11 +235,16 @@ test('Jornada completa: cadastro → corridas → negociação → carona → fr
   assertMoneyConserved('negociação concluída');
 
   // ---------------------------------------------------------- 7. carona
-  const trip = await svc.publishCarpool(caio, { ...INTERCITY, date: 'Sábado', departureTime: '08:00', totalSeats: 3, pricePerSeat: 45 });
+  const trip = await svc.publishCarpool(caio, { ...INTERCITY, date: '21/11/2026', departureTime: '08:00', totalSeats: 3, pricePerSeat: 45 });
   await svc.bookCarpool(bia, trip.id, 2);
-  assertMoneyConserved('carona reservada');
+  assertMoneyConserved('carona reservada (vaga + caução retidas)');
+  const pin = (await svc.bootstrap(bia)).carpools.find((c) => c.id === trip.id)!.boardingPins![0].pin;
+  const voltaDoRelogio = clock;
+  clock = Date.parse('2026-11-21T11:05:00Z'); // sábado 8h05: saiu
+  await svc.boardCarpool(caio, trip.id, pin);
   await svc.finishCarpool(caio, trip.id, 'completed');
   assertMoneyConserved('carona concluída');
+  clock = voltaDoRelogio;
 
   // ---------------------------------------------------------- 8. frete
   const freight = await svc.createFreight(bia, { ...INTERCITY, estimatedWeightKg: 400, proposedBudget: 600, scheduledDate: 'Terça' });

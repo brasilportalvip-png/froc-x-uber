@@ -341,7 +341,17 @@ export default function App() {
   const handleBookCarpool = (tripId: string, seats: number) => run(() => post(`/api/carpools/${tripId}/book`, { seats }), 'Vaga reservada!');
   const handlePublishCarpool = (payload: object) => run(() => post('/api/carpools', payload), 'Carona publicada!');
   const handleCarpoolAction = (tripId: string, action: 'cancel-booking' | 'complete' | 'cancel') =>
-    run(() => post(`/api/carpools/${tripId}/${action}`), action === 'complete' ? 'Carona concluída. Ganhos na carteira!' : 'Cancelado. Valores devolvidos.');
+    run(
+      () => post(`/api/carpools/${tripId}/${action}`),
+      action === 'complete'
+        ? 'Carona concluída. Ganhos e caução na carteira!'
+        : action === 'cancel'
+          ? 'Carona cancelada. Os passageiros receberam o valor de volta.'
+          : 'Reserva cancelada. Veja no extrato quanto voltou.',
+    );
+  const handleBoardCarpool = (tripId: string, pin: string) => run(() => post(`/api/carpools/${tripId}/board`, { pin }), 'Embarque confirmado!');
+  const handleCarpoolNoShow = (tripId: string, bookingId: string, lat: number, lng: number) =>
+    run(() => post(`/api/carpools/${tripId}/no-show`, { bookingId, lat, lng }), 'Registrado: passageiro não apareceu.');
 
   const handlePublishEmptyTruck = (payload: object) => run(() => post('/api/empty-trucks', payload), 'Rota publicada na vitrine!');
   const handleReserveEmptyTruck = (id: string) => run(() => post(`/api/empty-trucks/${id}/reserve`), 'Caminhão reservado!');
@@ -776,6 +786,8 @@ export default function App() {
                     onBookCarpool={handleBookCarpool}
                     onPublishCarpool={handlePublishCarpool}
                     onCarpoolAction={handleCarpoolAction}
+                    onBoardCarpool={handleBoardCarpool}
+                    onCarpoolNoShow={handleCarpoolNoShow}
                     canPublish={state.profile.driverStatus === 'approved'}
                   />
                 )}

@@ -11,6 +11,7 @@ import { REDEEM_VALUE_CENTS } from '../settings.ts';
 import { legalKnowledgeText } from '../../src/data/legal.ts';
 import { policyKnowledgeText } from '../../src/data/ridePolicy.ts';
 import { KM_BASE, KM_RANGE, PRICING_TEXT } from '../../src/data/pricing.ts';
+import { CARPOOL_POLICY_TEXT } from '../../src/data/carpoolPolicy.ts';
 
 export const FROC_VOICE = `
 [VOZ DA MARCA FROC — vale para todos os agentes]
@@ -64,7 +65,7 @@ ${internal ? `- GANHO DA FROC (CONFIDENCIAL — só para o dono e a equipe; nunc
 
 2) NEGOCIAR (estilo inDrive): o passageiro propõe o valor (há um piso mínimo calculado pela distância e tempo); motoristas próximos mandam ofertas; o passageiro aceita uma. Pedidos sem acordo expiram em ${cfg.indriveOpenTimeoutMin} min.
 
-3) CARONAS (estilo BlaBlaCar): só motorista aprovado publica. Cidade de saída e destino em qualquer lugar do Brasil, data, horário, preço por vaga (o motorista escolhe livremente entre R$ 5 e R$ 2.000) e vagas (1 a 6), preferências (música, pet). Passageiros reservam pagando com a carteira; o valor fica retido. O passageiro pode cancelar a reserva (valor volta). O motorista toca "Viagem realizada · receber" e recebe; se cancelar a carona, todos são reembolsados.
+3) CARONAS (estilo BlaBlaCar): só motorista aprovado publica. Cidade de saída e destino em qualquer lugar do Brasil, data, horário, preço por vaga (o motorista escolhe livremente entre R$ 5 e R$ 2.000) e vagas (1 a 6), preferências (música, pet). Passageiros reservam pagando com a carteira; o valor fica retido. REGRAS DE CANCELAMENTO, CAUÇÃO E EMBARQUE: ${CARPOOL_POLICY_TEXT.join(' ')}
 
 4) CARGAS (fretes, mudanças e retorno vazio): aceita caminhões, vans, furgões, pick-ups, utilitários e carro com carretinha. O transportador precisa de cadastro aprovado com CNH, CRLV, comprovante ANTT e número do RNTRC.
 Veículos aceitos e capacidade aproximada:
