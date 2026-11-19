@@ -6,12 +6,13 @@
  *  3. Pedido de corrida em dobro (toque duplo) cobrava duas vezes.
  *  4. Foto de perfil de quem tem viagem agendada aberta ficava visível para qualquer conta.
  *  5. Token com "kid" inventado fazia o servidor buscar as chaves do Google a cada requisição.
+ *  6. Escala Brasil inteiro: buscas por região (zonas) e prazos por minuto, nunca o país inteiro com limite.
  * Rodar: npm test
  */
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '../server/store.ts';
-import { AppError, FrocService, STALE_ACCEPTED_MIN } from '../server/services.ts';
+import { AppError, FrocService, STALE_ACCEPTED_MIN, minuteKey } from '../server/services.ts';
 import type { AuthUser } from '../server/services.ts';
 import { createGridGeo } from '../server/geo.ts';
 import { createTokenVerifier } from '../server/firebaseToken.ts';
@@ -163,5 +164,55 @@ describe('5. login: chave desconhecida não sobrecarrega', () => {
     t += 61;
     await assert.rejects(verify(token));
     assert.equal(fetches, 2);
+  });
+});
+
+describe('6. escala Brasil inteiro (3 milhões de corridas por dia)', () => {
+  const MIN = 60_000;
+  const RIO = { lat: -22.9068, lng: -43.1729 };
+  const PAULISTA = { lat: -23.5614, lng: -46.6559 };
+  const geo = createGridGeo();
+  const cellRio = geo.cellOf(RIO.lat, RIO.lng);
+
+  /** Milhares de pedidos procurando motorista no Rio, gravados ANTES do pedido de São Paulo. */
+  async function lotarRio(n: number, extra: Record<string, unknown> = {}) {
+    for (let i = 0; i < n; i++)
+      await store.set('rides', `rio-${i}`, { id: `rio-${i}`, passengerId: `x${i}`, status: 'searching', categoryId: 'froc_x', originCell: cellRio, originZone: geo.zoneOf(cellRio), origin: { ...RIO, name: 'Rio' }, destination: { ...RIO, name: 'Rio' }, createdAt: new Date(clock).toISOString(), messages: [], escrowCents: 0, ...extra });
+  }
+
+  test('motorista em SP recebe o pedido de SP mesmo com 2.000 pedidos abertos no Rio', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    await lotarRio(2000);
+    await svc.updateProfile(caio, { driverOnline: true });
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    const r = await svc.createRide(ana, { ...SP, categoryId: 'froc_x' });
+    const feed = (await svc.bootstrap(caio)).rides.filter((x) => x.status === 'searching');
+    assert.ok(feed.some((x) => x.id === r.id), 'o pedido de SP chegou ao motorista de SP');
+    assert.ok(!feed.some((x) => x.id.startsWith('rio-')), 'pedidos do Rio não aparecem para quem está em SP');
+  });
+
+  test('passageiro em SP vê o carro perto dele mesmo com 2.000 motoristas online no Rio', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    for (let i = 0; i < 2000; i++)
+      await store.set('users', `mrio-${i}`, { uid: `mrio-${i}`, driverOnline: true, driverStatus: 'approved', driverLat: RIO.lat, driverLng: RIO.lng, driverCell: cellRio, driverZone: geo.zoneOf(cellRio), locationAt: new Date(clock).toISOString() });
+    await svc.updateProfile(caio, { driverOnline: true });
+    await svc.updateLocation(caio, PAULISTA.lat, PAULISTA.lng);
+    const { drivers } = await svc.nearbyDrivers(ana, PAULISTA.lat, PAULISTA.lng);
+    assert.equal(drivers.length, 1);
+  });
+
+  test('1.200 pedidos sem motorista vencendo no mesmo minuto: todos cancelados e estornados', async () => {
+    clock = Date.parse('2026-11-18T18:00:00Z');
+    await svc.sweep(true);
+    await lotarRio(1200, { searchDeadline: minuteKey(clock + 10 * MIN) });
+    clock += 12 * MIN;
+    await svc.sweep(true);
+    const still = (await store.query('rides', [['status', '==', 'searching']], 5000)).length;
+    assert.equal(still, 0);
+  });
+
+  test('relatório do Admin conta todos os motoristas online (não para em 1.000)', async () => {
+    for (let i = 0; i < 1500; i++) await store.set('users', `on-${i}`, { uid: `on-${i}`, driverOnline: true });
+    assert.equal((await svc.adminReports(admin, 30)).driversOnline, 1500);
   });
 });
