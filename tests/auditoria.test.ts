@@ -10,6 +10,7 @@
  *  7. Vitrine (caronas, retorno vazio, fretes, viagens agendadas): perto da pessoa + busca por cidade.
  *  8. Tempo real: avisos no Firebase (só um número), regras fechadas e índices das buscas.
  *  9. Histórico grande não esconde a corrida atual nem o extrato novo; servidor novo não trava.
+ * 10. Vencidos somem: carona, frete, retorno vazio e viagem agendada.
  * Rodar: npm test
  */
 import { test, describe, beforeEach } from 'node:test';
@@ -387,7 +388,8 @@ describe('9. histórico grande não esconde nada (pente fino 2)', () => {
     const fresh = new FrocService(store, { now: () => new Date(clock), geo: createGridGeo() });
     await fresh.sweep(false);
     store.query = orig;
-    assert.ok(n <= 40, `fez ${n} consultas`);
+    // 8 tipos de prazo × 6 minutos, em paralelo (antes: 724 consultas uma depois da outra).
+    assert.ok(n <= 60, `fez ${n} consultas`);
   });
 
   test('tempo real: quem fez a ação não recebe aviso de si mesmo (só a outra pessoa)', async () => {
@@ -407,5 +409,66 @@ describe('9. histórico grande não esconde nada (pente fino 2)', () => {
     const idx = JSON.parse(readFileSync(new URL('../firestore.indexes.json', import.meta.url), 'utf8')).indexes as { collectionGroup: string; fields: { fieldPath: string; order: string }[] }[];
     const has = (c: string, f: string) => idx.some((i) => i.collectionGroup === c && i.fields[0].fieldPath === f && i.fields[1]?.fieldPath === 'createdAt' && i.fields[1]?.order === 'DESCENDING');
     for (const [c, f] of [['froc_rides', 'passengerId'], ['froc_rides', 'driverId'], ['froc_rides', 'merchantId'], ['froc_transactions', 'uid'], ['froc_withdrawals', 'uid'], ['froc_indrive', 'passengerId'], ['froc_carpoolBookings', 'passengerId']]) assert.ok(has(c, f), `${c} ${f}`);
+  });
+});
+
+describe('10. vencidos somem (carona, frete, retorno vazio, viagem agendada)', () => {
+  const PAULISTA = { lat: -23.5614, lng: -46.6559 };
+
+  test('carona sem reserva: some da lista na hora em que vence e é encerrada sozinha', async () => {
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    assert.ok((await svc.bootstrap(ana, PAULISTA)).carpools.some((c) => c.id === t.id));
+    clock = SAIDA_MS + 60_000;
+    assert.ok(!(await svc.bootstrap(ana, PAULISTA)).carpools.some((c) => c.id === t.id), 'vencida não aparece para o passageiro');
+    clock = SAIDA_MS + 3 * 60_000;
+    await svc.sweep(true);
+    assert.equal((await store.get('carpools', t.id))!.cancelledBy, 'vencida');
+    assert.ok(!(await svc.bootstrap(caio)).carpools.some((c) => c.id === t.id), 'nem para o motorista (sem passageiro)');
+  });
+
+  test('carona COM passageiro: some da vitrine, mas motorista e passageiro continuam vendo para encerrar', async () => {
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    await svc.bookCarpool(ana, t.id, 1);
+    clock = SAIDA_MS + 3 * 60_000;
+    await svc.sweep(true);
+    assert.equal((await store.get('carpools', t.id))!.status, 'open', 'o motorista encerra (regra do dono)');
+    assert.ok(!(await svc.bootstrap(bia, PAULISTA)).carpools.some((c) => c.id === t.id), 'outra pessoa não vê');
+    assert.ok((await svc.bootstrap(caio)).carpools.some((c) => c.id === t.id), 'motorista vê');
+    assert.ok((await svc.bootstrap(ana)).carpools.some((c) => c.id === t.id), 'passageira vê');
+    // embarcou com o PIN: continua vendo
+    const pin = String((await store.query('carpoolBookings', [['tripId', '==', t.id]]))[0].boardingPin);
+    await svc.boardCarpool(caio, t.id, pin);
+    assert.ok((await svc.bootstrap(ana)).carpools.some((c) => c.id === t.id), 'passageira embarcada vê');
+  });
+
+  test('frete e retorno vazio: entendem "20/12 às 8h", "sábado 08:00"; vencidos somem e encerram', async () => {
+    await store.update('users', bia.uid, { truckerStatus: 'approved', truckType: '3/4 Baú', truckPlate: 'XYZ1A23', phone: '11977776666' });
+    const truck = await svc.publishEmptyTruck(bia, { ...ROTA, departureDate: '28/11 às 8h', availableTons: 2, availableCubicM: 10, emptyReturnPrice: 900 });
+    const frete = await svc.createFreight(ana, { ...ROTA, estimatedWeightKg: 300, proposedBudget: 800, scheduledDate: 'sábado 08:00' });
+    assert.ok((await store.get('emptyTrucks', truck.id))!.departureAt);
+    assert.ok((await store.get('freights', frete.id))!.scheduledAt);
+    await erro(svc.createFreight(ana, { ...ROTA, estimatedWeightKg: 300, proposedBudget: 800, scheduledDate: 'qualquer dia' }), 'invalid_date');
+    clock = Date.parse('2026-12-01T12:00:00Z');
+    const v = await svc.bootstrap(caio, PAULISTA);
+    assert.ok(!v.emptyTrucks.some((x) => x.id === truck.id) && !v.freights.some((x) => x.id === frete.id));
+    await svc.sweep(true);
+    assert.equal((await store.get('emptyTrucks', truck.id))!.cancelledBy, 'vencida');
+    assert.equal((await store.get('freights', frete.id))!.cancelledBy, 'vencida');
+    assert.ok(!(await svc.bootstrap(ana)).freights.some((x) => x.id === frete.id), 'nem na lista de quem criou');
+  });
+
+  test('busca por cidade não mostra vencidos', async () => {
+    const t = await svc.publishCarpool(caio, { ...ROTA, date: SAIDA, departureTime: '08:00', totalSeats: 4, pricePerSeat: 50 });
+    assert.ok((await svc.searchListings(ana, 'carpools', 'Campinas')).items.some((c) => (c as { id: string }).id === t.id));
+    clock = SAIDA_MS + 60_000;
+    assert.ok(!(await svc.searchListings(ana, 'carpools', 'Campinas')).items.some((c) => (c as { id: string }).id === t.id));
+  });
+
+  test('viagem agendada que venceu sem proposta aceita não fica na lista de quem pediu', async () => {
+    const req = await svc.createInDrive(ana, { ...ROTA, date: SAIDA, time: '08:00', passengerOffer: 400, shareMode: 'individual', seats: 1 });
+    clock = SAIDA_MS + 3 * 60_000;
+    await svc.sweep(true);
+    assert.equal((await store.get('indrive', req.id))!.status, 'cancelled');
+    assert.ok(!(await svc.bootstrap(ana)).indriveRequests.some((r) => r.id === req.id));
   });
 });

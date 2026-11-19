@@ -122,7 +122,7 @@ export const TruckFreightPanel: React.FC<TruckFreightPanelProps> = ({
   const [bidPrices, setBidPrices] = useState<Record<string, string>>({});
   const [bidNotes, setBidNotes] = useState<Record<string, string>>({});
 
-  const allTrucks = useCitySearch('emptyTrucks', searchCity, emptyTrucks);
+  const allTrucks = useCitySearch<EmptyTruckRoute>('emptyTrucks', searchCity, emptyTrucks);
   const filteredTrucks = useMemo(() => {
     const q = searchCity.trim().toLowerCase();
     return allTrucks.filter((t) => {

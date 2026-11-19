@@ -96,3 +96,59 @@ export function kmBetween(a: { lat: number; lng: number }, b: { lat: number; lng
   const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
+
+/**
+ * Data e hora digitadas livremente (frete e retorno vazio): "20/12 às 22h", "20/12/2026 8:30",
+ * "dia 05/01 às 7h30", "20/12". Horário de Brasília. Sem ano: a próxima ocorrência (a partir de
+ * 2 dias atrás de `refMs`). Sem hora: 23:59 do dia (vence no fim do dia). Não entendeu: null.
+ */
+export function dataHoraLivreMs(texto: string, refMs: number): number | null {
+  const t = String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const d = /(\d{1,2})\s*[/.-]\s*(\d{1,2})(?:\s*[/.-]\s*(\d{2,4}))?/.exec(t);
+  if (!d) return diaRelativoMs(t, refMs);
+  const day = Number(d[1]);
+  const month = Number(d[2]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const resto = t.slice(d.index + d[0].length);
+  const h = /(\d{1,2})\s*(?:h|:|hs|horas?)\s*(\d{2})?/.exec(resto);
+  const hh = h ? Number(h[1]) : 23;
+  const mm = h ? Number(h[2] || 0) : 59;
+  if (hh > 23 || mm > 59) return null;
+  const at = (year: number) => departureMs(`${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`, `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
+  if (d[3]) {
+    const y = Number(d[3]);
+    return at(y < 100 ? 2000 + y : y);
+  }
+  const refYear = new Date(refMs - 3 * 3600_000).getUTCFullYear();
+  for (const y of [refYear, refYear + 1]) {
+    const ms = at(y);
+    if (ms !== null && ms >= refMs - 2 * 864e5) return ms;
+  }
+  return null;
+}
+
+const DIAS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+
+/** "hoje 18h", "amanhã 06:00", "sábado 08:00" (próxima ocorrência), horário de Brasília. */
+function diaRelativoMs(t: string, refMs: number): number | null {
+  const h = /(\d{1,2})\s*(?:h|:|hs|horas?)\s*(\d{2})?/.exec(t);
+  const hh = h ? Number(h[1]) : 23;
+  const mm = h ? Number(h[2] || 0) : 59;
+  if (hh > 23 || mm > 59) return null;
+  const local = new Date(refMs - 3 * 3600_000); // "relógio" de Brasília em UTC
+  const base = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), hh + 3, mm);
+  let add: number | null = null;
+  if (/\bdepois de amanha\b/.test(t)) add = 2;
+  else if (/\bamanha\b/.test(t)) add = 1;
+  else if (/\bhoje\b/.test(t)) add = 0;
+  else {
+    const i = DIAS.findIndex((dia) => new RegExp(`\\b${dia}`).test(t));
+    if (i < 0) return null;
+    add = (i - local.getUTCDay() + 7) % 7;
+    if (add === 0 && base <= refMs) add = 7;
+  }
+  return base + add * 864e5;
+}
