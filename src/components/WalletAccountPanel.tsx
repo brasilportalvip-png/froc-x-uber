@@ -3,6 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, Banknote, LogOut, QrCode, Wallet } from 'l
 import { formatBRL } from '../data/locations.ts';
 import type { UserProfile, WalletTransaction, MyWithdrawalView } from '../types/mobility.ts';
 import { PIX_KEY_LABELS, isAmbiguousPixKey, pixKeyKind } from '../lib/pixKey.ts';
+import { MIN_WITHDRAWAL_REAIS, checkWithdrawal, withdrawBlockedReason } from '../lib/withdrawForm.ts';
 import { ProviderOnboarding } from './ProviderOnboarding.tsx';
 import { resendVerification } from '../lib/session.ts';
 
@@ -46,6 +47,8 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   const [pixKeyType, setPixKeyType] = useState('cpf');
   const withdrawable = profile.withdrawableBalance ?? 0;
   const myWithdrawals: MyWithdrawalView[] = withdrawals ?? [];
+  const [withdrawError, setWithdrawError] = useState('');
+  const withdrawBlocked = withdrawBlockedReason(withdrawable);
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone);
   const [city, setCity] = useState(profile.city);
@@ -132,10 +135,19 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
 
       {(isProvider || withdrawable > 0) && (
         <form
+          noValidate
+          data-testid="form-pix"
           onSubmit={(e) => {
             e.preventDefault();
+            // Confere aqui e explica o motivo (o navegador barrava em silêncio).
+            const check = checkWithdrawal(withdrawAmount, withdrawable, pixKey);
+            if (!check.ok) {
+              setWithdrawError(check.error);
+              return;
+            }
+            setWithdrawError('');
             void run('withdraw', async () => {
-              await onWithdraw(Number(withdrawAmount), pixKey, pixKeyType);
+              await onWithdraw(check.amount, pixKey, pixKeyType);
               setWithdrawAmount('');
             });
           }}
@@ -150,17 +162,18 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
           </div>
           <div className="flex gap-2">
             <input
-              required
-              type="number"
-              min={20}
-              max={withdrawable || undefined}
-              step="0.01"
-              placeholder="Valor (mín. R$ 20)"
+              type="text"
+              inputMode="decimal"
+              aria-label="Valor do Pix"
+              placeholder={`Valor (mín. R$ ${MIN_WITHDRAWAL_REAIS})`}
               value={withdrawAmount}
-              onChange={(e) => setWithdrawAmount(e.target.value)}
+              onChange={(e) => {
+                setWithdrawAmount(e.target.value);
+                setWithdrawError('');
+              }}
               className="w-36 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 font-mono-num"
             />
-            <button type="button" onClick={() => setWithdrawAmount(withdrawable.toFixed(2))} className="px-3 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 font-semibold cursor-pointer">
+            <button type="button" onClick={() => setWithdrawAmount(withdrawable.toFixed(2).replace('.', ','))} className="px-3 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 font-semibold cursor-pointer">
               Tudo
             </button>
           </div>
@@ -173,20 +186,25 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
               <option value="aleatoria">Aleatória</option>
             </select>
             <input
-              required
               aria-label="Chave Pix de destino"
               placeholder="Chave Pix de destino"
               value={pixKey}
               onChange={(e) => {
                 const value = e.target.value;
                 setPixKey(value);
+                setWithdrawError('');
                 // O tipo acompanha a chave digitada (e-mail, CNPJ, aleatória, +55...). 11 números: a pessoa escolhe CPF ou celular.
                 const kind = pixKeyKind(value);
                 if (kind && !(isAmbiguousPixKey(value) && (pixKeyType === 'cpf' || pixKeyType === 'telefone'))) setPixKeyType(kind);
               }} className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3" />
           </div>
-          <button type="submit" disabled={busy === 'withdraw' || withdrawable < 20} className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-60 cursor-pointer">
-            {busy === 'withdraw' ? 'Solicitando...' : 'Transferir por Pix'}
+          {(withdrawError || withdrawBlocked) && (
+            <div role="alert" data-testid="erro-pix" className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-2 font-semibold">
+              {withdrawError || withdrawBlocked}
+            </div>
+          )}
+          <button type="submit" disabled={busy === 'withdraw' || Boolean(withdrawBlocked)} className="w-full min-h-[40px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-60 cursor-pointer">
+            {busy === 'withdraw' ? 'Solicitando...' : withdrawBlocked ? `Pix liberado a partir de R$ ${MIN_WITHDRAWAL_REAIS}` : 'Transferir por Pix'}
           </button>
           <p className="text-[11px] text-slate-500">
             Só os ganhos (corridas, entregas, fretes e caronas) podem ir para Pix; saldo de recarga fica para usar no app. Isso impede o golpe de recarregar com cartão roubado e sacar.
