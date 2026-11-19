@@ -1,3 +1,5 @@
+import { ProfilePhoto } from './ProfilePhoto.tsx';
+import { PhotoGate } from './FaceGates.tsx';
 import React, { useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, LogOut, QrCode, Wallet } from 'lucide-react';
 import { formatBRL } from '../data/locations.ts';
@@ -26,6 +28,8 @@ interface WalletAccountPanelProps {
   onApply: (kind: 'driver' | 'trucker', data: Record<string, unknown>) => Promise<void>;
   onLogout: () => Promise<void>;
   onRedeem: () => Promise<void>;
+  /** Recarrega os dados depois de trocar a foto ou fazer o reconhecimento facial. */
+  onRefresh?: () => Promise<void> | void;
 }
 
 export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
@@ -40,7 +44,9 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
   onApply,
   onLogout,
   onRedeem,
+  onRefresh,
 }) => {
+  const [changingPhoto, setChangingPhoto] = useState(false);
   const [topupAmount, setTopupAmount] = useState('50');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [pixKey, setPixKey] = useState('');
@@ -263,6 +269,25 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
         className="rounded-2xl bg-white dark:bg-[#111013] border border-slate-200 dark:border-slate-800 p-4 space-y-2.5 text-xs"
       >
         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Meus dados</h4>
+        <div className="flex items-center gap-3" data-testid="minha-foto">
+          <ProfilePhoto uid={profile.uid} size={64} version={profile.photoAt} alt="Minha foto" />
+          <div className="space-y-1">
+            <div className="text-xs font-semibold text-slate-900 dark:text-white">{profile.hasPhoto ? 'Sua foto de identificação' : 'Você ainda não tem foto'}</div>
+            <button type="button" onClick={() => setChangingPhoto(true)} className="min-h-[32px] px-3 rounded-lg border border-emerald-600 text-emerald-700 dark:text-emerald-300 text-xs font-bold cursor-pointer">
+              {profile.hasPhoto ? 'Trocar foto' : 'Adicionar foto'}
+            </button>
+          </div>
+        </div>
+        {changingPhoto && (
+          <PhotoGate
+            mode="change"
+            onClose={() => setChangingPhoto(false)}
+            onDone={async () => {
+              setChangingPhoto(false);
+              await onRefresh?.();
+            }}
+          />
+        )}
         <div className="text-[11px] text-slate-500">{profile.email}{profile.emailVerified ? ' · verificado' : ' · e-mail ainda não confirmado'}</div>
         {profile.cpfMasked && (
           <div className="text-[11px] text-slate-600 dark:text-slate-300">
@@ -317,7 +342,7 @@ export const WalletAccountPanel: React.FC<WalletAccountPanelProps> = ({
 
       <div className="text-[11px] text-slate-500">Sua nota como passageiro: ★ {profile.passengerRating}</div>
 
-      <ProviderOnboarding kind="driver" profile={profile} onUpload={onUploadDocument} onApply={onApply} />
+      <ProviderOnboarding kind="driver" profile={profile} onUpload={onUploadDocument} onApply={onApply} onRefresh={onRefresh} />
       <ProviderOnboarding kind="trucker" profile={profile} onUpload={onUploadDocument} onApply={onApply} />
 
       <button

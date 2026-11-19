@@ -21,6 +21,8 @@ import { privateTripFloor } from '../src/data/privateTrips.ts';
 import { CARPOOL_POLICY, departureMs, depositCentsFor, driverPenaltyPct, hoursUntil, kmBetween, passengerRefundPct, strikesAfter } from '../src/data/carpoolPolicy.ts';
 import type { PriceBreakdown, RainLevel, RideCategoryKey, RiskZoneLike } from '../src/data/pricing.ts';
 import type { RainLookup } from './weather.ts';
+import type { FaceChecker, Img } from './faceCheck.ts';
+import { FACE_CHECK_EVERY_MS, decideFaceCheck, photoProblem } from './faceCheck.ts';
 import { ARRIVAL_RADIUS_KM, LATE_GRACE_MIN, NO_SHOW_SEC, RIDE_POLICY_VERSION, cancelFeePercent, waitingFeePercent } from '../src/data/ridePolicy.ts';
 import { formatCnpj, isValidCnpj, newWebhookSecret, validateWebhookUrl } from './merchants.ts';
 import type { WebhookDispatcher } from './merchants.ts';
@@ -180,6 +182,11 @@ export interface ServiceDeps {
    * Em produção required=true; os testes antigos ligam só quando testam isso.
    */
   identity?: { required?: boolean; verify?: CpfVerifier };
+  /**
+   * Foto de perfil obrigatória (todos) e reconhecimento facial do motorista (cadastro + a cada 2h online).
+   * FOTO_OBRIGATORIA=nao desliga (só emergência). Sem `checker`, as fotos são aceitas e a equipe confere.
+   */
+  faces?: { required?: boolean; checker?: FaceChecker };
   /** Envio automático de Pix (saques). Sem ele, a Equipe IA aprova e o Pix fica "a enviar". */
   payouts?: PayoutGateway;
   /** Consulta pública de CNPJ (aprovação automática de lojas). */
@@ -213,6 +220,15 @@ interface UserDoc extends Doc {
   /** Cancelamentos de carona com multa (ISO) e suspensão de publicar caronas. */
   carpoolStrikes?: string[];
   carpoolSuspendedUntil?: string;
+  /** Foto de perfil (identificação) e reconhecimento facial do motorista. */
+  photoPath?: string;
+  photoAt?: string;
+  faceRefPath?: string;
+  faceEnrolledAt?: string;
+  faceCnhMatch?: string;
+  lastFaceCheckAt?: string;
+  faceFails?: number;
+  faceBlocked?: boolean;
   driverOnline: boolean;
   driverVehicle: string;
   driverPlate: string;
@@ -566,6 +582,13 @@ export class FrocService {
       identityDocCheck: user.aiDocCheck ? { status: String(user.aiDocCheck.status), reasons: (user.aiDocCheck.reasons as string[]) || [] } : null,
       merchantStatus: user.merchantStatus || 'none',
       merchant: this.merchantView(user),
+      photoRequired: Boolean(this.deps.faces?.required),
+      hasPhoto: Boolean(user.photoPath),
+      photoAt: user.photoAt || '',
+      faceEnrolled: Boolean(user.faceRefPath),
+      faceCheckDue: this.faceCheckDue(user),
+      faceCheckDueAt: user.lastFaceCheckAt ? new Date(Date.parse(user.lastFaceCheckAt) + FACE_CHECK_EVERY_MS).toISOString() : '',
+      faceBlocked: Boolean(user.faceBlocked),
     };
   }
 
@@ -595,7 +618,11 @@ export class FrocService {
     if ('driverOnline' in patch) {
       if (patch.driverOnline === true && user.driverStatus !== 'approved' && user.truckerStatus !== 'approved')
         fail(403, 'not_approved', 'Seu cadastro de motorista ainda não foi aprovado.');
-      if (patch.driverOnline === true) this.identityGate(user);
+      if (patch.driverOnline === true) {
+        this.identityGate(user);
+        // Quem vai trabalhar precisa estar com o rosto conferido (a cada 2h).
+        if (user.driverStatus === 'approved') this.assertFaceOk(user);
+      }
       if (patch.driverOnline === true && user.cnhExpiry && user.cnhExpiry < this.iso().slice(0, 10))
         fail(403, 'cnh_expired', 'Sua CNH venceu. Envie a CNH nova pelo Atendimento para voltar a ficar online.');
       next.driverOnline = patch.driverOnline === true;
@@ -874,6 +901,9 @@ export class FrocService {
     if (kind === 'merchant') return this.applyAsMerchant(auth, body);
     if (kind !== 'driver' && kind !== 'trucker') return fail(400, 'invalid_kind', 'Tipo de cadastro inválido.');
     const cfg = await this.settings();
+    // Motorista: o reconhecimento facial com a câmera vem antes (ele também vira a foto de perfil).
+    if (kind === 'driver' && this.deps.faces?.required && !(await this.ensureUser(auth)).faceRefPath)
+      fail(400, 'face_enroll_required', 'Faça o reconhecimento facial com a câmera antes de enviar o cadastro.');
     const user = await this.identityGateFor(auth);
     const status = kind === 'driver' ? user.driverStatus : user.truckerStatus;
     if (status === 'approved') fail(409, 'already_approved', 'Cadastro já aprovado.');
@@ -999,9 +1029,195 @@ export class FrocService {
 
   /** Sem CPF confirmado, a pessoa não pede nem oferece serviços (quando o CPF é obrigatório). */
   private identityGate(user: UserDoc) {
-    if (!this.deps.identity?.required) return;
-    if (user.cpfStatus === 'basic' || user.cpfStatus === 'verified') return;
-    fail(403, 'cpf_required', 'Confirme seu CPF na aba Conta para usar a Froc. Leva 1 minuto e protege motoristas e passageiros.');
+    if (this.deps.identity?.required && user.cpfStatus !== 'basic' && user.cpfStatus !== 'verified')
+      fail(403, 'cpf_required', 'Confirme seu CPF na aba Conta para usar a Froc. Leva 1 minuto e protege motoristas e passageiros.');
+    if (this.deps.faces?.required && !user.photoPath)
+      fail(403, 'photo_required', 'Adicione sua foto de perfil para continuar: ela identifica você para motoristas e passageiros.');
+  }
+
+  // ------------------------------------------------- fotos e reconhecimento facial
+
+  private photoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+  private readImage(contentType: unknown, base64: unknown): Img {
+    if (!this.photoTypes.has(String(contentType))) fail(400, 'invalid_file', 'Envie uma foto (JPG, PNG ou WEBP).');
+    if (!this.deps.files) fail(503, 'storage_not_configured', 'Envio de fotos indisponível: armazenamento não configurado.');
+    const bytes = Buffer.from(String(base64 || '').replace(/^data:[^,]*,/, ''), 'base64');
+    if (!bytes.length || bytes.length > MAX_DOC_BYTES) fail(400, 'file_size', 'A foto deve ter até 3 MB.');
+    return { bytes: new Uint8Array(bytes), mimeType: String(contentType) };
+  }
+
+  private async loadImage(path: string | undefined): Promise<Img | null> {
+    if (!path || !this.deps.files?.read) return null;
+    const f = await this.deps.files.read(path).catch(() => null);
+    return f && this.photoTypes.has(f.contentType) ? { bytes: f.bytes, mimeType: f.contentType } : null;
+  }
+
+  private async saveImage(uid: string, kind: string, img: Img) {
+    const path = `froc-x-uber/rostos/${uid}/${kind}-${this.now().getTime()}.${img.mimeType.split('/')[1]}`;
+    await this.deps.files!.save(path, img.mimeType, img.bytes);
+    return path;
+  }
+
+  /** A IA olha a foto; se ela estiver fora do ar, a foto é aceita (a equipe pode conferir depois). */
+  private async assertGoodPhoto(img: Img) {
+    const checker = this.deps.faces?.checker;
+    if (!checker?.configured) return;
+    const review = await checker.reviewPhoto(img).catch(() => null);
+    if (!review) return;
+    const problem = photoProblem(review);
+    if (problem) fail(400, 'bad_photo', problem);
+  }
+
+  /** Foto de perfil (todos). Motorista com reconhecimento salvo: a foto nova precisa ser da mesma pessoa. */
+  async uploadProfilePhoto(auth: AuthUser, contentType: unknown, base64: unknown) {
+    const img = this.readImage(contentType, base64);
+    const user = await this.ensureUser(auth);
+    await this.assertGoodPhoto(img);
+    const ref = await this.loadImage(user.faceRefPath);
+    const checker = this.deps.faces?.checker;
+    if (ref && checker?.configured) {
+      const c = await checker.compare([ref], img).catch(() => null);
+      if (c && c.verdict === 'outra_pessoa' && c.confianca >= 0.6)
+        fail(400, 'photo_not_you', 'Essa foto não parece ser sua (não confere com o seu reconhecimento facial). Use uma foto do seu rosto.');
+    }
+    const path = await this.saveImage(user.uid, 'perfil', img);
+    await this.store.update('users', user.uid, { photoPath: path, photoAt: this.iso() });
+    return { ok: true };
+  }
+
+  /**
+   * Reconhecimento facial do cadastro de motorista (câmera ao vivo, com consentimento — dado biométrico).
+   * Fica salvo como referência para as conferências a cada 2h. Também é comparado com a foto da CNH.
+   * Depois de aprovado, só a equipe pode refazer (ninguém troca o rosto da conta sozinho).
+   */
+  async enrollFace(auth: AuthUser, contentType: unknown, base64: unknown, consent: unknown) {
+    if (consent !== true) fail(400, 'consent_required', 'Para continuar, autorize o uso do reconhecimento facial para a segurança das viagens.');
+    const img = this.readImage(contentType, base64);
+    const user = await this.ensureUser(auth);
+    if (user.faceRefPath && (user.driverStatus === 'approved' || user.driverStatus === 'pending'))
+      fail(409, 'face_already_enrolled', 'Seu reconhecimento facial já está salvo. Para refazer, fale com o Atendimento.');
+    await this.assertGoodPhoto(img);
+    let cnhMatch = 'nao_conferido';
+    const checker = this.deps.faces?.checker;
+    const cnh = await this.loadImage((user.driverDocs as Record<string, string> | undefined)?.cnh);
+    if (cnh && checker?.configured) {
+      const c = await checker.compare([cnh], img).catch(() => null);
+      if (c) cnhMatch = c.verdict === 'mesma_pessoa' && c.confianca >= 0.7 ? 'confere' : c.verdict === 'outra_pessoa' && c.confianca >= 0.6 ? 'nao_confere' : 'duvida';
+    }
+    const path = await this.saveImage(user.uid, 'referencia', img);
+    const patch: Doc = { faceRefPath: path, faceEnrolledAt: this.iso(), faceCnhMatch: cnhMatch, lastFaceCheckAt: this.iso(), faceFails: 0, faceConsentAt: this.iso() };
+    if (!user.photoPath) Object.assign(patch, { photoPath: path, photoAt: this.iso() });
+    await this.store.update('users', user.uid, patch);
+    return { ok: true, cnhMatch };
+  }
+
+  /** Conferência de rosto vencida? (motorista aprovado, a cada 2h) */
+  faceCheckDue(user: UserDoc) {
+    if (!this.deps.faces?.required || user.driverStatus !== 'approved') return false;
+    const last = Date.parse(String(user.lastFaceCheckAt || ''));
+    return !Number.isFinite(last) || this.now().getTime() - last >= FACE_CHECK_EVERY_MS;
+  }
+
+  private assertFaceOk(user: UserDoc) {
+    if (user.faceBlocked) fail(403, 'face_blocked', 'Sua conta está em conferência de rosto pela equipe Froc. Fale com o Atendimento.');
+    if (this.deps.faces?.required && user.driverStatus === 'approved' && !user.faceRefPath)
+      fail(403, 'face_enroll_required', 'Faça o reconhecimento facial na aba Conta antes de ficar online.');
+    if (this.faceCheckDue(user)) fail(403, 'face_check_required', 'Hora da verificação de segurança: tire uma selfie para continuar recebendo corridas.');
+  }
+
+  /** Selfie da verificação a cada 2h (motorista trabalhando). */
+  async submitFaceCheck(auth: AuthUser, contentType: unknown, base64: unknown) {
+    const img = this.readImage(contentType, base64);
+    const user = await this.ensureUser(auth);
+    if (user.driverStatus !== 'approved') fail(403, 'forbidden', 'A verificação de rosto é para motoristas aprovados.');
+    if (user.faceBlocked) fail(403, 'face_blocked', 'Sua conta está em conferência de rosto pela equipe Froc. Fale com o Atendimento.');
+    const ref = await this.loadImage(user.faceRefPath);
+    if (!ref) fail(409, 'face_enroll_required', 'Faça primeiro o reconhecimento facial na aba Conta.');
+    const selfiePath = await this.saveImage(user.uid, 'verificacao', img);
+    const checker = this.deps.faces?.checker;
+    const now = this.iso();
+    const log = async (result: string, extra: Doc = {}) => {
+      const id = randomUUID();
+      await this.store.set('faceChecks', id, { id, uid: user.uid, name: user.name, at: now, result, selfiePath, refPath: user.faceRefPath, status: result === 'aprovado' || result === 'repetir' ? 'ok' : 'pending', ...extra });
+    };
+    // IA fora do ar: libera para não travar o trabalho, mas a equipe confere a selfie.
+    const comparison = checker?.configured ? await checker.compare([ref!], img).catch(() => null) : null;
+    if (!comparison) {
+      await this.store.update('users', user.uid, { lastFaceCheckAt: now, faceFails: 0 });
+      await log('sem_ia');
+      return { result: 'aprovado' as const, message: 'Verificação registrada. Bom trabalho!' };
+    }
+    const decision = decideFaceCheck(comparison, Number(user.faceFails || 0));
+    if (decision.result === 'aprovado') {
+      await this.store.update('users', user.uid, { lastFaceCheckAt: now, faceFails: 0 });
+      await log('aprovado', { confianca: comparison.confianca });
+      return { result: 'aprovado' as const, message: 'Rosto confirmado. Bom trabalho!' };
+    }
+    if (decision.result === 'repetir') {
+      await this.store.update('users', user.uid, { faceFails: Number(user.faceFails || 0) + 1 });
+      await log('repetir', { verdict: comparison.verdict });
+      return { result: 'repetir' as const, message: decision.message };
+    }
+    // Não confere (ou 3 tentativas sem confirmar): offline na hora; a corrida em andamento termina normalmente.
+    await this.store.update('users', user.uid, { driverOnline: false, faceBlocked: true, faceFails: 0 });
+    await log(decision.result, { verdict: comparison.verdict, confianca: comparison.confianca, observacoes: comparison.observacoes });
+    return { result: decision.result, message: decision.message };
+  }
+
+  /** Foto de perfil de alguém: só a própria pessoa, a equipe ou quem tem/teve viagem com ela. */
+  async profilePhoto(auth: AuthUser, targetUid: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const target = (await this.store.get<UserDoc>('users', targetUid)) ?? fail(404, 'not_found', 'Foto não encontrada.');
+    const allowed = auth.uid === targetUid || this.isAdmin(auth) || (await this.sharesTrip(auth.uid, targetUid));
+    if (!allowed) fail(403, 'forbidden', 'Você não pode ver esta foto.');
+    const img = await this.loadImage(target.photoPath);
+    if (!img) fail(404, 'not_found', 'Sem foto.');
+    return { bytes: img!.bytes, contentType: img!.mimeType };
+  }
+
+  private async sharesTrip(a: string, b: string) {
+    const pairs: [string, string, string][] = [
+      ['rides', 'passengerId', 'driverId'],
+      ['indrive', 'passengerId', 'driverId'],
+      ['carpoolBookings', 'passengerId', 'driverId'],
+    ];
+    for (const [col, p, d] of pairs) {
+      for (const [mine, other] of [[p, d], [d, p]] as const) {
+        const docs = await this.store.query<Doc>(col, [[mine, '==', a]], 200);
+        if (docs.some((x) => x[other] === b)) return true;
+      }
+    }
+    // Pedido de viagem agendada: o passageiro vê a foto de quem mandou proposta; o motorista, de quem pediu.
+    const myRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', a]], 100);
+    if (myRequests.some((r) => ((r.offers as Doc[]) || []).some((o) => o.driverId === b))) return true;
+    const theirRequests = await this.store.query<Doc>('indrive', [['passengerId', '==', b]], 100);
+    return theirRequests.some((r) => r.status === 'open' || ((r.offers as Doc[]) || []).some((o) => o.driverId === a));
+  }
+
+  /** Equipe: conferências de rosto pendentes (com as duas fotos). */
+  async listFaceReviews(auth: AuthUser) {
+    this.requireAdmin(auth);
+    const pend = await this.store.query<Doc>('faceChecks', [['status', '==', 'pending']], 100);
+    return byNewest(pend).map((c) => ({ id: String(c.id), uid: String(c.uid), name: String(c.name || ''), at: String(c.at), result: String(c.result), verdict: String(c.verdict || ''), confianca: Number(c.confianca || 0) }));
+  }
+
+  async faceReviewImage(auth: AuthUser, id: string, which: 'selfie' | 'referencia') {
+    this.requireAdmin(auth);
+    const c = (await this.store.get<Doc>('faceChecks', id)) ?? fail(404, 'not_found', 'Conferência não encontrada.');
+    const img = await this.loadImage(String(which === 'selfie' ? c.selfiePath : c.refPath));
+    if (!img) fail(404, 'not_found', 'Imagem não encontrada.');
+    return { bytes: img!.bytes, contentType: img!.mimeType };
+  }
+
+  /** Equipe decide: liberar (é a mesma pessoa) ou manter bloqueado. */
+  async resolveFaceReview(auth: AuthUser, id: string, decision: unknown) {
+    this.requireAdmin(auth);
+    if (decision !== 'liberar' && decision !== 'manter_bloqueado') fail(400, 'invalid_decision', 'Decisão inválida.');
+    const c = (await this.store.get<Doc>('faceChecks', id)) ?? fail(404, 'not_found', 'Conferência não encontrada.');
+    await this.store.update('faceChecks', id, { status: decision === 'liberar' ? 'liberado' : 'bloqueado', resolvedBy: auth.email, resolvedAt: this.iso() });
+    if (decision === 'liberar') await this.store.update('users', String(c!.uid), { faceBlocked: false, faceFails: 0, lastFaceCheckAt: this.iso() });
+    await this.audit(auth, 'face_review', String(c!.uid), { decision });
+    return { ok: true };
   }
 
   private async identityGateFor(auth: AuthUser) {
@@ -1203,6 +1419,8 @@ export class FrocService {
           legalName: identity ? String(identity.legalName) : '',
           cpfStatus: u.cpfStatus || 'none',
           aiDocCheck: u.aiDocCheck as never,
+          // Reconhecimento facial × foto da CNH (confere / nao_confere / duvida / nao_conferido).
+          faceCnhMatch: kind === 'driver' ? String(u.faceCnhMatch || (u.faceRefPath ? 'nao_conferido' : 'sem_reconhecimento')) : undefined,
           truckType: kind === 'trucker' ? u.truckType : undefined,
           companyName: kind === 'trucker' ? u.companyName : undefined,
           rntrc: kind === 'trucker' ? u.rntrc : undefined,
@@ -1503,6 +1721,8 @@ export class FrocService {
           if (status !== 'searching') fail(409, 'taken', 'Esta corrida já foi aceita por outro motorista.');
           const driver = await this.mustGet<UserDoc>(tx, 'users', auth.uid, 'Motorista');
           if (!driver.driverOnline) fail(409, 'offline', 'Fique online para aceitar corridas.');
+          // Segurança: quem aceita é o dono da conta (rosto conferido a cada 2h).
+          this.assertFaceOk(driver);
           if (!this.vehicleFits(driver, ride))
             fail(409, 'wrong_vehicle', ride.categoryId === 'froc_moto' ? 'Este pedido é para moto.' : 'Este pedido não é para o seu tipo de veículo.');
           const category = RIDE_CATEGORIES.find((c) => c.id === ride.categoryId);

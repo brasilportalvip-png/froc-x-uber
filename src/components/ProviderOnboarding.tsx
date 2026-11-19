@@ -1,3 +1,4 @@
+import { FaceEnroll } from './FaceGates.tsx';
 import { CARGO_VEHICLE_TYPES } from '../data/cargoVehicles.ts';
 import React, { useState } from 'react';
 import { CheckCircle2, Clock, FileUp, ShieldAlert, ShieldCheck } from 'lucide-react';
@@ -47,10 +48,13 @@ interface Props {
   profile: UserProfile;
   onUpload: (kind: 'driver' | 'trucker', docType: string, file: File) => Promise<void>;
   onApply: (kind: 'driver' | 'trucker', data: Record<string, unknown>) => Promise<void>;
+  onRefresh?: () => Promise<void> | void;
 }
 
 /** Cadastro de motorista/caminhoneiro: envio de documentos e acompanhamento da análise. */
-export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, onApply }) => {
+export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, onApply, onRefresh }) => {
+  // Motorista: reconhecimento facial com a câmera é obrigatório antes de enviar.
+  const needsFace = kind === 'driver' && Boolean(profile.photoRequired) && !profile.faceEnrolled;
   const status = kind === 'driver' ? profile.driverStatus : profile.truckerStatus;
   const [vehicle, setVehicle] = useState(kind === 'driver' ? profile.driverVehicle : profile.truckModel);
   const [plate, setPlate] = useState(kind === 'driver' ? profile.driverPlate : profile.truckPlate);
@@ -256,6 +260,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
           </label>
         ))}
       </div>
+      {kind === 'driver' && profile.photoRequired && <FaceEnroll enrolled={Boolean(profile.faceEnrolled)} onDone={async () => void (await onRefresh?.())} />}
       <div className="space-y-1.5">
         <div className="text-[11px] text-slate-500">Declarações obrigatórias</div>
         {declarationSet.map((d) => (
@@ -272,7 +277,7 @@ export const ProviderOnboarding: React.FC<Props> = ({ kind, profile, onUpload, o
       </div>
       <button
         type="submit"
-        disabled={busy !== null || DOCS[kind].some((d) => !sent[d.id]) || !allChecked || tooOld}
+        disabled={busy !== null || DOCS[kind].some((d) => !sent[d.id]) || !allChecked || tooOld || needsFace}
         className="w-full min-h-[44px] rounded-xl bg-slate-900 dark:bg-emerald-600 text-white font-bold disabled:opacity-50 cursor-pointer"
       >
         {busy === 'apply' ? 'Enviando...' : 'Enviar cadastro para análise'}

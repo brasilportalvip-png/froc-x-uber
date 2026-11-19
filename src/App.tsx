@@ -20,6 +20,7 @@ import { MerchantPanel } from './components/MerchantPanel.tsx';
 import { HelpLinks } from './components/HelpLinks.tsx';
 import { RecordingsRecovery } from './components/RecordingsRecovery.tsx';
 import { IdentityDocUpload, IdentityGate } from './components/IdentityGate.tsx';
+import { FaceCheckModal, PhotoGate } from './components/FaceGates.tsx';
 import { alertUser, askNotificationPermission } from './lib/alerts.ts';
 import { BRAZIL_LOCATIONS, formatBRL } from './data/locations.ts';
 import { useOnlineStatus } from './hooks/useOnlineStatus.ts';
@@ -325,9 +326,17 @@ export default function App() {
       () => api(`/api/rides/${rideId}`, { method: 'PATCH', body: { action, ...extra } }),
       ({ driver_accept: 'Corrida aceita! Vá até o passageiro.', start: 'Viagem iniciada.', complete: 'Corrida finalizada!', cancel: 'Corrida cancelada.', rate: 'Obrigado pela avaliação!', arriving: 'Passageiro avisado na tela: a espera começou a contar.', no_show: 'Corrida encerrada: passageiro não apareceu. O valor caiu no seu saldo.' } as Record<string, string>)[action],
     );
+  // Selfie de segurança: a cada 2h com o motorista online (ou antes de ficar online, se venceu).
+  const [faceCheckOpen, setFaceCheckOpen] = useState(false);
+  const [goOnlineAfterCheck, setGoOnlineAfterCheck] = useState(false);
   const handleSetOnline = (online: boolean) => {
     // Ao ficar online: libera som e notificação para avisar de novas corridas com o app minimizado.
     if (online) askNotificationPermission();
+    if (online && state?.profile.faceCheckDue) {
+      setGoOnlineAfterCheck(true);
+      setFaceCheckOpen(true);
+      return Promise.resolve();
+    }
     return run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: online } }), online ? 'Você está online.' : 'Você está offline.');
   };
 
@@ -841,6 +850,7 @@ export default function App() {
                     onApply={handleApply}
                     onLogout={handleLogout}
                     onRedeem={handleRedeem}
+                    onRefresh={loadBootstrap}
                   />
                 )}
               </div>
@@ -892,6 +902,26 @@ export default function App() {
 
       {state && state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus) && (
         <IdentityGate profile={state.profile} onDone={loadBootstrap} onLogout={() => void handleLogout()} />
+      )}
+      {state && state.profile.photoRequired && !state.profile.hasPhoto && !state.profile.faceEnrolled && !(state.profile.identityRequired && (state.profile.cpfStatus === 'none' || state.profile.cpfStatus === 'rejected' || !state.profile.cpfStatus)) && (
+        <PhotoGate mode="required" onDone={loadBootstrap} onLogout={() => void handleLogout()} />
+      )}
+      {state && (faceCheckOpen || (state.profile.faceCheckDue && state.profile.driverOnline)) && (
+        <FaceCheckModal
+          onDone={async () => {
+            setFaceCheckOpen(false);
+            await loadBootstrap();
+            if (goOnlineAfterCheck) {
+              setGoOnlineAfterCheck(false);
+              await run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: true } }), 'Você está online.');
+            }
+          }}
+          onGoOffline={() => {
+            setFaceCheckOpen(false);
+            setGoOnlineAfterCheck(false);
+            void run(() => api('/api/profile', { method: 'PATCH', body: { driverOnline: false } }), 'Você está offline.');
+          }}
+        />
       )}
       {state && <SupportChat />}
       {state && <RecordingsRecovery />}

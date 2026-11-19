@@ -219,3 +219,24 @@ export function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+/** Baixa uma imagem protegida (foto de perfil, selfie) com o login e devolve um endereço local para <img>. */
+export async function apiImageUrl(path: string): Promise<string> {
+  const user = requireAuth().currentUser;
+  if (!user) throw new Error('Faça login para continuar.');
+  const res = await fetch(path, { headers: { Authorization: `Bearer ${await user.getIdToken()}` } });
+  if (!res.ok) throw new Error('Sem foto.');
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Foto da câmera (canvas) → JPEG leve para enviar (lado maior até 1024 px). */
+export function canvasToUpload(source: HTMLVideoElement | HTMLCanvasElement): { contentType: string; dataBase64: string } {
+  const w = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+  const h = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+  const scale = Math.min(1, 1024 / Math.max(w, h));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  canvas.getContext('2d')!.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return { contentType: 'image/jpeg', dataBase64: canvas.toDataURL('image/jpeg', 0.85).split(',')[1] || '' };
+}
